@@ -37,10 +37,10 @@ spreadjs — 業務Webアプリへ組み込む TypeScript製リアルタイム�
 - **パス設定**: ルート直下の `.dd-config`（スクリプト・フックはここを読む。上の実パスと常に一致させる）
 - **ステータス**: 固定6種（検討中/進行中/確認待ち/保留/見送り/完了）+ 補足列。語彙ルール: `doc/templates/guides.md` §3
 - **スキル**: `/dd new|list|log|archive|search|rebuild-index|health`（Claude Code: `.claude/skills/` / Codex: `.agents/skills/` — 同一内容のミラー）
-- **自動フロー**: `/dd-auto <機能>` = 起票(Fable)→〔仕様確認〕→実装(Opus)→Codexレビューを自動振り分け（`.claude/agents/dd-drafter`・`dd-implementer` を使用。Claude Code 専用）
 - **開発フロー**: DD作成 → 仕様確認 → 実装 → 検証 → 完了（いきなりコードを書かない）
+- **レビュー**: DDタスクに組み込まない。1モデル（Opus / Codex）でDDを完走し、完了報告を見たユーザーがもう一方のモデルへ都度指示する（`doc/templates/guides.md` §10。v7で `/dd-auto` の自動振り分けは廃止）
 - **外部レビュー記録**: ChatGPT等の外部レビューを実施したら、指摘・採否・反映先を **`doc/DD/DD-{番号}/chatgpt-review-YYYYMMDD.md`**（添付フォルダ・複数回は日付で区別）に記録し、DD本文のログへ参照を1行残す。反映自体は通常どおりDD本文（決定事項・AC・タスク）へ。アーカイブ時は添付フォルダごと移動されるため記録はDDと一緒に残る（初出: DD-006/007）
-- **DA メソッド**: `doc/da-method.md` / **コミット**: `DD-{番号}: 概要` 形式
+- **DA 深掘り手法（参考文書）**: `doc/da-method.md` / **コミット**: `DD-{番号}: 概要` 形式
 
 ## コーディング規約
 

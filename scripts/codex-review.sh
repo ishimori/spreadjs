@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Codexレビュー自動実行ラッパー（任意機能）
+# Codexレビュー実行ラッパー（任意機能・ユーザー指示時のみ実行）
 # サブスク認証のCodex CLI（デスクトップアプリ同梱）をヘッドレスで呼び、
 # レビュー依頼書を渡して結果をMarkdownに保存する。API課金は発生しない。
 # 別モデル（Codex）視点で、実装者（Claude等）の差分をレビューさせるのが目的。
-#
+# v7以降、DDタスクには組み込まない — 完了報告を見た人間がレビューを指示した時に使う。
 # 使い方:
 #   bash scripts/codex-review.sh --check     # 利用可否のみ判定（トークン消費なし。exit 0=可 / 非0=不可）
 #   bash scripts/codex-review.sh --smoke     # 認証込み疎通確認（実実行。少量トークン）
 #   bash scripts/codex-review.sh --request <依頼書> --out <結果md> \
 #                                [--uncommitted | --base main | --commit <sha>] \
 #                                [--effort low|medium|high|xhigh]
-# effort既定: レビュー=high / --smoke=low（xhighはDD起票時の明示指示か複雑な差分のみ）
+# effort既定: レビュー=high / --smoke=low（xhighはユーザーの明示指示時のみ）
 #
 # どのディレクトリから実行してもよい（CWD非依存）。相対パス引数（--request/--out）は
 # プロジェクトルート基準で解釈される。

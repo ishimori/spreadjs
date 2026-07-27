@@ -33,7 +33,7 @@
 |---------|------|
 | `doc/plan/nanairo_realtime_spreadsheet_development_plan_v1.md` | 開発計画・基本設計（技術方式の正典。アーキテクチャ・ADR・プロトコル・IME・数式・性能・リスク。上位は製品憲章） |
 | `doc/plan/nanairo_realtime_spreadsheet_concept_record_v1.md` | 構想記録（計画書の入力資料＝歴史的記録。製品戦略の現在の正は製品憲章） |
-| `doc/plan/phase0-dd-roadmap.md` | Phase 0のDDロードマップ（DD作業管理上の最上位。計画書§18/§26→DDの写像。dd-auto実行順と進捗対応表） |
+| `doc/plan/phase0-dd-roadmap.md` | Phase 0のDDロードマップ（DD作業管理上の最上位。計画書§18/§26→DDの写像。DD実行順と進捗対応表） |
 | `doc/plan/phase1-dd-roadmap.md` | Stage 1 SDK Alpha DDロードマップ（**正式版**。Stage 1社内SDK Alphaまでの縦切りDD計画 DD-009〜022。密度レジーム・境界整合・SDK Alpha完了条件・CG-1〜6 ハードゲート） |
 | `doc/plan/cg-ledger.md` | CG解除台帳（条件付きGo 解除ゲート CG-1〜6 の横断追跡。DD-018 移行判定まで複数DDが参照する常設台帳。起票: DD-009。定義本体は phase1-dd-roadmap.md §0） |
 | `doc/plan/stage2-backlog.md` | Stage 2 バックログ（Stage 1 SDK Alpha 完了後の送り項目一覧。DD-019〜022＋dist切替・registry昇格・PostgreSQL本採用・React Facade・既知制約回収を出典DD付きで記録。確定: DD-018・2026-07-15。Stage 2 開始時にロードマップ化） |

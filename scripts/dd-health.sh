@@ -248,7 +248,7 @@ function vocab_ok(s) { return (s == "検討中" || s == "進行中" || s == "確
         else { print "- ⚠️ DA批判レビュー表が雛形のまま → 実施して記録するか、不要な理由をログに残す"; warn++ }
     }
     else if (dar > 0) print "- ✅ DA記録 " dar "行"
-    else print "- ℹ️ DA記録なし（Phase完了時に記録）"
+    else print "- ℹ️ DA記録なし（v7テンプレでは記録表なしが標準。所見はログへ）"
     if (is_active == 1 && st ~ /完了|実装済|反映済|[Dd]one|見送り/ && st !~ /待ち/)
         print "- 🗄️ ステータスが終端（完了/見送り系）のまま未アーカイブ → /dd archive を検討"
     exit (warn > 0 ? 10 : 0)
@@ -317,7 +317,7 @@ END {
     printf "| アーカイブ済みDD | %d件 |\n", grand - active
     if (grand > 0) {
         printf "| ログ活性率（2日以上の作業ログを持つDD） | %d%%（%d/%d件） |\n", multilog * 100 / grand, multilog, grand
-        printf "| DA記入率 | %d%%（記入 %d / 雛形のまま %d / 記録なし %d） |\n", da_filled * 100 / grand, da_filled, da_scaffold, da_none
+        printf "| DA記入率（記録表を持つ旧テンプレDD向け指標） | %d%%（記入 %d / 雛形のまま %d / 記録なし %d） |\n", da_filled * 100 / grand, da_filled, da_scaffold, da_none
     }
     printf "\n## 要対応（アクティブDD）\n\n"
     if (nw == 0) print "なし ✅"
