@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-07-16 | 2026-07-17 | 確認待ち | 子DD 3本＋親 Phase 4（統合検証・計測・提供開始）完了。残=Manual Gate M1〜M3（実 Excel round-trip＋実 IME・ユーザー実機・正味10分）→ 受付後クローズ・アーカイブ |
+| 2026-07-16 | 2026-09-03 | 完了 | 子DD 3本＋親 Phase 4（統合検証・計測・提供開始）完了。**Manual Gate M1〜M3 は未実施のまま、ユーザー判断でクローズ（2026-09-03）**＝残余（実 Excel の未知方言・実 IME）は §既知の未保証境界へ移送 |
 
 ```text
 Risk Class: A（roadmap §1 指定・支配的リスク=Clipboard 原子性・競合）
@@ -93,7 +93,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 | 9 | 単独グリッドモードの paste/undo → cell-commit（SetCells batch 単位）が発火し利用側保存契約（DD-024）が成立する | DD-020-2/3 standalone E2E |
 | 10 | composition 中の clipboard 操作がドラフト・textarea を破壊しない（IME 不変条件維持） | 不変条件スイート＋synthetic E2E |
 | 11 | 10,000 セル paste のローカル適用 250〜500ms 以内（計画書 §21） | **充足**（Phase 4 headed 計測・2026-07-17。median 50.0ms≪500ms・`paste-perf.spec.ts`・再現コマンドは Phase 4 タスク参照） |
-| 12 | 実 Excel ⇄ グリッド round-trip（数値・日付・改行セル）が実機で成立する | Manual Gate M1/M2（**確認待ち**＝ユーザー実機・受付後クローズ） |
+| 12 | 実 Excel ⇄ グリッド round-trip（数値・日付・改行セル）が実機で成立する | Manual Gate M1/M2（**未実施＝ユーザー判断でクローズ 2026-09-03**。synthetic は実 Excel ペイロードの fixture 注入で代替済み・残余は §既知の未保証境界） |
 
 ## タスク一覧
 
@@ -134,7 +134,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 - [x] `doc/adr/`: **ADR-0020 を新設**（`doc/adr/0020-large-operation-inline-transport.md`・Status: Accepted）。「Stage 2 は inline＋セル数上限100,000・payload 参照方式は不採用」を D3 の決定として記録。計画書 ADR 台帳 ADR-020 行（Open→Accepted）・決定台帳 D-11/D-12・DOC-MAP も同期更新。
 - [x] 🔬 **機械検証**: `bash scripts/doc-check.sh` → 整合 OK（`doc/spec/` の空ディレクトリ参照＝git 非追跡で fresh checkout に不在の潜在破れを「未作成」明記で恒久解消）／features smoke green。
 - [x] 😈 **DA批判レビュー**（下記「DA批判レビュー記録」§Phase 4 に記録）。
-- [ ] Manual Gate M1〜M3 の受付（AC12。本セッションはユーザー実機確認を待たずに完了し、ステータス「確認待ち」で残す＝M1〜M3 受付後にアーカイブ）。
+- [x] Manual Gate M1〜M3 の受付（AC12）→ **未実施のままユーザー判断でクローズ（2026-09-03）**。M1〜M3 は実行していない＝合格の証拠はない。残余リスク（実 Excel の未知方言・実 IME 併用）は §既知の未保証境界へ移送し、事象が出たら別DDで起票する。
 
 ## Manual Gate（synthetic 自動化を最大化・ユーザー実機は正味10分）
 
@@ -147,6 +147,14 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 | M1 | 実 Excel → グリッド貼り付け（数値/日付/セル内改行の3パターン） | 5分 |
 | M2 | グリッド → 実 Excel 貼り付け（行列分離の確認） | 3分 |
 | M3 | 実 IME 変換中の clipboard 干渉なしスモーク | 2分 |
+
+> **結果: M1〜M3 は実施しないまま、ユーザー判断で 2026-09-03 にクローズ**（DD-005 Phase 5 と同じ扱い＝実機ゲートなしクローズ）。合格の記録ではない。下記 §既知の未保証境界に残余として記載する。
+
+## 既知の未保証境界（2026-09-03 クローズ時点）
+
+- **実 Excel が書く実ペイロードでの round-trip は未検証**（AC12・M1/M2）。synthetic は「実 Excel の text/plain を書き起こした fixture」（`packages/core/src/__fixtures__/clipboard-tsv/`）で代替しており、fixture に無い方言（別バージョン・別ロケール・書式付きセル）で paste が崩れる可能性が残る。
+- **実 IME 変換中の clipboard 操作は未検証**（M3）。synthetic E2E＋IME 不変条件テストでは干渉なしを固定済みだが、実 IME 候補ウィンドウ下での copy/cut/paste は実機確認していない。
+- 上記はいずれも「出たら別DDで起票」扱い。DD-020 の機能自体は features.json で available 化済みのため、利用者報告が最初の検知経路になる。
 
 ## ログ
 
@@ -182,6 +190,11 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 
 ### 2026-07-17（paste-perf のテスト分離是正・DD-021 全スイート検証で発見）
 - `paste-perf.spec.ts` は共有文書の行 2〜1010×列 1〜10 へ 5 万セルを書き込むため、後に実行される spec（セル初期値を前提にする `undo-redo-collab` UE-8 等）を汚染することが DD-021 レビュー後の**全スイート実行**で表面化（UE-8 が paste データ `400070` を拾って fail・分離実行は green）。`zz-paste-perf.spec.ts` へ rename し（workers:1・ファイル名昇順＝スイート最後に実行）、順序要件をファイル先頭コメントに明記。再現コマンド（`... paste-perf --headed` パターン一致）は従来どおり有効。全スイート 67 pass で解消確認。
+
+### 2026-09-03（クローズ・アーカイブ）
+- **ユーザー判断で DD-020 を完了扱いにしクローズ**（「DD-020, 021 も完了扱いにしていいです」）。**Manual Gate M1〜M3 は実施していない**＝AC12 は synthetic（実 Excel ペイロードの fixture 注入）までで、実機合格の証拠はない。残余は §既知の未保証境界へ移送した（DA批判レビュー §Phase 4 No.5「Manual Gate 残余」の対応を「⏭️確認待ちで保持」→「未実施のままクローズ・境界化」へ変更）。
+- ステータス 確認待ち→完了。子DD 3本（DD-020-1/2/3）は先行アーカイブ済み。本DD本文をアーカイブへ移動。
+- 🔬 `bash scripts/doc-check.sh` green・`bash scripts/dd-index-gen.sh` 再生成。
 
 ---
 

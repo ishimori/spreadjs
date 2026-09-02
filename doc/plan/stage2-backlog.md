@@ -30,7 +30,7 @@
 | # | 制約 | 出典DD | 回収先 | 備考 |
 |---|---|---|---|---|
 | ~~K3~~ | ~~行挿入後のローカル選択・Enter移動先の再ベース~~ | roadmap §8 | **DD-021-3 で回収済（2026-07-17）** | activeCell・選択レンジ（ドラッグ中含む）・Enter 移動先を RowId 追従で再ベース（構造 flush bracket hook） |
-| ~~K4~~ | ~~実IME変換中に対象行が削除された場合の挙動~~ | roadmap §8 | **DD-021-2 で回収済（synthetic・2026-07-17）** | 編集継続・draft/composition 非破壊・commit 時退避＋公開 rejected（row-unavailable）通知。**実IME 確認のみ DD-021 Manual Gate M1（確認待ち）** |
+| ~~K4~~ | ~~実IME変換中に対象行が削除された場合の挙動~~ | roadmap §8 | **DD-021-2 で回収済（synthetic・2026-07-17）** | 編集継続・draft/composition 非破壊・commit 時退避＋公開 rejected（row-unavailable）通知。**実IME 確認（DD-021 Manual Gate M1）は未実施のまま 2026-09-03 にユーザー判断でクローズ**＝synthetic 三層までが証拠水準（DD-021 §既知の未保証境界） |
 | ~~P2-1~~ | ~~単一行 InsertRows 連発ログの Θ(N²)（`apply.ts` nextSlot 全走査＋splice）~~ | DD-014 既知制約 | **DD-021-3 で回収済（2026-07-17）** | slot 採番を maxSlot キャッシュで O(1) 化。replay 経路実測: 50k行+Insert×1,000=128ms（目標2s・p95 0.186ms）。**残存（Stage 3 候補）**: `resolveAnchorIndex.indexOf`＋`splice`＋対話経路の op ごと全文書 clone は per-op O(N) のまま（目標内ゆえ許容・順序構造/gap buffer 化は要件化時に別DD） |
 | ~~P2-3~~ | ~~recovery の documentId/revision 相互検証欠如~~ | DD-014 既知制約 | **DD-018-1 で回収済** | documentId 照合＋封筒 revision 相互検査 fail-fast を実装（誤公開防止） |
 | ~~P2-4~~ | ~~restoreFrom＋persistenceDir 併用の revision 不連続~~ | DD-014 既知制約 | **DD-018-1 で回収済** | restoreFrom×persistenceDir を明示拒否（throw）。全ログ durable bootstrap は現 caller 不在ゆえ不採用 |
