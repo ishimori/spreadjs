@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-07-17",
+  "updated": "2026-09-03",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -86,6 +86,14 @@
       "demo": "./demo.html?scenario=persist"
     },
     {
+      "id": "integration-adapters",
+      "title": "利用側の保存先・認証との接続（共同編集）",
+      "status": "available",
+      "summary": "共同編集サーバーの保存先を利用側の DB（Postgres 等）に差し替え、受理した操作を業務テーブルへ同じトランザクションで反映できます。接続は利用側の認証（JWT Cookie 等）で検証し、操作の実行者はサーバーが確定します。補完・算出列はサーバー側から書き込めます。",
+      "source": "DD-026・DD-026-1〜3（S2-6）",
+      "meta": "実案件統合①（松下 生産納期）で検証中"
+    },
+    {
       "id": "reconnect",
       "title": "切断・再接続耐性",
       "status": "available",
@@ -156,7 +164,7 @@
       "id": "ops-maturity",
       "title": "配布・運用の本格化",
       "status": "planned",
-      "summary": "社内パッケージレジストリからの配布、ビルド済み配布物、PostgreSQL による永続化、テレメトリ。（React ラッパーは Alpha 提供済み＝DD-025・dist ビルド配布は DD-031）",
+      "summary": "社内パッケージレジストリからの配布、ビルド済み配布物、テレメトリ。（React ラッパーは Alpha 提供済み＝DD-025・dist ビルド配布は DD-031。PostgreSQL 等への永続化は利用側の保存先差し替え＝DD-026 で提供済み）",
       "source": "stage2-backlog §2（DD-017 決定事項A/B・ADR-0023）",
       "meta": "Stage 2"
     },
@@ -171,7 +179,7 @@
       "id": "oos-production",
       "title": "本番運用機能",
       "status": "out-of-scope",
-      "summary": "認証認可・テナント分離・高可用性・バックアップ運用は SDK の範囲外。信頼できる社内環境での利用を前提とし、運用要件は利用側システムが担います。",
+      "summary": "認証認可・テナント分離・高可用性・バックアップ運用は SDK の範囲外。信頼できる社内環境での利用を前提とし、運用要件は利用側システムが担います（接続時の認証フックと保存先の差し替え口は提供＝DD-026）。",
       "source": "roadmap §6"
     },
     {

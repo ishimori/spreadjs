@@ -461,6 +461,8 @@ export class ClientSession implements TransportListener {
   /**
    * snapshot bootstrap（§8 既知制約回収・P1-6/P1-7）: 全 operationLog を replay せず document@revision から committed を確立する。
    * fresh join（committed.revision=0）でのみ前進する。deserialize は core の共有関数（server serialize と wire 一致）。
+   * 初期文書（DD-026-1）: server は非空 document@0 への fresh join にも bootstrap@0 を送る。committed 0 かつ未 bootstrap のとき
+   * だけ受理して空文書を初期文書へ差し替え、以後の重複 bootstrap@0（再接続）は従来どおり無視する。
    */
   private handleBootstrap(message: BootstrapMessage): void {
     // reorder で welcome より先着した bootstrap は buffer する（Codex P1-c）: reconcile 情報（welcome.reconcile）が無いまま
@@ -469,7 +471,9 @@ export class ClientSession implements TransportListener {
       this.bufferedBootstrap = message;
       return;
     }
-    if (message.revision <= this.committed.revision) {
+    const acceptsInitialAtZero =
+      message.revision === 0 && this.committed.revision === 0 && this._bootstrapRevision === undefined;
+    if (message.revision <= this.committed.revision && !acceptsInitialAtZero) {
       this.awaitingBootstrap = false;
       return; // 既に同等以上（reconnect は tail 経路・二重 bootstrap を無視）
     }

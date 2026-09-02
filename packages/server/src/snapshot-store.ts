@@ -13,14 +13,23 @@ import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { isRecord } from '@nanairo-sheet/core';
+
 import type { SnapshotData } from './snapshot';
 
-/** persisted snapshot 封筒の版数。SnapshotData（中身）は v3。封筒 format と中身 version は独立に検査する。 */
-export const SNAPSHOT_FORMAT_VERSION = 1 as const;
+/**
+ * persisted snapshot 封筒の版数。SnapshotData（中身）は v3。封筒 format と中身 version は独立に検査する。
+ * v2（DD-026-1）: checksum の正準化を**深いキー順ソート**へ変更した。v1 は挿入順 `JSON.stringify` だったため、
+ * キー順を保持しない保存先（Postgres jsonb 等・consumer 注入ストア）に置くと再起動時に必ず checksum 不一致で
+ * fail-fast していた。v1 ファイルは旧算法で検証して読める（書込は常に v2）。
+ */
+export const SNAPSHOT_FORMAT_VERSION = 2 as const;
+/** 読込互換のみ（DD-014 で書かれた既存 dev 永続化ディレクトリを壊さない）。 */
+export const LEGACY_SNAPSHOT_FORMAT_VERSION = 1 as const;
 
 /** 永続化 snapshot（封筒）。checksum は自身を除く payload の canonical JSON に対する sha256。 */
 export interface PersistedSnapshot {
-  formatVersion: typeof SNAPSHOT_FORMAT_VERSION;
+  formatVersion: typeof SNAPSHOT_FORMAT_VERSION | typeof LEGACY_SNAPSHOT_FORMAT_VERSION;
   documentId: string;
   revision: number; // この snapshot が表す確定 revision R（document は R 時点）
   createdAt: string; // ISO（監査用・非 checksum 対象外＝checksum 対象に含める）
@@ -36,15 +45,38 @@ export interface SnapshotStore {
   close(): Promise<void>;
 }
 
-/** payload（checksum を除く）を canonical JSON 化する（キー順を固定＝決定的 checksum）。 */
+/**
+ * payload（checksum を除く）を canonical JSON 化する（決定的 checksum の源）。
+ * - v2: 全階層のオブジェクトキーを昇順に並べる（配列順は保持）。JSON として同値なら保存先のキー順によらず一致する。
+ * - v1（読込互換）: 封筒 5 項目を固定順に置いた `JSON.stringify`（中身の snapshot は挿入順のまま）。
+ */
 function canonicalPayload(p: Omit<PersistedSnapshot, 'checksum'>): string {
-  return JSON.stringify({
+  const ordered = {
     formatVersion: p.formatVersion,
     documentId: p.documentId,
     revision: p.revision,
     createdAt: p.createdAt,
     snapshot: p.snapshot,
-  });
+  };
+  return p.formatVersion === LEGACY_SNAPSHOT_FORMAT_VERSION ? JSON.stringify(ordered) : canonicalJson(ordered);
+}
+
+/** JSON 同値なら同一文字列になる正準直列化（オブジェクトキー昇順・undefined 値は JSON.stringify と同じく省略）。 */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item: unknown) => (item === undefined ? 'null' : canonicalJson(item))).join(',')}]`;
+  }
+  if (isRecord(value)) {
+    const parts: string[] = [];
+    for (const key of Object.keys(value).sort()) {
+      const item = value[key];
+      if (item !== undefined) {
+        parts.push(`${JSON.stringify(key)}:${canonicalJson(item)}`);
+      }
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** SnapshotData（＋メタ）を persisted snapshot 封筒へ包む（checksum を計算して封入する）。 */
@@ -64,12 +96,15 @@ export function createPersistedSnapshot(input: {
   return { ...payload, checksum: sha256(canonicalPayload(payload)) };
 }
 
-/** JSON 文字列を PersistedSnapshot として検証付きで読む（format version・checksum を fail-fast 検査）。 */
+/**
+ * JSON 文字列を PersistedSnapshot として検証付きで読む（format version・checksum を fail-fast 検査）。
+ * v2 は正準化済みゆえキー順が入れ替わっていても検証できる（consumer 注入ストア経由の往復・DD-026-1）。v1 は旧算法で検証する。
+ */
 export function parsePersistedSnapshot(text: string): PersistedSnapshot {
   const parsed = JSON.parse(text) as PersistedSnapshot; // JSON 破損はここで throw（fail-fast）
-  if (parsed.formatVersion !== SNAPSHOT_FORMAT_VERSION) {
+  if (parsed.formatVersion !== SNAPSHOT_FORMAT_VERSION && parsed.formatVersion !== LEGACY_SNAPSHOT_FORMAT_VERSION) {
     throw new Error(
-      `parsePersistedSnapshot: 非対応の format version ${String(parsed.formatVersion)}（対応=${SNAPSHOT_FORMAT_VERSION}）`,
+      `parsePersistedSnapshot: 非対応の format version ${String(parsed.formatVersion)}（対応=${SNAPSHOT_FORMAT_VERSION}・読込互換=${LEGACY_SNAPSHOT_FORMAT_VERSION}）`,
     );
   }
   const expected = sha256(

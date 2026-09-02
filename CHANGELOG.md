@@ -19,6 +19,21 @@
 
 ### Added
 
+- **server-hono consumer 統合の 3 つの口（Experimental・DD-026・DD-026-1〜3）**: 共同編集サーバーを利用側の DB と認証につなぐ公開 API を追加した
+  （公開型は `Serve*`・内部 package の型を露出しない。quick-start §3b）。
+  - **U1 永続化ストアの差し替え（DD-026-1）**: `serve({ oplog, snapshotStore })` に利用側実装（例: Postgres）を渡せる（両方同時指定が必須・
+    `persistenceDir` とは併用不可）。`append` 解決＝durable の契約はファイル永続化と同じ。**`initialDocument`**（snapshot も操作ログも無い
+    ときだけ呼ばれ、結果が document@0＝revision 0。ストア指定時は snapshot@0 を保存してから listen。`seedRows` とは併用不可）。
+    - 付随変更: **persisted snapshot format v2**（checksum を深いキー順ソートで正準化＝jsonb 等キー順を保持しない保存先でも検証可能。
+      v1 ファイルは旧算法で読める＝既存 `persistenceDir` はそのまま使える）／**非空 document@0 への fresh join は bootstrap@0 を送る**
+      （空文書@0 は従来どおり送らない。クライアントは committed 0 かつ未 bootstrap のときだけ受理）。
+  - **U2 認証フック（DD-026-2）**: `serve({ authenticate })`。WebSocket upgrade 時に `{ url, headers }` を受けて `{ actorId, displayName } | null`
+    を返す。null は 401・throw は 500 で接続拒否。受理後は envelope の `actorId`・presence の `userId`/`displayName` をサーバーが上書きする
+    （申告は無視。`clientId` は申告維持）。診断コード `auth-rejected`（warn）/`auth-error`（error）を追加。未指定なら従来どおり。
+  - **U3 サーバー起点操作（DD-026-3）**: `ServerInstance.submit(setCells, { actorId })`。通常の受理経路（revision 付与・全接続へ配信・永続化）を
+    通り、`clientId: 'server'`（予約語）で記録される。reject（OCC 等）は結果（`status: 'rejected'`・`code`）で返し、durable 失敗・stop 後は
+    Promise reject。利用者の Undo 対象にならない。
+  - 公開 .d.ts snapshot 更新済み（追加のみ・破壊的変更なし・migration guide 不要）。
 - **grid 行操作の収束・UI 状態整合・性能（Experimental・DD-021-2/DD-021-3）**: 行 Insert/Delete を共同編集で安全にする層を追加した。
   - **収束保証（DD-021-2）**: 同一アンカーへの同時 Insert はサーバー受付順で**両方の行を保持**して全クライアント収束（意図順は非保証・reject しない）。
     削除済み行への SetCells は既存 `rejected`（`row-unavailable`/`cell-conflict` 系）経路で通知（サイレント上書きなし）。再 Delete は冪等。

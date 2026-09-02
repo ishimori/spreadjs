@@ -216,3 +216,44 @@ describe('createSessionSync（ClientSession=正本・DocumentView=派生）', ()
     expect(joins[0].clientId).toBe('client-a');
   });
 });
+
+describe('own-echo 判定（DD-020-3 Undo の記録源・DD-026-3 サーバー起点 op の非対象）', () => {
+  it('onOwnSetCellsCommitted は自 clientId の SetCells echo だけで発火し、clientId "server"（サーバー起点）の op では発火しない', () => {
+    const inner = new RecordingTransport();
+    const committed: string[] = [];
+    const sync = createSessionSync({
+      innerTransport: inner,
+      sessionConfig: baseSessionConfig(),
+      rowHeight: 20,
+      colWidth: 60,
+      onOwnSetCellsCommitted: (operationId) => {
+        committed.push(String(operationId));
+      },
+    });
+    sync.start();
+    inner.receive(welcome(3));
+    inner.receive(
+      operationsMessage([
+        serverEnvelope({ revision: 1, operationId: 'op-ins', operation: insertRows(null, ['r0']) }),
+        // サーバー起点操作（DD-026-3）: clientId='server'・actorId='system' の SetCells。
+        serverEnvelope({
+          revision: 2,
+          operationId: 'op-server',
+          clientId: 'server',
+          actorId: 'system',
+          operation: setCells([{ rowId: row('r0'), columnId: col('col-0'), value: str('SYS') }]),
+        }),
+        // 自分の SetCells の echo（Undo の ownedRevision 更新対象）。
+        serverEnvelope({
+          revision: 3,
+          operationId: 'op-own',
+          clientId: 'client-a',
+          actorId: 'user-a',
+          operation: setCells([{ rowId: row('r0'), columnId: col('col-1'), value: str('mine') }]),
+        }),
+      ]),
+    );
+    expect(sync.session.committedDocument.revision).toBe(3);
+    expect(committed).toEqual(['op-own']); // 'op-server' は含まれない＝Undo 記録の対象外
+  });
+});

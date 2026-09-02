@@ -10,6 +10,7 @@ import type {
   ServerMessage,
   WelcomeMessage,
 } from '@nanairo-sheet/core';
+import { applyOperation } from '@nanairo-sheet/core';
 import { createDocumentId } from '@nanairo-sheet/types';
 
 import { createCounterIdGenerator } from './deps';
@@ -259,5 +260,24 @@ describe('Room Presence 中継（§9・connection 単位）', () => {
     room.handleJoin(join('cB')); // conn-2 → color-0 再利用（最小未使用 index）
     const outbound = room.handleMessage('conn-2', { type: 'presence', sequence: 1, payload: presencePayload() });
     expect(firstOfType(outbound, 'presenceDelta').presence.colorKey).toBe('color-0');
+  });
+});
+
+describe('初期文書 document@0 の fresh join bootstrap（DD-026-1）', () => {
+  it('非空 document@0 への fresh join は bootstrap@0 を返し、空文書@0 は従来どおり返さない', () => {
+    const clock = createManualClock();
+    const state = freshSequencerState(COLUMNS);
+    state.document = applyOperation(state.document, insertRows(null, ['row-1']), { revision: 0 }).document;
+    const room = new Room(new Sequencer(state, clock), { clock, idGenerator: createCounterIdGenerator() });
+    const { outbound } = room.handleJoin(join('cA', 0));
+    const boot = messagesOfType(outbound, 'bootstrap');
+    expect(boot).toHaveLength(1);
+    expect(boot[0].revision).toBe(0);
+    expect(boot[0].document.rowOrder).toEqual(['row-1']);
+    expect(messagesOfType(outbound, 'operations')).toHaveLength(0);
+    expect(firstOfType(outbound, 'welcome').currentRevision).toBe(0);
+
+    const empty = createTestRoom();
+    expect(messagesOfType(empty.room.handleJoin(join('cB', 0)).outbound, 'bootstrap')).toHaveLength(0);
   });
 });

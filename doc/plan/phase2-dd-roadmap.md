@@ -16,7 +16,7 @@
 
 | # | Stage 2 移行条件（憲章 §15） | 担保先（DD） | 判定証拠 |
 |---|---|---|---|
-| S2-1 | **2つ以上の異なる社内アプリで利用** | DD-026（housing-e-kintai-next 売上入力）＋DD-030（ReadyCrew 案件DB） | 各アプリの統合実証（pack/registry 経由 install・直接内部 import なし・実画面で稼働） |
+| S2-1 | **2つ以上の異なる社内アプリで利用** | DD-026（**松下 生産納期**・当初の housing-e-kintai-next 売上入力から 2026-09-03 に変更＝§2）＋DD-030（ReadyCrew 案件DB） | 各アプリの統合実証（pack/registry 経由 install・直接内部 import なし・実画面で稼働） |
 | S2-2 | 内部パッケージの直接 import がない | boundary lint 常設（既設 R1〜R7）＋DD-026/030 の consumer 側検証 | `npm run lint:boundary` green＋consumer 側 import 検査 |
 | S2-3 | API 差分監視と移行ガイドがある | DD-028 | API 型スナップショット差分検出の常設（CI 実行履歴）＋migration guide の**存在と dry-run 検証**（破壊的変更の発生実績は要求しない＝憲章は存在を要求。発生した場合はその運用記録も添付） |
 | S2-4 | 主要ブラウザー/IME 回帰が継続実行される | DD-028 | CI 常設の**成功履歴**（test・invariants・E2E）＋**変更トリガー時および Beta リリースゲートでの Tier 1 実機 IME 実行記録**（synthetic と実IMEを混同しない＝Stage 1 §2.3 継承） |
@@ -34,7 +34,7 @@
 | **DD-023** | **Stage 2 ロードマップ策定**（本DD） | 計画判断 | A | 必須（先頭） | — |
 | **DD-024** | **単独グリッドモードDD**（collaboration: false の成立・保存＝利用側 API 接続契約・lifecycle 検証。憲章 §11.1 の実証） | 未実証経路・公開 Options/Capabilities | A | **必須**（統合①の前提） | S2-6 |
 | **DD-025** | **React Facade DD**（`@nanairo-sheet/react`・React 19 対応・lifecycle/props-event 変換・グリッド内部状態を React state へ複製しない〔憲章 §11.2〕） | 公開 API 新設・再 mount リーク | A | **必須**（roadmap §7 昇格条件成立: 最初の consumer が React） | S2-1 |
-| **DD-026** | **consumer 統合①: housing-e-kintai-next 売上入力**（先頭タスク=要件・移行時期調査→pack/registry 統合→保存 Adapter 実配線） | 実案件統合・Adapter 境界 | A | **必須** | S2-1・S2-2・S2-6 |
+| **DD-026** | **consumer 統合①: 松下 生産納期**（保存 Adapter＝ストア注入・初期文書／認証境界＝認証フック／サーバー起点操作。**共同編集モードを採用**。当初の housing-e-kintai-next 売上入力から 2026-09-03 に変更＝§2） | 実案件統合・Adapter 境界 | A | **必須** | S2-1・S2-2・S2-6 |
 | **DD-020** | Clipboard DD（範囲選択・parser・型変換・原子 SetCells・OCC・Undo）〔Stage 1 予約番号〕 | Clipboard 原子性・競合 | A | **必須見込み**（大量明細入力の中核。DD-026 要件調査で確定） | — |
 | **DD-021** | 行操作DD（RowId・Insert/Delete・tombstone・座標・収束。K3/K4/P2-1 回収。起票時 DD-021-1〜3 に3分割）〔Stage 1 予約番号〕 | 行操作×収束×参照 | A | **必須**（K3/K4/P2-1 の Stage 2 回収は DD-018 で確定済み＝consumer 要件と独立。要件調査で変わるのは**着手順序のみ**） | — |
 | **DD-027** | **列タイプ体系DD**（アンブレラ。子: 27-1 選択式入力列・27-2 ハイパーリンク列・27-3 セル書式モデル〔背景色/バッジ・列/セル書式・backlog §3.5 統合〕。Human Spec Gate 必須） | 新アーキテクチャ概念（列タイプ・書式モデル）・Plugin API v1 の実質プロトタイプ | A | **必須**（ReadyCrew 要件・P-07 判断材料） | S2-6 |
@@ -69,6 +69,7 @@ DD-023 ロードマップ策定（本DD）
 - **中間チェックポイント**（DA 指摘 Phase 1-#3）: DD-026 完了時に「統合②（ReadyCrew）の開始可否」を確認する。開始不能なら代替 consumer 候補の探索を DD-030 の先頭タスクへ差し替え、S2-1 未達リスクをユーザーへ提示する。
 - **housing 側の移行順序リスク**（DA 指摘 Phase 1-#1）: 売上入力画面は housing 側移行計画書の PoC 候補（歩合計算/勤怠入力）に無い。DD-026 先頭の要件調査で組み込み時期を先方計画と突合し、ズレる場合は機能DD群を先行させる（順序入替は本ロードマップの更新として記録）。
 - **順序入替の記録（2026-07-16・ユーザー決定＝上記分岐の発動）**: SDK 機能完成を優先し、**機能DD群（DD-028 → DD-020 → DD-021〔3分割〕→ DD-027〔子3本〕）を DD-026（統合①）より先行**させる。DD-022 数式のみ要件判定待ちを維持（推測で先行しない）。DD-026 は機能DD群完了後に復帰し、KPI 初回データ（KPI-4/5）の採取は DD-026 実施時のまま（kpi-ledger 契約は不変）。
+- **consumer ① の変更（2026-09-03・ユーザー決定・D-007）**: 統合①の consumer を housing-e-kintai-next（売上入力・単独グリッド先行）から **松下 生産納期**（`C:/repo/matsushita-production-management` DD-012。React 19 + Hono + Prisma + PostgreSQL・JWT Cookie）へ変更。松下側で **共同編集が最重要要件**となり、SDK 側に無い 3 つの口（U1 永続化ストアの差し替え・初期文書／U2 認証フック／U3 サーバー起点操作）を DD-026-1〜3 で公開 API として追加した。**KPI-4 は採取不能**（松下は DD-009 で単独グリッドを導入済み＝初回導入でない。kpi-ledger §3.1 に理由を記録し統合②で採取）。§6「共同編集は Stage 2 の consumer 2 件で採用しない」は本変更で更新（下記）。DD-027（列タイプ）の要件も松下から持ち込み済み（`doc/DD/DD-026/consumer-requirements-matsushita.md` §B）。
 
 ## 3. 密度レジーム（Stage 1 §2 を継承）
 
@@ -105,7 +106,8 @@ DD-023 ロードマップ策定（本DD）
 
 - **対応環境**: Tier 1（Win Chrome/Edge）継続。Tier 2 拡大（macOS 等）は Stage 2 では**行わない**（consumer 2件の実利用環境が Tier 1 内であることを DD-026/030 で確認。外れる場合のみ再判定）。
 - **信頼境界**: trusted internal environment 限定を継続。単独グリッドモード（DD-024）では認証・保存の責務は**全面的に利用側アプリ**（SDK は Command/Event 契約のみ）。
-- **共同編集**: Stage 2 の consumer 2件では**採用しない**（単独グリッド/未定）。共同編集経路の品質は Stage 1 資産（不変条件・E2E）を CI（DD-028）で回帰維持し、Presence（DD-019）・PostgreSQL 本採用（backlog §2）は共同編集採用案件の確定をトリガーとする条件付き項目。
+- **共同編集**: ~~Stage 2 の consumer 2件では採用しない（単独グリッド/未定）~~ → **2026-09-03 更新**: 統合①（松下 生産納期）が**共同編集を採用**（§2 consumer ① の変更）。共同編集経路の品質は Stage 1 資産（不変条件・E2E）を CI（DD-028）で回帰維持する。条件付き項目のトリガー「共同編集採用案件の確定」は**成立**: Presence（DD-019）の着手判断はユーザーへ提示（本ロードマップは順序を確定しない）。PostgreSQL は SDK 内蔵の本採用ではなく **consumer 側ストア注入（DD-026 U1）**で実現する形になったため、SDK 内蔵 PG ストアの要否は DD-032 の棚卸しで判断する。
+- **信頼境界（共同編集・2026-09-03 追記）**: 認証は利用側（`authenticate` フック）が担い、SDK は受理 envelope の `actorId` と presence の身元を認証結果で確定する。`clientId` は申告維持（再接続同一性）＝trusted internal の境界は継続。
 - **数式**: DD-026 要件調査まで未確約（§1 DD-022 行）。
 
 ## 7. stage2-backlog.md との対応（全項目の回収先）
@@ -118,7 +120,7 @@ DD-023 ロードマップ策定（本DD）
 | §1 DD-022 数式 | 要件判定（無ければ DD-032 で Stage 3 バックログへ） |
 | §2 dist ビルド配布切替 | DD-031 |
 | §2 private registry 昇格 | DD-031 |
-| §2 PostgreSQL 本採用 | 条件付き（共同編集採用案件確定まで保留・成立しなければ Stage 3 バックログへ） |
+| §2 PostgreSQL 本採用 | 条件付き（共同編集採用案件確定まで保留・成立しなければ Stage 3 バックログへ）→ **2026-09-03: 松下で共同編集採用。SDK は DD-026 U1（ストア注入）で Postgres を consumer 側実装に委ねる形で提供。SDK 内蔵 PG ストアの要否は DD-032 で棚卸し** |
 | §2 React 薄ラッパー Facade | **DD-025（必須化確定**・最初の consumer が React 19） |
 | §2 複数配布チャネル運用 | DD-031（単一チャネル継続か複数化かを配布昇格時に判定） |
 | §2 汎用診断/テレメトリ基盤 | DD-029（P-12） |

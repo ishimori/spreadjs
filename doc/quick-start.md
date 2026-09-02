@@ -54,6 +54,80 @@ const server = await serve({
 // server.url / server.documentId / server.connectionCount() / await server.stop()
 ```
 
+## 3b. 独自永続化・認証・サーバー起点操作（consumer 統合・DD-026）
+
+`serve()` は既定でファイル永続化（`persistenceDir`）か in-memory で動く。実案件では **利用側の DB と認証**につなぐ 3 つの口を使う
+（Experimental 0.x・型は `@nanairo-sheet/server-hono` の `Serve*`）。以下は擬似コード（`db`/`verifyJwtCookie` は利用側の実装）。
+
+```ts
+import { serve } from '@nanairo-sheet/server-hono';
+import type { ServeOpLogStore, ServeSnapshotStore } from '@nanairo-sheet/server-hono';
+
+// U1: 永続化ストアの差し替え（例: Postgres）。**append の解決＝durable** が契約（解決後にクライアントへ ACK が出る）。
+const oplog: ServeOpLogStore = {
+  async append(entries) {
+    // 1 トランザクションで「操作ログ INSERT」と「業務表への投影」を行い、commit してから resolve する。
+    await db.transaction(async (tx) => {
+      for (const e of entries) {
+        await tx.insert('sheet_oplog', { document_id: e.documentId, revision: e.revision, envelope: e });
+        await project(tx, e); // e.operation（setCells / insertRows / deleteRows）を業務表へ
+      }
+    });
+  },
+  async readAll() {
+    return { entries: await db.select('sheet_oplog', { orderBy: 'revision' }) }; // revision 昇順・1..N 連番
+  },
+  async close() {},
+};
+const snapshotStore: ServeSnapshotStore = {
+  // s.snapshot は SDK 内部形式（不透明）。JSON として保存し、そのまま返す。jsonb 可（checksum はキー順非依存）。
+  async save(s) { await db.upsert('sheet_snapshots', { document_id: s.documentId, revision: s.revision, data: s }); },
+  async loadLatest() { return db.selectLatest('sheet_snapshots'); },
+  async close() {},
+};
+
+const server = await serve({
+  port: 9689,
+  documentId: 'production-orders',
+  columnOrder: ['order_no', 'item_code', 'item_name', 'unit_price'],
+  oplog,
+  snapshotStore,
+  // snapshot も操作ログも無い初回だけ呼ばれる。DB の現状から document@0 を組む（oplog には載らない・seedRows と併用不可）。
+  initialDocument: async () => ({
+    rows: (await db.select('raw_production_orders')).map((r) => ({
+      rowId: String(r.id),
+      cells: { item_code: { kind: 'string', value: r.item_code }, unit_price: { kind: 'number', value: r.unit_price } },
+    })),
+  }),
+  // U2: 認証。Cookie の JWT を検証し身元を返す。null は 401・throw は 500（どちらも接続拒否）。
+  authenticate: async ({ headers }) => {
+    const user = await verifyJwtCookie(headers.cookie);
+    return user === null ? null : { actorId: user.id, displayName: user.name };
+  },
+});
+
+// U3: サーバー起点の操作（補完・算出列）。通常の受理経路を通り、永続化後に全接続へ配信される。
+const result = await server.submit(
+  { type: 'setCells', changes: [{ rowId: '42', columnId: 'item_name', value: { kind: 'string', value: '丸棒 φ12' } }] },
+  { actorId: 'system' },
+);
+if (result.status === 'rejected') {
+  // result.code（例: 'stale-cell-revision'＝beforeRevision 指定時の OCC 競合）
+}
+```
+
+- **durable ACK**: `append` が resolve するまでクライアントに ACK は出ない。`append` が reject（投影失敗）した操作は受理されず、
+  以降の書込は停止する（fail-stop・接続は切断される）。復旧は再起動（snapshot＋tail）。
+- **初期文書**: `initialDocument` の結果は document@0（revision 0）。ストア指定時は snapshot@0 を保存してから listen する。
+  行 ID の重複・`columnOrder` 外の列は起動時エラー。
+- **身元**: `authenticate` 指定時、クライアント申告の `actorId`/`displayName` は無視され、受理 envelope の `actorId` と presence の表示名は
+  認証結果になる。`clientId` は再接続の同一性のため申告のまま（trusted internal の境界＝別ユーザーの `clientId` 乗っ取りは防がない）。
+  Cookie はポートを区別しないため、同期サーバーは API と同一ホスト（本番は同一オリジンのリバースプロキシ配下）に置く。
+- **無限ループ防止**: `submit` の envelope は `clientId: 'server'`（予約語）・`actorId` は指定値。`append` で投影→再評価する利用側は、
+  この `actorId`/`clientId` を見て再評価を抑止する（SDK 側は関知しない）。
+- **Undo**: サーバー起点の操作は利用者の Undo 対象にならない（Undo は自クライアントの操作のみ）。
+- **排他**: `oplog`/`snapshotStore` は同時指定が必須。`persistenceDir` との併用、`initialDocument` と `seedRows` の併用は起動時エラー。
+
 ## 4. mount（グリッド）と日本語入力
 
 **size 済みの container**（幅・高さを持つ要素）へ mount する。`serverUrl` は必須。

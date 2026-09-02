@@ -65,4 +65,12 @@
 - **帰結**: 規定の正本は `doc/product/deprecation-policy.md`。変更の検出は `tests/contract`（公開宣言 closure snapshot）＋CI（DD-028）、移行手順の正本は `doc/migration/`（dry-run 検証義務）。憲章 §27 P-10 は決定済み。
 - **元DD**: DD-028
 
-<!-- 以降、D-007, D-008... と追記していく -->
+## D-007: consumer 統合①は松下 生産納期（共同編集採用）・SDK は保存先と認証を利用側へ委ねる口を持つ
+
+- **日付**: 2026-09-03
+- **背景**: 統合①の consumer は DD-023 で housing-e-kintai-next（売上入力・単独グリッド先行）としていたが、松下 生産納期（`C:/repo/matsushita-production-management` DD-012）で共同編集が最重要要件となり、Postgres 保存・JWT Cookie 認証・SDK 優先の構成が松下側で確定した。SDK には保存先の差し替え口・認証フック・サーバー起点操作が無かった。
+- **決定**: 統合①の consumer を **松下 生産納期**へ変更する（ユーザー決定）。SDK は共同編集サーバーに (1) `serve({ oplog, snapshotStore, initialDocument })`＝永続化ストアの差し替えと初期文書の外部供給、(2) `serve({ authenticate })`＝upgrade 時の認証フック（受理後の身元はサーバーが確定）、(3) `ServerInstance.submit()`＝サーバー起点操作、を **公開 API として提供**し、DB スキーマ・投影・JWT 検証は利用側の責務に置く（SDK 内蔵の Postgres ストアは作らない）。
+- **帰結**: roadmap §0 S2-1・§1 DD-026・§2・§6 を更新（共同編集は Stage 2 で採用される。Presence=DD-019 のトリガー成立＝着手判断はユーザー）。persisted snapshot format は v2（checksum キー順非依存・v1 読込互換）。KPI-4 は採取不能（統合②で採取）。憲章 §11.4 の `createNanairoSheetRoutes({ authenticate, operationStore, snapshotStore })` は意図の例示と解釈し、`serve()` オプションで同じ責務分離を実現する（DD-024 の先例と同じ扱い）。
+- **元DD**: DD-026（DD-026-1〜3）
+
+<!-- 以降、D-008, D-009... と追記していく -->

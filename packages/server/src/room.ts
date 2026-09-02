@@ -186,9 +186,18 @@ export class Room {
     };
   }
 
-  /** bootstrap（snapshot 再取得）を返すべきか（fresh〔afterRevision≦0〕or 差分>閾値T）。join/requestCatchup 共通・client と対称。 */
+  /**
+   * bootstrap（snapshot 再取得）を返すべきか（client の session.handleWelcome/handleBootstrap と対称）。
+   * - fresh join（afterRevision≦0）: 文書が非空なら返す。frontier>0 に加え、**frontier 0 でも非空**（DD-026-1 の初期文書
+   *   `initialDocument`＝document@0）なら bootstrap@0 を返す（client は committed 0 かつ未 bootstrap のとき受理する）。
+   *   空文書@0 は従来どおり返さない（後方互換）。
+   * - reconnect（afterRevision>0）: 差分>閾値 T なら snapshot 再取得。
+   */
   private shouldBootstrap(afterRevision: number, frontier: number): boolean {
-    return frontier > 0 && (afterRevision <= 0 || frontier - afterRevision > CATCHUP_SNAPSHOT_THRESHOLD);
+    if (afterRevision <= 0) {
+      return frontier > 0 || this.frontierDocument().rowOrder.length > 0;
+    }
+    return frontier - afterRevision > CATCHUP_SNAPSHOT_THRESHOLD;
   }
 
   private bootstrapMessage(frontier: number): ServerMessage {

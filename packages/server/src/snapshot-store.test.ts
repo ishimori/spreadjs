@@ -1,4 +1,5 @@
 // snapshot-store の単体テスト（DD-014 Phase 2）: persisted format v1 往復一致・checksum/version fail-fast・世代保持・atomic save。
+import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -115,5 +116,65 @@ describe('FileSnapshotStore', () => {
     await store.save(persistedFrom(buildSequencerWithData()));
     const files = await readdir(dir);
     expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
+  });
+});
+
+/** 全階層のオブジェクトキーを逆順に並べ替える（Postgres jsonb 等、キー順を保持しない保存先の模倣）。 */
+function reverseKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item: unknown) => reverseKeys(item));
+  }
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort().reverse()) {
+      out[key] = reverseKeys(record[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+describe('persisted snapshot format v2（DD-026-1・キー順非依存 checksum）', () => {
+  it('キー順を入れ替えた JSON（jsonb 模倣）でも checksum が一致して読める', () => {
+    const persisted = persistedFrom(buildSequencerWithData());
+    expect(persisted.formatVersion).toBe(2);
+    const reordered = JSON.stringify(reverseKeys(JSON.parse(JSON.stringify(persisted))));
+    expect(reordered).not.toBe(JSON.stringify(persisted));
+    expect(parsePersistedSnapshot(reordered)).toEqual(persisted);
+  });
+
+  it('v1（挿入順 checksum）の既存ファイルは旧算法で検証して読める（読込互換・キー順が崩れた v1 は不一致）', () => {
+    const data = serializeSnapshot(buildSequencerWithData().exportState());
+    const payload = {
+      formatVersion: 1,
+      documentId: 'doc-1',
+      revision: 2,
+      createdAt: new Date(0).toISOString(),
+      snapshot: { ...data, operationLog: [] },
+    };
+    const checksum = createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex');
+    const legacy = parsePersistedSnapshot(JSON.stringify({ ...payload, checksum }));
+    expect(legacy.formatVersion).toBe(1);
+    expect(legacy.revision).toBe(2);
+    expect(() => parsePersistedSnapshot(JSON.stringify(reverseKeys({ ...payload, checksum })))).toThrow(/checksum/);
+  });
+
+  it('FileSnapshotStore は v2 で保存し、v1 ファイルが残っていても loadLatest できる', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'snap-v2-'));
+    try {
+      const store = new FileSnapshotStore(dir);
+      const data = serializeSnapshot(buildSequencerWithData().exportState());
+      const v1 = { formatVersion: 1, documentId: 'doc-1', revision: 1, createdAt: new Date(0).toISOString(), snapshot: { ...data, operationLog: [] } };
+      const v1Checksum = createHash('sha256').update(JSON.stringify(v1), 'utf8').digest('hex');
+      await writeFile(join(dir, 'snapshot-1.json'), JSON.stringify({ ...v1, checksum: v1Checksum }));
+      expect((await store.loadLatest())?.formatVersion).toBe(1);
+      await store.save(persistedFrom(buildSequencerWithData())); // revision 2・v2
+      const latest = await store.loadLatest();
+      expect(latest?.formatVersion).toBe(2);
+      expect(latest?.revision).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

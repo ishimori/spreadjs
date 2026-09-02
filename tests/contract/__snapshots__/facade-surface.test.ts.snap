@@ -387,12 +387,18 @@ export declare const NanairoSheetView: import("react").ForwardRefExoticComponent
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/server-hono の公開宣言 closure 1`] = `
 "// ==== packages/server-hono/src/index.ts ====
+import type { ServeAuthenticate, ServeInitialDocument, ServeOpLogStore, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
+export type { ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentOperation, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
 /** 診断エントリの重大度（server-hono 診断 hook）。 */
 export type ServeDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 /** serve 診断エントリ（onDiagnostic opt-in 時のみ生成）。 */
 export interface ServeDiagnostic {
     readonly level: ServeDiagnosticLevel;
-    /** 安定した診断イベント識別子（'serve-started' / 'serve-stopped'）。 */
+    /**
+     * 安定した診断イベント識別子。
+     * 'serve-started' / 'serve-stopped'（起動・停止）／'auth-rejected'（authenticate が null＝401 拒否・warn）／
+     * 'auth-error'（authenticate が throw＝500 拒否・error）。Cookie・トークン等の値は載せない。
+     */
     readonly code: string;
     readonly message: string;
     /** epoch ms。 */
@@ -410,12 +416,30 @@ export interface ServeOptions {
     readonly documentId?: string;
     /** 列順（既定 ['col-a','col-b','col-c']）。 */
     readonly columnOrder?: readonly string[];
-    /** 初期グリッド行数（既定 5）。 */
+    /** 初期グリッド行数（既定 5）。\`initialDocument\` とは併用不可。 */
     readonly seedRows?: number;
-    /** 指定でファイル永続化（oplog＋snapshot）を有効化する。再起動で snapshot＋tail から復旧する。 */
+    /** 指定でファイル永続化（oplog＋snapshot）を有効化する。再起動で snapshot＋tail から復旧する。\`oplog\`/\`snapshotStore\` とは併用不可。 */
     readonly persistenceDir?: string;
     /**
-     * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止の診断エントリが配信される。
+     * 独自の operation log ストア（DD-026 U1・例: Postgres）。\`snapshotStore\` と**同時指定が必須**。\`append\` 解決＝durable の
+     * 契約はファイル永続化と同じ（consumer が業務表への投影を同じトランザクションへ入れれば操作ログと業務表が常に一致する）。
+     */
+    readonly oplog?: ServeOpLogStore;
+    /** 独自の snapshot ストア（DD-026 U1）。\`oplog\` と同時指定が必須。中身は不透明（JSON として保存し、そのまま返す）。 */
+    readonly snapshotStore?: ServeSnapshotStore;
+    /**
+     * 初期文書の供給元（DD-026 U1）。**snapshot も操作ログも無いときだけ**呼ばれ、結果が document@0（revision 0）になる。
+     * ストア指定時は snapshot@0 を保存してから listen する（oplog は consumer の操作だけを記録する）。\`seedRows\` とは併用不可。
+     */
+    readonly initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument;
+    /**
+     * 認証フック（DD-026 U2）。WebSocket upgrade 時に呼ばれ、null で 401 拒否・throw で 500 拒否。受理後は envelope の
+     * \`actorId\`・presence の \`userId\`/\`displayName\` をこの結果でサーバーが上書きする（クライアント申告は無視。\`clientId\` は
+     * 再接続の同一性のため申告を維持）。未指定なら従来どおり申告値（trusted internal）。
+     */
+    readonly authenticate?: ServeAuthenticate;
+    /**
+     * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止・認証拒否の診断エントリが配信される。
      * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
      */
     readonly onDiagnostic?: ServeDiagnosticHook;
@@ -427,6 +451,12 @@ export interface ServerInstance {
     readonly documentId: string;
     /** 現在の接続数（診断用）。 */
     connectionCount(): number;
+    /**
+     * サーバー起点の操作（DD-026 U3）。通常の受理経路（revision 付与・全接続へ配信・永続化）を通り、受理は durable 化後に
+     * 解決する。envelope は \`clientId: 'server'\`（予約）・\`actorId: options.actorId\`。利用者の Undo 対象にならない。
+     * reject（OCC 等）は結果で返す。\`changes\` 空・\`actorId\` 空・durable 失敗・stop 後は Promise reject（同期 throw しない）。
+     */
+    submit(operation: ServeSetCellsInput, options: ServeSubmitOptions): Promise<ServeSubmitResult>;
     /** サーバーを停止し接続・永続化ハンドルを解放する。 */
     stop(): Promise<void>;
 }
@@ -434,5 +464,152 @@ export interface ServerInstance {
 export declare const SERVER_HONO_API_VERSION: "0.1.0-experimental";
 /** 同期サーバーを起動する（listening 後に解決＝port 0 対応で async）。 */
 export declare function serve(options?: ServeOptions): Promise<ServerInstance>;
+
+// ==== packages/server-hono/src/serve-types.ts ====
+/** セル値（計画書 §6.4 の PoC サブセット）。date は LocalDate \`YYYY-MM-DD\`（ADR-0012）。 */
+export type ServeCellScalar = {
+    readonly kind: 'blank';
+} | {
+    readonly kind: 'string';
+    readonly value: string;
+} | {
+    readonly kind: 'number';
+    readonly value: number;
+} | {
+    readonly kind: 'date';
+    readonly value: string;
+};
+/** SetCells の 1 件。\`beforeRevision\` 指定時はセルの現在 revision と一致しなければ全体 reject（OCC・stale-cell-revision）。 */
+export interface ServeSetCellsChange {
+    readonly rowId: string;
+    readonly columnId: string;
+    readonly beforeRevision?: number;
+    readonly value: ServeCellScalar;
+}
+/** SetCells: 全件適用または全件拒否の原子的 Operation。 */
+export interface ServeSetCellsOperation {
+    readonly type: 'setCells';
+    readonly changes: readonly ServeSetCellsChange[];
+    readonly conflictPolicy: 'reject-overlap';
+}
+/** InsertRows: \`afterRowId\` 直後へ挿入（null=先頭）。新 RowId は rows に同梱。 */
+export interface ServeInsertRowsOperation {
+    readonly type: 'insertRows';
+    readonly afterRowId: string | null;
+    readonly rows: ReadonlyArray<{
+        readonly rowId: string;
+        readonly height?: number;
+    }>;
+}
+/** DeleteRows: rowIds を tombstone 化（再 Delete は冪等）。 */
+export interface ServeDeleteRowsOperation {
+    readonly type: 'deleteRows';
+    readonly rowIds: readonly string[];
+}
+export type ServeDocumentOperation = ServeSetCellsOperation | ServeInsertRowsOperation | ServeDeleteRowsOperation;
+/**
+ * 受理済み Operation Envelope（サーバー付与の revision/acceptedAt を含む）。oplog に追記される単位で、consumer は
+ * \`operation\`（\`setCells\`/\`insertRows\`/\`deleteRows\`）から業務表へ投影できる。\`actorId\` は認証フック（U2）指定時は
+ * サーバーが確定した利用者 ID、サーバー起点操作（U3）は \`clientId: 'server'\`。
+ */
+export interface ServeOperationEnvelope {
+    readonly protocolVersion: number;
+    readonly documentId: string;
+    readonly operationId: string;
+    readonly transactionId: string;
+    readonly actorId: string;
+    readonly clientId: string;
+    readonly clientSequence: number;
+    readonly baseRevision: number;
+    readonly operation: ServeDocumentOperation;
+    /** サーバー付与の全順序 revision（1 から連番）。 */
+    readonly revision: number;
+    /** ISO 文字列（監査用）。 */
+    readonly acceptedAt: string;
+    readonly canonicalOperation: ServeDocumentOperation;
+}
+/** \`readAll\` の結果。\`discardedTornRecords\` はファイル実装向け（末尾の途中書き破棄件数）。DB 実装は省略（0 扱い）でよい。 */
+export interface ServeOpLogReadResult {
+    readonly entries: readonly ServeOperationEnvelope[];
+    readonly discardedTornRecords?: number;
+}
+/**
+ * append-only operation log ストア（consumer 実装・例: Postgres）。
+ * - \`append\` は**解決した時点で durable** であることが契約（ACK はその後に出る）。consumer が業務表への投影を同じ
+ *   トランザクションへ入れれば「操作ログと業務表が常に一致」する。reject（例外）は当該 op を破棄し以降の書込を停止する。
+ * - \`readAll\` は revision 昇順・1..N 連番で返す（連番違反は起動時 fail-fast）。
+ */
+export interface ServeOpLogStore {
+    append(entries: readonly ServeOperationEnvelope[]): Promise<void>;
+    readAll(): Promise<ServeOpLogReadResult>;
+    close(): Promise<void>;
+}
+/**
+ * 永続化 snapshot（封筒）。\`snapshot\` は SDK 内部形式で**不透明**: consumer は JSON として保存し、\`loadLatest\` で
+ * そのまま返す（中身を読み書きしない）。キー順は保持しなくてよい（checksum は正準化済み・jsonb 可）。
+ */
+export interface ServePersistedSnapshot {
+    readonly formatVersion: number;
+    readonly documentId: string;
+    /** この snapshot が表す確定 revision R。初期文書のみの状態は 0。 */
+    readonly revision: number;
+    readonly createdAt: string;
+    readonly snapshot: object;
+    readonly checksum: string;
+}
+/** snapshot ストア（consumer 実装）。\`loadLatest\` は最大 revision の snapshot を返す（無ければ undefined）。 */
+export interface ServeSnapshotStore {
+    save(snapshot: ServePersistedSnapshot): Promise<void>;
+    loadLatest(): Promise<ServePersistedSnapshot | undefined>;
+    close(): Promise<void>;
+}
+/** 初期文書の 1 行。\`cells\` のキーは \`columnOrder\` の列 ID（columnOrder 外は起動時 fail-fast）。 */
+export interface ServeInitialRow {
+    readonly rowId: string;
+    readonly cells?: Readonly<Record<string, ServeCellScalar>>;
+}
+/**
+ * 初期文書（U1）。snapshot も操作ログも無いときだけ \`initialDocument()\` が呼ばれ、この内容が document@0（revision 0）
+ * になる。以降の操作は revision 1 から。ストア指定時は snapshot@0 を保存してから listen する。
+ */
+export interface ServeInitialDocument {
+    readonly rows: readonly ServeInitialRow[];
+}
+/** WebSocket upgrade 要求の最小形（Cookie は \`headers.cookie\`）。 */
+export interface ServeAuthRequest {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string | readonly string[] | undefined>>;
+}
+/** 認証で確定した身元。envelope の \`actorId\`・presence の \`userId\`/\`displayName\` をサーバーがこれで上書きする。 */
+export interface ServeIdentity {
+    readonly actorId: string;
+    readonly displayName: string;
+}
+/**
+ * 認証フック（U2）。null を返すと upgrade を 401 で拒否する。throw は 500 で拒否する（通さない）。
+ * 未指定なら従来どおりクライアント申告の actorId/displayName を使う（trusted internal）。
+ */
+export type ServeAuthenticate = (request: ServeAuthRequest) => Promise<ServeIdentity | null> | ServeIdentity | null;
+/** \`ServerInstance.submit\` に渡す SetCells（\`conflictPolicy\` はサーバーが付与）。 */
+export interface ServeSetCellsInput {
+    readonly type: 'setCells';
+    readonly changes: readonly ServeSetCellsChange[];
+}
+export interface ServeSubmitOptions {
+    /** 受理 envelope の \`actorId\`（例: 'system'）。consumer は投影時にこれを見て再評価を抑止できる。 */
+    readonly actorId: string;
+}
+/** reject コード（protocol-subset §3 と同一語彙）。 */
+export type ServeRejectCode = 'stale-cell-revision' | 'target-row-deleted' | 'unknown-anchor' | 'unknown-row' | 'unknown-column' | 'invalid-base-revision' | 'client-sequence-violation' | 'duplicate-row';
+/** \`submit\` の結果。reject は例外にせず結果で返す（durable 失敗・stop 後は Promise reject）。 */
+export type ServeSubmitResult = {
+    readonly status: 'accepted';
+    readonly operationId: string;
+    readonly revision: number;
+} | {
+    readonly status: 'rejected';
+    readonly operationId: string;
+    readonly code: ServeRejectCode;
+};
 "
 `;

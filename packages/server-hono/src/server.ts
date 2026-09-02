@@ -4,12 +4,18 @@
 //
 // server-core（Room）はトランスポート非依存で Outbound[] を返す。本アダプターは connectionId↔WebSocket を対応づけ、
 // Outbound を fan-out し、close/error/TTL sweep で presenceRemoved を配信する。protocol-subset §1/§5/§6/§7 準拠。
+//
+// DD-026（consumer 統合①）: U1 注入ストア（oplog/snapshotStore）と初期文書（initialDocument＝document@0・snapshot@0 を
+// durable 化してから listen）／U2 認証フック（upgrade 時 authenticate・identity で envelope actorId と presence を上書き）／
+// U3 サーバー起点操作（submit＝擬似接続 'server' として通常受理経路を通す）を本層に追加した。
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Server as HttpServer } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
+import type { Duplex } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { serve } from '@hono/node-server';
@@ -31,6 +37,7 @@ import {
   PersistentRoom,
   Room,
   Sequencer,
+  createPersistedSnapshot,
   deserializeSnapshot,
   freshSequencerState,
   recoverSequencerState,
@@ -42,6 +49,7 @@ import type {
   Outbound,
   OutboundTarget,
   RecoveryReport,
+  SequencerState,
   SnapshotData,
   SnapshotStore,
 } from '@nanairo-sheet/server';
@@ -52,7 +60,7 @@ import {
   createRowId,
   createTransactionId,
 } from '@nanairo-sheet/types';
-import type { RowId } from '@nanairo-sheet/types';
+import type { OperationId, RowId } from '@nanairo-sheet/types';
 import { decodeClientMessage } from '@nanairo-sheet/core';
 
 import {
@@ -61,6 +69,14 @@ import {
   seedIntegrationDataset,
 } from './seed-dataset';
 import type { IntegrationDatasetConfig } from './seed-dataset';
+import { buildInitialDocument, liftSetCellsInput } from './serve-adapters';
+import type {
+  ServeAuthenticate,
+  ServeIdentity,
+  ServeInitialDocument,
+  ServeSetCellsInput,
+  ServeSubmitResult,
+} from './serve-types';
 import { rawDataToString } from './ws-frame';
 
 const DEFAULT_PORT = 8787; // playground(5173) と非衝突（指示 3）
@@ -69,15 +85,22 @@ const DEFAULT_HEARTBEAT_MILLIS = 5_000; // §9.3
 const DEFAULT_TTL_MILLIS = 15_000; // §9.3
 const DEFAULT_SWEEP_MILLIS = 5_000;
 const PROTOCOL_VERSION = 1;
+/** サーバー起点操作（DD-026-3）の予約 clientId。clientSequence は Sequencer の表から継続する（再起動をまたぐ）。 */
+export const SERVER_CLIENT_ID = 'server';
+/** サーバー起点操作を Room へ投入するときの擬似 connectionId（ws を持たない＝ACK は dispatch で捨てられる）。 */
+const SERVER_CONNECTION_ID = 'server';
 
 type NodeServer = ReturnType<typeof serve>;
+
+/** 診断の受け口（serve() の onDiagnostic へ橋渡し・未指定なら無出力）。 */
+export type DiagnosticSink = (level: 'debug' | 'info' | 'warn' | 'error', code: string, message: string) => void;
 
 export interface StartServerOptions {
   port?: number; // 既定 8787。0 = OS 任せのランダムポート（テスト・指示 3）
   host?: string; // 既定 '127.0.0.1'
   documentId?: string; // 既定 'demo-doc'
   columnOrder?: string[]; // 既定 ['col-a','col-b','col-c']
-  seedRows?: number; // 既定 5（初期グリッド row-1..row-N）
+  seedRows?: number; // 既定 5（初期グリッド row-1..row-N）。initialDocument とは排他
   heartbeatMillis?: number; // 既定 5000（/config でデモへ伝える）
   ttlMillis?: number; // 既定 15000（Room presence TTL）
   sweepMillis?: number; // 既定 5000（sweep 実タイマー間隔）
@@ -85,6 +108,11 @@ export interface StartServerOptions {
   integrationDataset?: IntegrationDatasetConfig | boolean; // DD-005 Phase 2: 50,000行×200列・非空約10万を投入（true=既定規模）
   persistenceDir?: string; // DD-014: 指定時にファイル永続化（oplog＋snapshot）を有効化。再起動で snapshot＋tail から復旧する
   snapshotIntervalOps?: number; // DD-014: N op ごとに非同期 snapshot 生成（既定 1,000）
+  oplog?: OpLogStore; // DD-026-1: 注入 oplog（snapshotStore と同時指定・persistenceDir と排他）
+  snapshotStore?: SnapshotStore; // DD-026-1: 注入 snapshot ストア（oplog と同時指定・persistenceDir と排他）
+  initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
+  authenticate?: ServeAuthenticate; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
+  diagnostics?: DiagnosticSink; // serve() の onDiagnostic への橋渡し
 }
 
 export interface RunningServer {
@@ -95,6 +123,7 @@ export interface RunningServer {
   snapshot(): SnapshotData; // 検査用
   connectionCount(): number; // リーク検査用（後始末後 0）
   recovery?: RecoveryReport; // DD-014: 永続化有効時の再起動復旧内訳（snapshot revision・tail replay 数）
+  submit(operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult>; // DD-026-3: サーバー起点 SetCells
   close(): Promise<void>; // 全 ws terminate → wss.close → http server.close → clearInterval → oplog/snapshot close
 }
 
@@ -113,15 +142,20 @@ interface RoomController {
 /**
  * connectionId ↔ WebSocket を対応づけ、Room の Outbound[] を fan-out するブリッジ。
  * 接続ライフサイクル（accept → join → 確立 → close/error）と TTL sweep を実装する（phase4-design §2/§3）。
+ * DD-026-2: 認証済み identity を接続ごとに保持し、Room へ渡す前に submitOperation/presence の身元を上書きする。
  */
 class RoomBridge {
   private readonly wsByConnection = new Map<string, WebSocket>();
   private readonly connectionByWs = new Map<WebSocket, string>();
+  private readonly identityByWs = new Map<WebSocket, ServeIdentity>();
 
   constructor(private readonly room: RoomController) {}
 
-  /** 新規 WS を受理し、メッセージ・切断を購読する（connectionId は最初の join で確定）。 */
-  onConnect(ws: WebSocket): void {
+  /** 新規 WS を受理し、メッセージ・切断を購読する（connectionId は最初の join で確定）。identity は authenticate の結果。 */
+  onConnect(ws: WebSocket, identity?: ServeIdentity): void {
+    if (identity !== undefined) {
+      this.identityByWs.set(ws, identity);
+    }
     ws.on('message', (data: RawData) => {
       this.onMessage(ws, data);
     });
@@ -145,9 +179,21 @@ class RoomBridge {
       if (!active.has(connectionId)) {
         this.wsByConnection.delete(connectionId);
         this.connectionByWs.delete(ws);
+        this.identityByWs.delete(ws);
         ws.close(1000, 'presence ttl expired'); // 続く close イベントは connectionByWs 削除済みゆえ no-op（冪等）
       }
     }
+  }
+
+  /**
+   * サーバー起点の操作（DD-026-3）を擬似接続 SERVER_CONNECTION_ID として通常経路（Room/PersistentRoom.handleMessage）へ
+   * 投入する。永続化有効時は durable 化後に解決する。ACK（宛先＝擬似接続）は ws が無いため dispatch が捨て、operations は
+   * 全接続へ配信される。Room の ACK/reject から結果を組む。
+   */
+  async submitFromServer(envelope: ClientOperationEnvelope): Promise<ServeSubmitResult> {
+    const outbound = await this.room.handleMessage(SERVER_CONNECTION_ID, { type: 'submitOperation', envelope });
+    this.dispatch(outbound);
+    return submitResultOf(envelope.operationId, outbound);
   }
 
   private onMessage(ws: WebSocket, data: RawData): void {
@@ -178,6 +224,11 @@ class RoomBridge {
       if (existing !== undefined) {
         return; // 二重 join は無視
       }
+      if (message.clientId === SERVER_CLIENT_ID) {
+        // 予約 clientId（DD-026-3）: サーバー起点操作の clientSequence 表を共有してしまい両者が violation になるため拒否する。
+        this.closeSocket(ws, 1008, 'reserved clientId');
+        return;
+      }
       const { connectionId, outbound } = this.room.handleJoin(message);
       this.wsByConnection.set(connectionId, ws);
       this.connectionByWs.set(ws, connectionId);
@@ -187,7 +238,9 @@ class RoomBridge {
     if (existing === undefined) {
       return; // join 前の非 join メッセージは無視（接続は維持）
     }
-    const result = this.room.handleMessage(existing, message);
+    // DD-026-2: 認証済み接続は申告の actorId/userId/displayName を信用せず、identity で上書きしてから Room へ渡す。
+    const identity = this.identityByWs.get(ws);
+    const result = this.room.handleMessage(existing, identity !== undefined ? withIdentity(message, identity) : message);
     if (result instanceof Promise) {
       // durable 境界（oplog fsync）解決後に ACK/broadcast を dispatch する（DD-014 durable ACK 契約）。
       // 書込失敗時は当該接続のみ切断（他接続へ波及させない・P08）。
@@ -203,10 +256,12 @@ class RoomBridge {
   private onClose(ws: WebSocket): void {
     const connectionId = this.connectionByWs.get(ws);
     if (connectionId === undefined) {
+      this.identityByWs.delete(ws); // 未 join のまま閉じた認証済み接続の identity を解放
       return; // 未 join or 既に削除済み（close/error 両発火・sweep close の冪等・DA D28）
     }
     this.connectionByWs.delete(ws);
     this.wsByConnection.delete(connectionId);
+    this.identityByWs.delete(ws);
     this.dispatch(this.room.handleDisconnect(connectionId)); // presenceRemoved（others）即時・§9.3
   }
 
@@ -238,6 +293,37 @@ class RoomBridge {
   }
 }
 
+/** 認証済み identity で申告値を上書きする（submitOperation の actorId・presence の userId/displayName。DD-026-2）。 */
+function withIdentity(message: ClientMessageExceptJoin, identity: ServeIdentity): ClientMessageExceptJoin {
+  switch (message.type) {
+    case 'submitOperation':
+      return { type: 'submitOperation', envelope: { ...message.envelope, actorId: identity.actorId } };
+    case 'presence':
+      return {
+        type: 'presence',
+        sequence: message.sequence,
+        payload: { ...message.payload, userId: identity.actorId, displayName: identity.displayName },
+      };
+    case 'heartbeat':
+    case 'requestCatchup':
+      return message;
+  }
+}
+
+/** Room の Outbound（擬似接続宛て ACK/reject）から submit 結果を組む（DD-026-3）。 */
+function submitResultOf(operationId: OperationId, outbound: Outbound[]): ServeSubmitResult {
+  for (const item of outbound) {
+    const message = item.message;
+    if (message.type === 'operationAck' && message.operationId === operationId) {
+      return { status: 'accepted', operationId: String(operationId), revision: message.revision };
+    }
+    if (message.type === 'operationRejected' && message.operationId === operationId) {
+      return { status: 'rejected', operationId: String(operationId), code: message.code };
+    }
+  }
+  throw new Error('submit: Room が ACK/reject を返しませんでした（内部不整合）');
+}
+
 /** 開発用WSサーバーを起動する。listening 後に実ポートを含む RunningServer で resolve する（port 0 対応）。 */
 export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
   const host = options.host ?? '127.0.0.1';
@@ -253,6 +339,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const ttlMillis = options.ttlMillis ?? DEFAULT_TTL_MILLIS;
   const sweepMillis = options.sweepMillis ?? DEFAULT_SWEEP_MILLIS;
   const port = options.port ?? DEFAULT_PORT;
+  const diagnostics = options.diagnostics;
 
   const columnOrder = columnOrderStrings.map((c) => createColumnId(c));
   const clock: Clock = { now: () => Date.now() }; // アダプター層のみ実クロック（指示 1）
@@ -266,27 +353,70 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
         'persistenceDir=durable 復旧。併用は revision 不連続を招くため明示拒否・DD-018-1 P2-4）',
     );
   }
+  // DD-026-1 排他: 保存先は 1 つ（persistenceDir=ファイル or 注入ストア）。初期内容の供給元も 1 つ（seed 系 or initialDocument）。
+  if (options.persistenceDir !== undefined && (options.oplog !== undefined || options.snapshotStore !== undefined)) {
+    throw new Error('serve: persistenceDir と oplog/snapshotStore は併用できません（保存先は 1 つ・DD-026-1）');
+  }
+  if ((options.oplog === undefined) !== (options.snapshotStore === undefined)) {
+    throw new Error('serve: oplog と snapshotStore は両方指定してください（片方だけでは再起動復旧が成立しません・DD-026-1）');
+  }
+  if (options.initialDocument !== undefined) {
+    if (options.seedRows !== undefined) {
+      throw new Error('serve: initialDocument と seedRows は併用できません（初期内容の供給元は 1 つ・DD-026-1）');
+    }
+    if (options.restoreFrom !== undefined || datasetConfig !== undefined) {
+      throw new Error('startServer: initialDocument は restoreFrom / integrationDataset と併用できません（DD-026-1）');
+    }
+  }
 
-  // DD-014 永続化（persistenceDir 指定時）: 再起動復旧＝最新 snapshot（document@R）＋oplog tail（revision>R）で復元。
+  // 永続化（DD-014 ファイル or DD-026-1 注入ストア）: 再起動復旧＝最新 snapshot（document@R）＋oplog tail（revision>R）で復元。
   let oplog: OpLogStore | undefined;
   let snapshotStore: SnapshotStore | undefined;
   let recovery: RecoveryReport | undefined;
-  let recoveredState: ReturnType<typeof freshSequencerState> | undefined;
+  let recoveredState: SequencerState | undefined;
   if (options.persistenceDir !== undefined) {
     oplog = new FileOpLogStore(join(options.persistenceDir, 'oplog.jsonl'));
     snapshotStore = new FileSnapshotStore(join(options.persistenceDir, 'snapshots'));
+  } else if (options.oplog !== undefined && options.snapshotStore !== undefined) {
+    oplog = options.oplog;
+    snapshotStore = options.snapshotStore;
+  }
+  if (oplog !== undefined && snapshotStore !== undefined) {
     // documentId 相互検証（DD-018-1 AC1）: 使用済み persistenceDir を別 documentId で起動＝誤公開を fail-fast。
     const recovered = await recoverSequencerState({ oplog, snapshotStore, columnOrder, documentId });
     recovery = recovered.report;
-    if (recovered.report.totalOps > 0) {
+    // snapshot があれば op が 0 件でも復旧扱い（初期文書 snapshot@0 直後の再起動を fresh と誤判定して seed/initialDocument
+    // で上書きしない・DD-026-1）。
+    if (recovered.report.totalOps > 0 || recovered.report.fromSnapshotRevision !== undefined) {
       recoveredState = recovered.state; // 既存文書を復元（seed しない）
     }
   }
 
+  // 初期文書（DD-026-1）: 復旧も restoreFrom も無いときだけ consumer の initialDocument から document@0 を組む。
+  // oplog だけでは初期内容を再構築できないため、ストアがあれば snapshot@0 を durable 化してから listen する（保存失敗は起動失敗）。
+  let initialDocumentState: SequencerState | undefined;
+  if (recoveredState === undefined && options.restoreFrom === undefined && options.initialDocument !== undefined) {
+    const input = await options.initialDocument();
+    const state = freshSequencerState(columnOrder);
+    state.document = buildInitialDocument(columnOrder, input);
+    if (snapshotStore !== undefined) {
+      await snapshotStore.save(
+        createPersistedSnapshot({
+          documentId,
+          revision: 0,
+          createdAt: new Date(clock.now()).toISOString(),
+          snapshot: { ...serializeSnapshot(state), operationLog: [] },
+        }),
+      );
+    }
+    initialDocumentState = state;
+  }
+
   // 復元起動: restoreFrom（in-memory 検査用）指定時は snapshot＋log から Sequencer 状態を再構築する。
-  // 永続化復元が優先（recoveredState）。いずれも無ければ空＋seed。
+  // 永続化復元が優先（recoveredState）→初期文書→restoreFrom。いずれも無ければ空＋seed。
   const initialState =
     recoveredState ??
+    initialDocumentState ??
     (options.restoreFrom !== undefined ? deserializeSnapshot(options.restoreFrom) : freshSequencerState(columnOrder));
   const sequencer = new Sequencer(initialState, clock);
   const room = new Room(sequencer, {
@@ -294,9 +424,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     idGenerator: { next: () => randomUUID() }, // connectionId は実 UUID
     ttlMillis,
   });
-  // fresh（復元でも restoreFrom でもない）ときだけ seed する。永続化有効時は seed op を durable に oplog へ追記し、
+  // fresh（復元でも初期文書でも restoreFrom でもない）ときだけ seed する。永続化有効時は seed op を durable に oplog へ追記し、
   // 次回再起動の復旧で seed 済み文書を再現できるようにする（seed が oplog に無いと edit の baseRevision が破綻する）。
-  const isFresh = recoveredState === undefined && options.restoreFrom === undefined;
+  const isFresh = recoveredState === undefined && initialDocumentState === undefined && options.restoreFrom === undefined;
   if (isFresh) {
     if (datasetConfig !== undefined) {
       seedIntegrationDataset(sequencer, documentId, datasetConfig);
@@ -351,23 +481,76 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   }
 
   const wss = new WebSocketServer({ noServer: true });
+  const authenticate = options.authenticate;
+  const acceptUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer, identity: ServeIdentity | undefined): void => {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      bridge.onConnect(ws, identity);
+    });
+  };
   server.on('upgrade', (req, socket, head) => {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     if (pathname !== '/ws') {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws);
-    });
-  });
-  wss.on('connection', (ws: WebSocket) => {
-    bridge.onConnect(ws);
+    if (authenticate === undefined) {
+      acceptUpgrade(req, socket, head, undefined);
+      return;
+    }
+    // DD-026-2: 認証（非同期）を待つ間、raw socket の error を listener 無しで放置しない（uncaught 化でプロセスを落とさない）。
+    // ws は handleUpgrade 以降しか listener を持たないため、この層で受ける。受理時は ws の listener に引き継ぐ。
+    const onSocketError = (): void => {};
+    socket.on('error', onSocketError);
+    void runAuthenticate(authenticate, req)
+      .then((identity) => {
+        if (identity === null) {
+          diagnostics?.('warn', 'auth-rejected', 'websocket upgrade rejected (401): authenticate returned null');
+          rejectUpgrade(socket, 401, 'Unauthorized');
+          return;
+        }
+        socket.off('error', onSocketError);
+        acceptUpgrade(req, socket, head, identity);
+      })
+      .catch((error: unknown) => {
+        // hook の失敗は通さない（500 で拒否）。原因は診断へ（値・ヘッダは載せない）。
+        diagnostics?.('error', 'auth-error', `websocket upgrade rejected (500): authenticate failed: ${errorMessage(error)}`);
+        rejectUpgrade(socket, 500, 'Internal Server Error');
+      });
   });
 
   const sweepTimer = setInterval(() => {
     bridge.sweep();
   }, sweepMillis);
+
+  let closed = false;
+  /**
+   * サーバー起点 SetCells（DD-026-3）。clientSequence の採番と Room 投入の間に await を挟まない（同一 tick の並行 submit でも単調）。
+   * 引数エラーも同期 throw せず reject で返す（`.catch` だけの呼び出しでも取りこぼさない＝常に Promise 契約）。
+   */
+  const submit = (operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult> => {
+    if (closed) {
+      return Promise.reject(new Error('submit: server stopped'));
+    }
+    if (actorId.length === 0) {
+      return Promise.reject(new Error('submit: actorId が空です'));
+    }
+    if (operation.changes.length === 0) {
+      return Promise.reject(new Error('submit: changes が空です（SetCells は 1 件以上）'));
+    }
+    const operationId = createOperationId(randomUUID());
+    const envelope: ClientOperationEnvelope = {
+      protocolVersion: PROTOCOL_VERSION,
+      documentId: createDocumentId(documentId),
+      operationId,
+      transactionId: createTransactionId(`tx-${operationId}`),
+      actorId,
+      clientId: SERVER_CLIENT_ID,
+      clientSequence: (sequencer.clientSequenceTable.get(SERVER_CLIENT_ID) ?? 0) + 1,
+      baseRevision: sequencer.currentRevision,
+      operation: liftSetCellsInput(operation),
+    };
+    return bridge.submitFromServer(envelope);
+  };
 
   const url = `http://${host}:${boundPort}`;
   return {
@@ -378,8 +561,39 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     snapshot: () => readSnapshot(),
     connectionCount: () => bridge.connectionCount(),
     recovery,
-    close: () => closeServer(server, wss, sweepTimer, persistentRoom),
+    submit,
+    close: () => {
+      closed = true;
+      return closeServer(server, wss, sweepTimer, persistentRoom);
+    },
   };
+}
+
+/** 認証フックを実行し結果を検証する（DD-026-2）。不正な戻り値（actorId 空など）は throw＝500 で拒否（通さない）。 */
+async function runAuthenticate(authenticate: ServeAuthenticate, req: IncomingMessage): Promise<ServeIdentity | null> {
+  const identity = await authenticate({ url: req.url ?? '/', headers: req.headers });
+  if (identity === null) {
+    return null;
+  }
+  if (typeof identity.actorId !== 'string' || identity.actorId.length === 0 || typeof identity.displayName !== 'string') {
+    throw new Error('authenticate は { actorId: 非空 string, displayName: string } か null を返す必要があります');
+  }
+  return { actorId: identity.actorId, displayName: identity.displayName };
+}
+
+/**
+ * upgrade を HTTP ステータスで拒否して socket を閉じる（ws の abortHandshake 相当・DD-026-2）。
+ * 応答を flush してから destroy する（write 直後の destroy はユーザー空間バッファを捨て、client が 401 を読めないことがある）。
+ */
+function rejectUpgrade(socket: Duplex, statusCode: number, reason: string): void {
+  if (!socket.writable) {
+    socket.destroy();
+    return;
+  }
+  socket.once('finish', () => {
+    socket.destroy();
+  });
+  socket.end(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 /** integrationDataset オプションを具体設定へ正規化する（undefined/false=無効・true=既定規模・object=既定へマージ）。 */

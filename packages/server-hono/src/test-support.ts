@@ -17,10 +17,20 @@ import { WebSocket } from 'ws';
 import type { RawData } from 'ws';
 
 import type { ClientMessage } from '@nanairo-sheet/core';
-import { decodeServerMessage } from '@nanairo-sheet/core';
+import { decodeServerMessage, isRecord } from '@nanairo-sheet/core';
 import type { ClientTransport, TransportListener } from '@nanairo-sheet/collab';
-import { nextReconnectDelay } from '@nanairo-sheet/collab';
+import { ClientSession, createCounterIdGenerator, nextReconnectDelay } from '@nanairo-sheet/collab';
+import { COLUMNS } from '@nanairo-sheet/collab/test-support';
+import { createDocumentId } from '@nanairo-sheet/types';
+import type { ColumnId } from '@nanairo-sheet/types';
 
+import type {
+  ServeOpLogReadResult,
+  ServeOpLogStore,
+  ServeOperationEnvelope,
+  ServePersistedSnapshot,
+  ServeSnapshotStore,
+} from './serve-types';
 import { rawDataToString } from './ws-frame';
 
 /** scheduler（setTimeout 相当・注入で決定論テスト可）。返り値はキャンセルに使うハンドル。 */
@@ -29,6 +39,8 @@ export type ReconnectScheduler = (callback: () => void, delayMillis: number) => 
 export interface WsClientTransportOptions {
   /** 予期しない切断後の自動再接続を有効にする（既定 true）。close() で無効化。 */
   autoReconnect?: boolean;
+  /** upgrade 要求に付ける HTTP ヘッダ（Cookie 等・DD-026-2 認証フックのテスト用）。 */
+  headers?: Record<string, string>;
   /** 指数バックオフの初回待機（ミリ秒・既定 1000）。attempt=0 の基準値。 */
   reconnectDelayMillis?: number;
   /** 指数バックオフの上限待機（ミリ秒・既定 30000＝要確認①「上限 30s」）。 */
@@ -49,6 +61,7 @@ export class WsClientTransport implements ClientTransport {
   private readonly maxReconnectDelayMillis: number;
   private readonly random: () => number;
   private readonly scheduler: ReconnectScheduler;
+  private readonly headers: Record<string, string> | undefined;
 
   private listener: TransportListener | undefined;
   private ws: WebSocket | undefined;
@@ -64,6 +77,7 @@ export class WsClientTransport implements ClientTransport {
     this.maxReconnectDelayMillis = options.maxReconnectDelayMillis ?? DEFAULT_MAX_RECONNECT_DELAY;
     this.random = options.random ?? Math.random;
     this.scheduler = options.scheduler ?? ((cb, ms) => setTimeout(cb, ms));
+    this.headers = options.headers;
   }
 
   setListener(listener: TransportListener): void {
@@ -144,7 +158,7 @@ export class WsClientTransport implements ClientTransport {
   }
 
   private openSocket(): void {
-    const ws = new WebSocket(this.url);
+    const ws = this.headers !== undefined ? new WebSocket(this.url, { headers: this.headers }) : new WebSocket(this.url);
     this.ws = ws;
     ws.on('open', () => {
       this.reconnectAttempt = 0; // 接続確立 → バックオフをリセット（次の切断は初回待機から）
@@ -218,5 +232,143 @@ export class WsClientTransport implements ClientTransport {
       throw new Error('WsClientTransport: listener not set (call setListener before connect)');
     }
     return this.listener;
+  }
+}
+
+// ---- DD-026 テスト補助: 公開インターフェース（ServeOpLogStore / ServeSnapshotStore）のメモリ実装・クライアント生成・待機 ----
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** 全階層のオブジェクトキーを逆順に並べ替える（Postgres jsonb 等「キー順を保持しない保存先」の模倣）。 */
+export function reverseKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item: unknown) => reverseKeys(item));
+  }
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort().reverse()) {
+      out[key] = reverseKeys(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** 公開 ServeOpLogStore のメモリ実装。append の保留（durable ACK 観測）・失敗注入（poisoning 観測）ができる。 */
+export class MemoryServeOpLog implements ServeOpLogStore {
+  readonly entries: ServeOperationEnvelope[] = [];
+  /** true の間 append を保留する。release() で解決（「append 解決＝durable」の後に ACK が出ることを観測する）。 */
+  gate = false;
+  /** 次の append を reject する（durable 失敗→write 停止の観測用）。 */
+  failNext = false;
+  appendCalls = 0;
+  private waiting: Array<() => void> = [];
+
+  async append(entries: readonly ServeOperationEnvelope[]): Promise<void> {
+    this.appendCalls += 1;
+    if (this.failNext) {
+      this.failNext = false;
+      throw new Error('append failed (test injection)');
+    }
+    if (this.gate) {
+      await new Promise<void>((resolve) => {
+        this.waiting.push(resolve);
+      });
+    }
+    this.entries.push(...entries.map(cloneJson));
+  }
+
+  release(): void {
+    const waiting = this.waiting;
+    this.waiting = [];
+    for (const resolve of waiting) {
+      resolve();
+    }
+  }
+
+  readAll(): Promise<ServeOpLogReadResult> {
+    return Promise.resolve({ entries: this.entries.map(cloneJson) });
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+/** 公開 ServeSnapshotStore のメモリ実装（JSON 文字列で保持）。shuffleKeys=true で jsonb のようにキー順を崩して返す。 */
+export class MemoryServeSnapshots implements ServeSnapshotStore {
+  private latest: string | undefined;
+  saveCount = 0;
+
+  constructor(private readonly shuffleKeys = false) {}
+
+  save(snapshot: ServePersistedSnapshot): Promise<void> {
+    this.latest = JSON.stringify(snapshot);
+    this.saveCount += 1;
+    return Promise.resolve();
+  }
+
+  loadLatest(): Promise<ServePersistedSnapshot | undefined> {
+    if (this.latest === undefined) {
+      return Promise.resolve(undefined);
+    }
+    const parsed: unknown = JSON.parse(this.latest);
+    return Promise.resolve((this.shuffleKeys ? reverseKeys(parsed) : parsed) as ServePersistedSnapshot);
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+export interface SessionClient {
+  session: ClientSession;
+  transport: WsClientTransport;
+}
+
+export interface SessionClientOptions {
+  clientId: string;
+  userId?: string;
+  displayName?: string;
+  /** upgrade 要求の HTTP ヘッダ（Cookie 等・認証フックのテスト用）。 */
+  headers?: Record<string, string>;
+  documentId?: string;
+  columnOrder?: ColumnId[];
+  autoReconnect?: boolean;
+}
+
+/** 実 WS transport ＋ ClientSession を作って start する（DD-026 のテスト共通）。後始末は呼び出し側が transport.close()。 */
+export function createSessionClient(wsUrl: string, options: SessionClientOptions): SessionClient {
+  const transport = new WsClientTransport(wsUrl, {
+    autoReconnect: options.autoReconnect ?? false,
+    ...(options.headers !== undefined ? { headers: options.headers } : {}),
+  });
+  const session = new ClientSession({
+    clientId: options.clientId,
+    userId: options.userId ?? `user-${options.clientId}`,
+    displayName: options.displayName ?? options.clientId,
+    documentId: createDocumentId(options.documentId ?? 'demo-doc'),
+    columnOrder: options.columnOrder ?? COLUMNS,
+    transport,
+    clock: { now: () => Date.now() },
+    idGenerator: createCounterIdGenerator(`${options.clientId}-op`),
+  });
+  session.start();
+  return { session, transport };
+}
+
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitFor(predicate: () => boolean, label: string, timeoutMs = 5_000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`waitFor timeout: ${label}`);
+    }
+    await delay(10);
   }
 }

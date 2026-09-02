@@ -175,3 +175,30 @@ describe('クライアント snapshot bootstrap（DD-014-1・P1-6/P1-7）', () =
     expect(h.session.appliedServerOpCount).toBe(1);
   });
 });
+
+describe('初期文書 document@0 の bootstrap@0（DD-026-1）', () => {
+  it('committed 0 かつ未 bootstrap のとき bootstrap@0 を受理し、以後の重複 bootstrap@0 は無視、op は revision 1 から連続適用', () => {
+    const h = createSession();
+    h.session.start();
+    h.transport.receive(welcome(0)); // frontier 0 だが文書は非空（server が bootstrap@0 を送る）
+    const initial = applyOperation(createDocument([...COLUMNS]), insertRows(null, ['row-1']), { revision: 0 }).document;
+    h.transport.receive(bootstrap(serializeDocument(initial), 0));
+    expect(h.session.committedDocument.rowOrder.map(String)).toEqual(['row-1']);
+    expect(h.session.committedDocument.revision).toBe(0);
+    expect(h.session.bootstrapRevision).toBe(0);
+    expect(h.session.isOnline).toBe(true);
+
+    // 再接続などで届く重複 bootstrap@0 は無視する（committed は不変）。
+    const other = applyOperation(createDocument([...COLUMNS]), insertRows(null, ['row-X']), { revision: 0 }).document;
+    h.transport.receive(bootstrap(serializeDocument(other), 0));
+    expect(h.session.committedDocument.rowOrder.map(String)).toEqual(['row-1']);
+
+    h.transport.receive(
+      operationsMessage([
+        serverEnvelope({ revision: 1, operationId: 's1', operation: setCells([{ rowId: row('row-1'), columnId: col('col-a'), value: str('v') }]) }),
+      ]),
+    );
+    expect(h.session.committedDocument.revision).toBe(1);
+    expect(h.session.nextExpectedRevision).toBe(2);
+  });
+});
