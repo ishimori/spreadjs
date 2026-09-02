@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-07-16 | 2026-07-17 | 完了 | 親=DD-020（3分割の第3子）。全AC充足・Codex high 5件反映。ADR-0024 起票。実機統合は親 Phase 4（アーカイブは親完了時） |
+| 2026-07-16 | 2026-09-03 | 完了 | 親=DD-020（3分割の第3子）。全AC充足・Codex high 5件反映。ADR-0024 起票。実機統合は親 Phase 4（親は Manual Gate 待ち＝子DDのみ先行アーカイブ 2026-09-03。DD-020-1/2 と同じ扱い） |
 
 ```text
 Risk Class: A
@@ -62,7 +62,7 @@ Evidence Level: full（A区分=L5。Undo 条件マトリクス・再現コマン
 
 ### Phase 0: 事前精査
 - [x] 📋 **各Phaseのタスク精査・詳細化**（AC⇔検証対応・対象パス・変更内容の具体性・🔬の有無）
-- [x] 🧪 **テスト設計（Red）**: Undo 条件マトリクスを `doc/DD/DD-020-3/scenarios.md` へ作成（U-1〜U-12・UE-1〜UE-8・IV-1/2・AC対応表）。フル委譲モード=オーケストレータ確認で合意扱い
+- [x] 🧪 **テスト設計（Red）**: Undo 条件マトリクスを `doc/archived/DD/DD-020-3/scenarios.md` へ作成（U-1〜U-12・UE-1〜UE-8・IV-1/2・AC対応表）。フル委譲モード=オーケストレータ確認で合意扱い
 - [x] 📐 **実装前詳細化トリガー判定**（Phase 1/2 とも要＝設計は §検討内容＋本ログ 2026-07-17 に自己完結記録）
 - [x] 🧑‍⚖️ **Codexレビュー要否判定**（必須・effort high・最終 Phase 1 回。実施＝findings 5件反映）
 - [x] 😈 **Devil's Advocate調査**（下記ログ 2026-07-17・DA表 Phase 0/1/2）
@@ -83,7 +83,7 @@ Evidence Level: full（A区分=L5。Undo 条件マトリクス・再現コマン
 - [x] `tests/invariants/ime/undo.invariant.test.ts` へ「composition 中 Ctrl+Z 非干渉」追加
 - [x] 🔬 **機械検証**: playground E2E 49／showcase 3／invariants 49／typecheck／lint（boundary new=0）→ 全 green
 - [x] 😈 **DA批判レビュー（基準: da-method.md §3.4）**（下記 DA 表）
-- [x] Codexレビュー自動実行（本子DD全差分・effort high。`doc/DD/DD-020-3/codex-review-request.md`→`codex-review-result.md`。findings 5件）
+- [x] Codexレビュー自動実行（本子DD全差分・effort high。`doc/archived/DD/DD-020-3/codex-review-request.md`→`codex-review-result.md`。findings 5件）
 - [x] Codexレビュー指摘への対応（5件全反映・下記ログ 2026-07-17 Codex 節）
 
 ## 引き継ぎ物（→ 親 DD-020 Phase 4）
@@ -125,7 +125,7 @@ Evidence Level: full（A区分=L5。Undo 条件マトリクス・再現コマン
 
 ## Codexレビュー記録（effort high・本子DD全差分〔uncommitted〕）
 
-依頼書/結果=`doc/DD/DD-020-3/codex-review-request.md`・`codex-review-result.md`。findings 5件を到達性×実害で仕分け＝**全て妥当・全反映**（false-positive/到達不能なし）。
+依頼書/結果=`doc/archived/DD/DD-020-3/codex-review-request.md`・`codex-review-result.md`。findings 5件を到達性×実害で仕分け＝**全て妥当・全反映**（false-positive/到達不能なし）。
 
 | # | 指摘 | 判定 | 対応 |
 |---|------|------|------|
@@ -133,7 +133,7 @@ Evidence Level: full（A区分=L5。Undo 条件マトリクス・再現コマン
 | P1b | 補償 opId 紐づけ前に `submitLocalOperation` が同期 reject → observer が limbo を拾えず永久 busy＋誤コード | **妥当＝反映** | `submitCompensation` に**実行前 OCC 検査**（`validateOperation(committed, op)`。undo は pendingCount===0 でのみ発火＝committed が唯一の検証基底ゆえ同期 reject を正確に予測）。違反なら submit せず `blockInFlightCompensation()`→undo-blocked。E2E UE-8 で busy 未残留を実証 |
 | P1c | standalone `setData` 差し替え後、旧文書の逆値を新文書へ適用しサイレント上書き/削除 ID で throw | **妥当＝反映** | `applyStandaloneData` で `undoCtrl.clear()`（履歴・ownedRevision・in-flight 全消去）。E2E UE-7 で実証 |
 | P2a | user op が submit 中に同期 reject されると未記録のまま `onRejected` が空振り→直後に既 reject op を記録＋redo 誤破棄（AC5 違反） | **妥当＝反映** | `recordUndoEntry`（collab）は submit 後に opId が `pendingOperationIds()` に残った op のみ記録（同期 reject 済みは記録せず redo も破棄しない） |
-| P2b | `cellKey` の区切りにリテラル U+0000 が混入しファイルが binary 判定→差分が隠れる | **妥当＝反映** | 区切りをソース上は escape ` `（実行時は同一の NUL 区切り）へ。file は text 判定に復帰 |
+| P2b | `cellKey` の区切りにリテラル U+0000 が混入しファイルが binary 判定→差分が隠れる | **妥当＝反映** | 区切りをソース上は escape `\0`（実行時は同一の NUL 区切り）へ。file は text 判定に復帰 |
 
 ---
 

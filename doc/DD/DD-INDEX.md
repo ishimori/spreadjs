@@ -7,11 +7,7 @@
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
 | DD-021 | 行操作 | 確認待ち | 子DD 3本実装完了＋Fable 5 レビュー（Codex 代替・ユーザー決定）全反映＋親 Phase 4（統合検証・P2-1 実測・提供開始）完了。残=Manual Gate M1〜M2（実IME×行削除 K4＋行操作 UX・正味5分）→ 受付後クローズ・アーカイブ |
-| DD-021-1 | 行操作Command公開API | 完了 | 親=DD-021（3分割の第1子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×2/P3×1 反映済み**。アーカイブは親 DD-021 完了時 |
-| DD-021-2 | 行操作収束・競合 | 完了 | 親=DD-021（3分割の第2子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P1×1/P2×2/P3×4 反映済み**。アーカイブは親 DD-021 完了時 |
-| DD-021-3 | 選択再ベース・性能 | 完了 | 親=DD-021（3分割の第3子）。K3 回収・Undo 生存整合・P2-1 Θ(N²) 是正。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×1/P3×2 反映済み・maxSlot 全経路/replay 決定性は無欠陥確認**。アーカイブは親 DD-021 完了時 |
 | DD-020 | Clipboard | 確認待ち | 子DD 3本＋親 Phase 4（統合検証・計測・提供開始）完了。残=Manual Gate M1〜M3（実 Excel round-trip＋実 IME・ユーザー実機・正味10分）→ 受付後クローズ・アーカイブ |
-| DD-020-3 | UndoRedo | 完了 | 親=DD-020（3分割の第3子）。全AC充足・Codex high 5件反映。ADR-0024 起票。実機統合は親 Phase 4（アーカイブは親完了時） |
 
 ## 保留・見送り
 
@@ -27,8 +23,12 @@
 | DD-025 | ReactFacade | 全Phase完了・Manual Gate実機OK（IME確定→onCellCommit・再注入・再mount正常・console clean） |
 | DD-024 | 単独グリッドモード | 単独グリッドモード成立（判別union・cell-commit通知のみ・mount時＋setData再注入・案B backend）。814 test/E2E 18 green・Codex high 3件全反映・見送り0・**実機確認OK（ユーザー 2026-07-16）＝AC1〜8 充足** |
 | DD-023 | Stage2ロードマップ策定 | phase2-dd-roadmap 正式版昇格（S2-1〜6 ゲート・DD-024〜032 採番・命名/P-07 ゲート）＋stage3-outlook 新設。突合3点全OK・Codex high 10件全反映・見送り0・ユーザー承認2回 |
+| DD-021-1 | 行操作Command公開API | 親=DD-021（3分割の第1子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×2/P3×1 反映済み**。親は Manual Gate 待ち＝子DDのみ先行アーカイブ（2026-09-03） |
+| DD-021-2 | 行操作収束・競合 | 親=DD-021（3分割の第2子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P1×1/P2×2/P3×4 反映済み**。親は Manual Gate 待ち＝子DDのみ先行アーカイブ（2026-09-03） |
+| DD-021-3 | 選択再ベース・性能 | 親=DD-021（3分割の第3子）。K3 回収・Undo 生存整合・P2-1 Θ(N²) 是正。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×1/P3×2 反映済み・maxSlot 全経路/replay 決定性は無欠陥確認**。親は Manual Gate 待ち＝子DDのみ先行アーカイブ（2026-09-03） |
 | DD-020-1 | 範囲選択 | 親=DD-020（3分割の第1子）。AC1〜8 充足・Codex high 2件反映済み。実機統合確認は親 Phase 4（アーカイブは親完了時にオーケストレータが実施） |
 | DD-020-2 | clipboard | AC1〜10 充足・Codex high 2件（P2 反映/P1 既存境界）。chokepoint=`submitSetCells`。実機統合は親 Phase 4（アーカイブは親完了時） |
+| DD-020-3 | UndoRedo | 親=DD-020（3分割の第3子）。全AC充足・Codex high 5件反映。ADR-0024 起票。実機統合は親 Phase 4（親は Manual Gate 待ち＝子DDのみ先行アーカイブ 2026-09-03。DD-020-1/2 と同じ扱い） |
 | DD-018 | Stage1移行判定 | **総合判定=Stage 1 移行 可（Alpha 宣言可・ユーザー承認済 2026-07-15）**。S1-1〜6 全合格・CG-1〜6 全終端・cg-ledger 全CG終端化・stage2-backlog.md 新設。K7 は子DD DD-018-1（非ブロッカー=ユーザー承認・着手は別途判断）。Codex 証拠監査 high 4件全反映 |
 | DD-018-1 | documentId-persistenceDir-failfast | documentId 不一致（snapshot＋全 oplog entry）＋封筒 revision 相互検査＋restoreFrom×persistenceDir 排他の3 fail-fast で **DD-014 既知制約 P2-3/P2-4 回収**。全検証 green（738 pass）・Codex high 2件全反映・見送り0。AC1〜3 充足 |
 | DD-017 | Alpha配布・診断 | S1-6 充足（pack tarball 配布正式化・release automation・CHANGELOG・Quick Start・診断API・CG-4 実測記入・ADR-0015 Accepted）。Codex(high) 8件全対応・test 730 green。コミット 889b903。派生 flake は DD-017-1 で恒久是正済み |

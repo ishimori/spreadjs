@@ -66,7 +66,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 ## 決定事項
 
 - D1〜D6 を採用。**要確認①〜⑥は 2026-07-16 に全項目既定案どおり確定**（フル委譲モード・オーケストレータ確定。§要確認に確定値を記載・各子DDの決定事項へ転記済み）。子DD 3分割（DD-020-1〜3・letter 枝番禁止）で実装し、本DDは子スコープの確定・統合検証（性能・実機 Manual Gate・機能カタログ更新）を担うアンブレラとする。
-- 子DD本文は起票済み（実装は 020-1 → 020-2 → 020-3 の順・各子DDに引き継ぎ物を明記）: `doc/DD/DD-020-1_範囲選択.md`・`doc/DD/DD-020-2_clipboard.md`・`doc/DD/DD-020-3_UndoRedo.md`。Manual Gate は本DD Phase 4 に集約（子DDは synthetic E2E まで）。
+- 子DD本文は起票済み（実装は 020-1 → 020-2 → 020-3 の順・各子DDに引き継ぎ物を明記）: `doc/archived/DD/DD-020-1_範囲選択.md`・`doc/archived/DD/DD-020-2_clipboard.md`・`doc/archived/DD/DD-020-3_UndoRedo.md`。Manual Gate は本DD Phase 4 に集約（子DDは synthetic E2E まで）。
 - 公開面への影響: ペースト競合は既存 `rejected`（GridConflict）経路を使い、上限超過・範囲はみ出しは **公開エラー/競合コードの語彙追加のみ**（`packages/grid/src/error-codes.ts`・内部型を露出しない=R7 維持）。mount options・GridInstance のシグネチャ変更なし想定。API 型 snapshot（DD-028 常設）に差分が出たら CHANGELOG へ記録（0.x deprecation policy 準拠）。
 
 ## 要確認（**全項目 確定済み 2026-07-16**・フル委譲モード=オーケストレータが既定案どおり確定。確定値は各子DDの決定事項へ転記済み）
@@ -112,17 +112,17 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
   - 将来壊れやすくなるポイントはないか？（行操作=DD-021 導入時の選択再ベース・Undo 対象拡大。数式=DD-022 導入時の formulaText 貼り付け）
 
 ### Phase 1: DD-020-1 範囲選択・範囲クリア（実装は子DD参照）
-- [x] 子DD起票: `doc/DD/DD-020-1_範囲選択.md`（2026-07-16。要確認①④⑥確定値を決定事項へ転記済み・自己完結）
+- [x] 子DD起票: `doc/archived/DD/DD-020-1_範囲選択.md`（2026-07-16。要確認①④⑥確定値を決定事項へ転記済み・自己完結）
 - [x] DD-020-1 の全Phase完了確認（2026-07-17 完了。案X=selection-controller・Codex high 2件反映・親AC1/2 充足=E2E S1〜S8。引き継ぎ物=`selection-controller.selectedRange`・`range-ops.buildRangeClear`＋`SETCELLS_MAX_CELLS`・公開語彙 `range-too-large`）
 - [x] 🔬 **機械検証**: `npm run test && npm run typecheck && npm run lint` → 全 green（2026-07-17: 876 unit・boundary new=0。CI も push で検証）
 
 ### Phase 2: DD-020-2 clipboard copy/cut/paste（実装は子DD参照）
-- [x] 子DD起票: `doc/DD/DD-020-2_clipboard.md`（2026-07-16。要確認①②④⑤確定値を決定事項へ転記済み・parser 仕様・敷き詰め・語彙・fixture 方針を含む）
+- [x] 子DD起票: `doc/archived/DD/DD-020-2_clipboard.md`（2026-07-16。要確認①②④⑤確定値を決定事項へ転記済み・parser 仕様・敷き詰め・語彙・fixture 方針を含む）
 - [x] DD-020-2 の全Phase完了確認（2026-07-17 完了確認。TSV parser/serializer・原子paste/cut Command＋OCC・親AC3〜7/9(paste)/10 充足。Codex high 2件＝P2 standalone rejected契約統一で反映／P1 画面外textarea不達は全キー入力共通の既存境界で見送り。引き継ぎ物=確定単位 chokepoint `submitSetCells`・公開語彙 `paste-too-large`/`paste-out-of-bounds`）
 - [x] 🔬 **機械検証**: `npm run test && npx playwright test`（apps/playground） → 全 green（DD-020-2完了時点: 93 files/924 tests・playground E2E 42・showcase 3・invariants 46・boundary new=0）
 
 ### Phase 3: DD-020-3 Undo/Redo（実装は子DD参照）
-- [x] 子DD起票: `doc/DD/DD-020-3_UndoRedo.md`（2026-07-16。要確認③⑥確定値を決定事項へ転記済み・補償 SetCells・条件付き拒否・ADR ドラフトは同DD Phase 2 タスク）
+- [x] 子DD起票: `doc/archived/DD/DD-020-3_UndoRedo.md`（2026-07-16。要確認③⑥確定値を決定事項へ転記済み・補償 SetCells・条件付き拒否・ADR ドラフトは同DD Phase 2 タスク）
 - [x] DD-020-3 の全Phase完了確認（2026-07-17 完了。クライアント主導・補償SetCells＝undo-stack.ts＋chokepoint配線・親AC8/9(undo)充足。Codex high 5件全反映（P1a逆値view化／P1b実行前OCC検査／P1c setData時clear／P2a同期reject記録漏れ／P2b cellKey NUL区切り）。ADR-0024起票。既知制約「クリア/貼り付けの Undo なし」解消）
 - [x] 🔬 **機械検証**: `npm run test && npx playwright test` → 全 green（DD-020-3完了時点: unit 947件・playground E2E 49・showcase 3・invariants 49・typecheck/lint boundary new=0）
 
