@@ -1,0 +1,3 @@
+# .dd-manifest はタブ区切りのハッシュ台帳で、scripts/dd-update.sh（bash）が機械的に読む。
+# Windows のクリーンチェックアウトで CRLF 化するとパス末尾に \r が付き台帳照合が崩れるため、常に LF に固定する。
+.dd-manifest text eol=lf

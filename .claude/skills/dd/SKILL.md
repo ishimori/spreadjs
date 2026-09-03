@@ -30,6 +30,7 @@ ls {DDフォルダ}/ | grep DD-{番号}
 - [ ] 仕様書同期・知見昇格に該当があれば反映した（仕様書: `doc/spec-sync-check.md` の手順／横断で効くgotcha → `doc/engineering-patterns.md`／長寿命の決定 → `doc/decisions.md`。該当なしならスキップしてよい）
 - [ ] DD本体（.md）と DD番号フォルダ（存在する場合）を移動し、元の場所にDD関連ファイルが残っていない
 - [ ] `bash scripts/dd-index-gen.sh` を実行してDD-INDEX.mdを再生成
+- [ ] 上記（ステータス更新〜INDEX再生成）を**単一コミット**で実施した（完了処理のコミットを分割しない・DD-034）
 
 **チェックリスト未確認でのアーカイブ完了報告は禁止。**
 

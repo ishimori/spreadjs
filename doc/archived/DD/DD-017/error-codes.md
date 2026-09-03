@@ -17,6 +17,8 @@
 | `runtime-fault` | `runtime` | boot 配線後の予期しない実行時例外 | 診断ログ（onDiagnostic）で詳細を採取 |
 | `standalone-options-conflict` | `config` | 単独グリッドモード（DD-024）に server 系 options（serverUrl/displayName/clientId）を混在指定 | 単独モードでは server 系 options を渡さない（認証・保存は利用側の責務） |
 | `standalone-options-invalid` | `config` | 単独グリッドモード（DD-024）で columnOrder が未指定/空 | `mode:'standalone'` では columnOrder を必須で渡す |
+| `column-types-invalid` | `config` | `columnTypes`/`columnFormats` mount オプションが不正（未知列・候補0件・重複候補・候補が非 round-trip・未対応 type〔DD-027-1〕／リンク列と `wrapColumns` の同一列併用〔wrap-link-conflict・DD-027-2〕／`columnFormats` の空ルール配列・空 match〔空配列/空文字〕・同一列内の match 重複〔DD-027-3〕）→ fail-fast | `columnTypes` のキーを columnOrder 内の列に限定し、選択式の options を 1 件以上・重複なし・parseCellInput で自己 round-trip する値にする。リンク列は `wrapColumns` と併用しない。`columnFormats` のキーを columnOrder 内に限定し、各列のルール配列を 1 件以上・各 match を非空・同一列内で match 値を重複させない |
+| `column-display-invalid` | `config` | `columnCaptions`/`columnDisplayFormats` mount オプションが不正（未知列・空/空白キャプション・未対応 type・`decimals` 非整数/0〜20 外・date pattern 空/既知トークン皆無／`wrapColumns`・リンク列との同一列併用〔DD-033-2〕）→ fail-fast | キャプション/表示書式のキーを columnOrder 内の列に限定し、キャプションを非空に、number の `decimals` を 0〜20 の整数に、date pattern に `YYYY`/`MM`/`DD`/`HH`/`mm`/`ss` のいずれかを含める。表示書式列は `wrapColumns`・リンク列と併用しない |
 
 > 接続確立**後**の一時切断は `error` ではなく `connection`（state=`offline`）で表現する（reconnect の一部）。
 > 単独グリッドモード（DD-024）では `connection`/`pending`/`rejected`/`divergence` は発火せず、`connectionState()` は `'standalone'` を返す。
@@ -44,6 +46,7 @@
 | `row-anchor-unknown` | クライアント実行前検査（DD-021-1） | `insertRows` の `afterRowId` が未知アンカー。submit 前に拒否され `operationId` は空文字。単独モードは診断のみ |
 | `row-count-invalid` | クライアント実行前検査（DD-021-1・上限は Fable レビュー反映） | `insertRows` の `count` が **1〜100,000 の整数でない**（上限=SetCells セル数上限と同値の実行前ガード）。submit 前に拒否され `operationId` は空文字。単独モードは診断のみ |
 | `row-delete-empty` | クライアント実行前検査（DD-021-1） | `deleteRows` の対象が空/全て非現存（削除対象なし）。submit 前に拒否され `operationId` は空文字。単独モードは診断のみ |
+| `value-not-allowed` | クライアント editor 経路検査（DD-027-1） | 選択式列（`allowFreeText:false`）へ IME/textarea 確定経路で候補外の値を確定した。**未 submit**（文書無変更）で拒否され `operationId` は空文字。拒否値は診断（code=`value-not-allowed`）に含む。単独モードは診断のみ。paste/setData/リモート由来の非候補値は本検査を通らず保持される |
 | `unknown` | 未写像/未知 | 上記いずれにも該当しない（前方互換フォールバック） |
 
 ## debug logging hook（`GridMountOptions.onDiagnostic`）

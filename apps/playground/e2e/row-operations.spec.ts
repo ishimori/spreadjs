@@ -30,9 +30,9 @@ import {
   waitReady,
 } from './standalone-helpers';
 
-/** 証跡（スクショ）の保存先絶対パス（doc/DD/DD-021-1/ 直下）。 */
+/** DD-021-1 はアーカイブ済みのため、再生成する証跡は git 追跡外の test-results 配下へ保存する。 */
 function evidencePath(fileName: string): string {
-  return fileURLToPath(new URL(`../../../doc/DD/DD-021-1/${fileName}`, import.meta.url));
+  return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-021-1/${fileName}`, import.meta.url));
 }
 
 /** 公開 API insertRows を __gridInstance 経由で呼ぶ。 */

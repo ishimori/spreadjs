@@ -16,8 +16,16 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-034 | DD運用軽量化第2弾 | 記録git一本化・親統合レビュー1回・完了処理1コミット・ガバナンスDD凍結・IME台帳一本化・dd-update停止を反映。効果測定はDD-033へ移管 |
+| DD-033 | 明細閲覧ビュー | readOnly・columnCaptions・columnDisplayFormats を提供。AC1〜10充足・統合レビューP2×2修正・計測回帰なし・M1/M2/T1全PASS（実IME証明） |
+| DD-033-1 | 表示専用モード | readOnly mount オプション＝2層抑止（入口＋chokepoint）。AC1〜7充足・全回帰green(1077件)・IME系3ファイル無改変。レビュー/M1/T1は親Phase 3集約 |
+| DD-033-2 | 列見出し表示書式 | 親=DD-033（子2本の第2子）。ヘッダーの業務名置換＋数値/日付の Canvas 描画整形（契約不変=raw 維持）。機械検証 green まで完了（AC1〜10 充足・全回帰 green）。親 Phase 3 で統合レビュー・M2・headed 計測 |
 | DD-029-1 | KPI計測契約 | 承認①②済（2026-07-16）・kpi-ledger.md 新設・Codex high 7件全反映（見送り0）。契約確定＝DD-026 起票可能 |
 | DD-028 | 継続回帰CI・API差分監視 | CI常設（Actions 2job・連続4run green）・API型snapshot=公開宣言closure・migration dry-run常設test・deprecation policy 3層（P-10/D-006）・IME実機台帳常設。835 test/E2E 25 green・Codex high P2×2 全反映 |
+| DD-027 | 列タイプ体系 | 列タイプ体系（選択式・リンク・書式・auto-fit）を提供開始。子3本＋親 Phase 4 完了（統合回帰 全 green・features/demo・P-07 材料提出・Manual Gate 代行受付・T1 非該当）。ユーザー確認済みでアーカイブ |
+| DD-027-1 | 選択式入力列 | 親=DD-027（子3本の第1子）。選択式入力列（候補ドロップダウン・commit 前検証・allowFreeText）を実装。Fable 5 レビュー反映（P2×5＋P3×5）・親 Phase 4 統合検証 全 green。親と共にアーカイブ |
+| DD-027-2 | ハイパーリンク列 | 親=DD-027（子3本の第2子）。ハイパーリンク列（link-open イベント・候補追跡方式・defaultOpen）を実装。Fable 5 レビュー反映（P1×1/P2×3/P3×4）・親 Phase 4 統合検証 全 green。親と共にアーカイブ |
+| DD-027-3 | セル書式モデル | 親=DD-027（子3本の第3子）。セル書式モデル（背景色・バッジ・auto-fit・共有化設計文書）を実装。Fable 5 レビュー反映（P2×2/P3×4）・親 Phase 4 統合検証 全 green・headed 計測（書式起因の回帰なし）。親と共にアーカイブ |
 | DD-026 | consumer統合①松下生産納期 | consumer を松下 生産納期へ変更（D-007）。U1〜U3 を server-hono 公開 API として提供（DD-026-1〜3）。新規テスト 25 件・全回帰 green・Codex xhigh P1×3/P2×2 全反映・公開型 snapshot 追加のみ。consumer 実機（2 ブラウザ収束・JWT 拒否・再起動復旧）と KPI-1/5 は未実施＝既知の未保証境界（松下 DD-012-2 で実施） |
 | DD-026-1 | ストア注入と初期文書 | U1 成立: `serve({ oplog, snapshotStore, initialDocument })`・snapshot format v2（jsonb 可・v1 互換）・bootstrap@0。stores 9 件＋単体 5 件 green・Codex xhigh P1×2 反映（append 直列化 fail-stop／非有限数・非正準 date の拒否／bootstrap@0 接続ごと受理） |
 | DD-026-2 | 認証フック | U2 成立: `serve({ authenticate })`（null=401・throw=500・identity で actorId/presence を上書き）。auth 5 件 green・Codex xhigh P2×2 反映（診断から hook の message を除去／認証待ち socket を stop で破棄） |
@@ -25,11 +33,11 @@
 | DD-025 | ReactFacade | 全Phase完了・Manual Gate実機OK（IME確定→onCellCommit・再注入・再mount正常・console clean） |
 | DD-024 | 単独グリッドモード | 単独グリッドモード成立（判別union・cell-commit通知のみ・mount時＋setData再注入・案B backend）。814 test/E2E 18 green・Codex high 3件全反映・見送り0・**実機確認OK（ユーザー 2026-07-16）＝AC1〜8 充足** |
 | DD-023 | Stage2ロードマップ策定 | phase2-dd-roadmap 正式版昇格（S2-1〜6 ゲート・DD-024〜032 採番・命名/P-07 ゲート）＋stage3-outlook 新設。突合3点全OK・Codex high 10件全反映・見送り0・ユーザー承認2回 |
-| DD-021 | 行操作 | 子DD 3本実装完了＋Fable 5 レビュー（Codex 代替・ユーザー決定）全反映＋親 Phase 4（統合検証・P2-1 実測・提供開始）完了。**Manual Gate M1〜M2 は未実施のまま、ユーザー判断でクローズ（2026-09-03）**＝残余（実IME×行削除 K4・行操作 UX）は §既知の未保証境界へ移送 |
+| DD-021 | 行操作 | 全AC充足・K3/K4/P2-1 回収。Fable 5 レビュー（Codex 代替）全反映。Manual Gate M1〜M2 はユーザー指示で Claude 代行（実 MS-IME SendInput 実駆動・台帳5点込み・ime-manual-gate-ledger 記録済み）。PR #1 統合時に別PC側の台帳・画像証跡を回収。P2-1 実測: 50k行+Insert×1,000=128ms |
 | DD-021-1 | 行操作Command公開API | 親=DD-021（3分割の第1子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×2/P3×1 反映済み**。2026-09-03 アーカイブ（親 DD-021 も同日クローズ＝Manual Gate 未実施のままユーザー判断） |
 | DD-021-2 | 行操作収束・競合 | 親=DD-021（3分割の第2子）。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P1×1/P2×2/P3×4 反映済み**。2026-09-03 アーカイブ（親 DD-021 も同日クローズ＝Manual Gate 未実施のままユーザー判断） |
 | DD-021-3 | 選択再ベース・性能 | 親=DD-021（3分割の第3子）。K3 回収・Undo 生存整合・P2-1 Θ(N²) 是正。実装・全検証 green・**Fable 5 レビュー（Codex high 代替・ユーザー決定）P2×1/P3×2 反映済み・maxSlot 全経路/replay 決定性は無欠陥確認**。2026-09-03 アーカイブ（親 DD-021 も同日クローズ＝Manual Gate 未実施のままユーザー判断） |
-| DD-020 | Clipboard | 子DD 3本＋親 Phase 4（統合検証・計測・提供開始）完了。**Manual Gate M1〜M3 は未実施のまま、ユーザー判断でクローズ（2026-09-03）**＝残余（実 Excel の未知方言・実 IME）は §既知の未保証境界へ移送 |
+| DD-020 | Clipboard | 全AC（1〜12）充足。Manual Gate M1〜M3 はユーザー指示で Claude 代行（M1/M2=実 Excel COM・M3=実 MS-IME SendInput 実駆動・ime-manual-gate-ledger 記録済み）。PR #1 統合時に別PC側の台帳・画像証跡を回収。実測: 10,000セル paste ローカル適用 median 50ms |
 | DD-020-1 | 範囲選択 | 親=DD-020（3分割の第1子）。AC1〜8 充足・Codex high 2件反映済み。実機統合確認は親 Phase 4（アーカイブは親完了時にオーケストレータが実施） |
 | DD-020-2 | clipboard | AC1〜10 充足・Codex high 2件（P2 反映/P1 既存境界）。chokepoint=`submitSetCells`。実機統合は親 Phase 4（アーカイブは親完了時） |
 | DD-020-3 | UndoRedo | 親=DD-020（3分割の第3子）。全AC充足・Codex high 5件反映。ADR-0024 起票。実機統合は親 Phase 4（2026-09-03 アーカイブ。親 DD-020 も同日クローズ＝Manual Gate 未実施のままユーザー判断） |

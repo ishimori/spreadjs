@@ -1,0 +1,72 @@
+{
+  "label": "before(書式なし)",
+  "url": "http://localhost:5885/poc-integration.html?server=http%3A%2F%2F127.0.0.1%3A9499&perf=1&name=CG6-fmt",
+  "env": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "dpr": 1.0000000149011612,
+    "preciseMemory": true
+  },
+  "visibleCellCount": 1817,
+  "frame": {
+    "count": 2460,
+    "p50": 17.7,
+    "p95": 18.5,
+    "worst": 27.6
+  },
+  "stoppedRedrawMs": [
+    14.35,
+    11.1,
+    16,
+    225.8,
+    15.35,
+    11
+  ],
+  "selectionLatencyMs": [
+    14,
+    4.7,
+    5.1,
+    5.6,
+    4.8,
+    4.3,
+    4.4,
+    5.6
+  ],
+  "memory": {
+    "sampleCount": 6,
+    "trend": {
+      "slopeBytesPerSec": -34676,
+      "growthRatio": 0.9374
+    },
+    "samples": [
+      {
+        "t": 1156,
+        "usedBytes": 28802681
+      },
+      {
+        "t": 11294,
+        "usedBytes": 28387868
+      },
+      {
+        "t": 21425,
+        "usedBytes": 27388139
+      },
+      {
+        "t": 31562,
+        "usedBytes": 28173097
+      },
+      {
+        "t": 41670,
+        "usedBytes": 27324981
+      },
+      {
+        "t": 45736,
+        "usedBytes": 27000962
+      }
+    ]
+  },
+  "meta": {
+    "durationMs": 45739,
+    "scrollFrames": 2460,
+    "note": "DD-016-2 CG-6: Facade 統合経路の精密メモリ＋frame 計測。--enable-precise-memory-info 付き実 Chrome 前提。"
+  }
+}

@@ -32,7 +32,9 @@ function createDocHolder(): {
 /** queryRange の結果を (row,col,value) 配列で収集する。 */
 function collect(view: DocumentView, r0: number, r1: number, c0: number, c1: number): Array<[number, number, string]> {
   const out: Array<[number, number, string]> = [];
-  view.store.queryRange(r0, r1, c0, c1, (r, c, v) => out.push([r, c, v]));
+  view.store.queryRange(r0, r1, c0, c1, (r, c, v) => {
+    out.push([r, c, v]);
+  });
   return out;
 }
 

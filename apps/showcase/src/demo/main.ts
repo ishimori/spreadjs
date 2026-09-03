@@ -1,7 +1,12 @@
 // 動作デモページ（DD-017-2）。@nanairo-sheet/grid Facade（公開API）だけでグリッドを組み込む＝
 // このファイル自体が「consumer は Facade のみで統合できる」ことの実演でもある（R1・S1-3 と同じ経路）。
 import { mount } from '@nanairo-sheet/grid';
-import type { GridEvent } from '@nanairo-sheet/grid';
+import type {
+  GridColumnDisplayFormat,
+  GridColumnFormatRule,
+  GridColumnType,
+  GridEvent,
+} from '@nanairo-sheet/grid';
 
 import { SCENARIOS, findScenario } from './scenarios';
 
@@ -28,6 +33,58 @@ const savedLayout = loadLayout();
 // DD-012-5: 「Excel風テキスト表示」シナリオだけ C 列（col-2）を折り返し（wrap）列にする。
 // 他シナリオは wrap 無し＝左寄せ文字列が右隣の空セルへはみ出すオーバーフロー挙動を見せる。
 const wrapColumns = scenario.id === 'text-display' ? ['col-2'] : undefined;
+
+// DD-027: 「列タイプ」シナリオだけ D 列（col-3）を選択式＋バッジ/背景書式、E 列（col-4）をリンク列にする。
+// いずれも mount 時固定の宣言的オプション（consumer は Facade のみで設定）。値は string のまま（core 不変）。
+const isColumnTypesScenario = scenario.id === 'column-types';
+const columnTypes: Record<string, GridColumnType> | undefined = isColumnTypesScenario
+  ? {
+      // allowFreeText:true=既存シード値（候補外）も編集でき、非候補値も保持・表示される（決定②）。
+      'col-3': { type: 'select', options: ['進行中', '受注', '失注'], allowFreeText: true },
+      'col-4': { type: 'link' },
+    }
+  : undefined;
+// DD-033: 「明細閲覧ビュー」シナリオだけ 表示専用（readOnly）＋業務名の列見出し（columnCaptions）＋
+// 数値/日付の表示書式（columnDisplayFormats）＋値の装飾（columnFormats）を併用する BI 明細閲覧構成。
+// いずれも mount 時固定の宣言的オプション（consumer は Facade のみ）・view-local（文書の raw 値は不変）。
+const isDetailViewScenario = scenario.id === 'detail-view';
+const readOnly = isDetailViewScenario ? true : undefined;
+const columnCaptions: Record<string, string> | undefined = isDetailViewScenario
+  ? {
+      'col-0': '取引先コード',
+      'col-1': '担当者',
+      'col-2': 'ステータス',
+      'col-3': '契約金額',
+      'col-4': '登録日',
+    }
+  : undefined;
+const columnDisplayFormats: Record<string, GridColumnDisplayFormat> | undefined = isDetailViewScenario
+  ? {
+      // 数値形の raw だけを 3 桁区切り＋通貨記号で整形（非数値 raw は素通し・raw 契約不変）。
+      'col-3': { type: 'number', grouping: true, prefix: '¥' },
+      // ISO 日付形の raw だけを YYYY/MM/DD で整形（非受理 raw は素通し）。
+      'col-4': { type: 'date', pattern: 'YYYY/MM/DD' },
+    }
+  : undefined;
+const columnFormats: Record<string, readonly GridColumnFormatRule[]> | undefined = isColumnTypesScenario
+  ? {
+      'col-3': [
+        { match: '進行中', style: { badge: true, badgeColor: '#34a853', textColor: '#ffffff' } },
+        { match: '受注', style: { cellBackground: '#fde293' } },
+      ],
+    }
+  : isDetailViewScenario
+    ? {
+        // ステータス列（col-2）を値で色分け・バッジ表示（シード JP_WORDS に一致する値へ適用・match は raw 完全一致）。
+        'col-2': [
+          { match: '完了', style: { badge: true, badgeColor: '#34a853', textColor: '#ffffff' } },
+          { match: '承認済み', style: { badge: true, badgeColor: '#1a73e8', textColor: '#ffffff' } },
+          { match: '対応中', style: { cellBackground: '#d2e3fc' } },
+          { match: '保留中', style: { cellBackground: '#fde293' } },
+          { match: '要確認', style: { cellBackground: '#fad2cf' } },
+        ],
+      }
+    : undefined;
 
 // --- シナリオパネル ---------------------------------------------------------
 
@@ -135,6 +192,10 @@ function onEvent(event: GridEvent): void {
       }
       log(`レイアウト変更を保存（列 ${Object.keys(event.columnWidths).length} / 行 ${Object.keys(event.rowHeights).length}）`);
       break;
+    case 'link-open':
+      // DD-027-2: SDK は画面遷移しない（通知のみ）。遷移は利用側アプリの責務＝ここではログに出すだけ。
+      log(`link-open: row=${event.rowId} col=${event.columnId} value=${event.value}`);
+      break;
   }
 }
 
@@ -148,6 +209,11 @@ const instance = mount(
     columnWidths: savedLayout.columnWidths,
     rowHeights: savedLayout.rowHeights,
     ...(wrapColumns !== undefined ? { wrapColumns } : {}),
+    ...(columnTypes !== undefined ? { columnTypes } : {}),
+    ...(columnFormats !== undefined ? { columnFormats } : {}),
+    ...(columnCaptions !== undefined ? { columnCaptions } : {}),
+    ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
+    ...(readOnly !== undefined ? { readOnly } : {}),
     onEvent,
   },
 );

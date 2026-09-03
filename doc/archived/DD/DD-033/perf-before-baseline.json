@@ -1,0 +1,90 @@
+{
+  "env": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "dpr": 1.0000000149011612,
+    "preciseMemory": true
+  },
+  "visibleCellCount": 1817,
+  "frame": {
+    "count": 5634,
+    "p50": 16.7,
+    "p95": 16.9,
+    "worst": 50
+  },
+  "stoppedRedrawMs": [
+    8.65,
+    8.8,
+    9.6,
+    9.15,
+    10.35,
+    8.35
+  ],
+  "selectionLatencyMs": [
+    14.4,
+    4.8,
+    17.7,
+    3.3,
+    18.3,
+    3.7,
+    19.2,
+    17.6
+  ],
+  "memory": {
+    "sampleCount": 11,
+    "trend": {
+      "slopeBytesPerSec": -400931,
+      "growthRatio": 0.4984
+    },
+    "samples": [
+      {
+        "t": 748,
+        "usedBytes": 54577795
+      },
+      {
+        "t": 10918,
+        "usedBytes": 74282818
+      },
+      {
+        "t": 21084,
+        "usedBytes": 62036265
+      },
+      {
+        "t": 31244,
+        "usedBytes": 27624074
+      },
+      {
+        "t": 41404,
+        "usedBytes": 27207712
+      },
+      {
+        "t": 51567,
+        "usedBytes": 27846559
+      },
+      {
+        "t": 61728,
+        "usedBytes": 28612094
+      },
+      {
+        "t": 71893,
+        "usedBytes": 27526183
+      },
+      {
+        "t": 80022,
+        "usedBytes": 27467944
+      },
+      {
+        "t": 90188,
+        "usedBytes": 28164351
+      },
+      {
+        "t": 96284,
+        "usedBytes": 27204243
+      }
+    ]
+  },
+  "meta": {
+    "durationMs": 96332,
+    "scrollFrames": 5634,
+    "note": "DD-016-2 CG-6: Facade 統合経路の精密メモリ＋frame 計測。--enable-precise-memory-info 付き実 Chrome 前提。"
+  }
+}

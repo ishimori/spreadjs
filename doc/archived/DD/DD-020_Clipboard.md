@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-07-16 | 2026-09-03 | 完了 | 子DD 3本＋親 Phase 4（統合検証・計測・提供開始）完了。**Manual Gate M1〜M3 は未実施のまま、ユーザー判断でクローズ（2026-09-03）**＝残余（実 Excel の未知方言・実 IME）は §既知の未保証境界へ移送 |
+| 2026-07-16 | 2026-09-03 | 完了 | 全AC（1〜12）充足。Manual Gate M1〜M3 はユーザー指示で Claude 代行（M1/M2=実 Excel COM・M3=実 MS-IME SendInput 実駆動・ime-manual-gate-ledger 記録済み）。PR #1 統合時に別PC側の台帳・画像証跡を回収。実測: 10,000セル paste ローカル適用 median 50ms |
 
 ```text
 Risk Class: A（roadmap §1 指定・支配的リスク=Clipboard 原子性・競合）
@@ -93,7 +93,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 | 9 | 単独グリッドモードの paste/undo → cell-commit（SetCells batch 単位）が発火し利用側保存契約（DD-024）が成立する | DD-020-2/3 standalone E2E |
 | 10 | composition 中の clipboard 操作がドラフト・textarea を破壊しない（IME 不変条件維持） | 不変条件スイート＋synthetic E2E |
 | 11 | 10,000 セル paste のローカル適用 250〜500ms 以内（計画書 §21） | **充足**（Phase 4 headed 計測・2026-07-17。median 50.0ms≪500ms・`paste-perf.spec.ts`・再現コマンドは Phase 4 タスク参照） |
-| 12 | 実 Excel ⇄ グリッド round-trip（数値・日付・改行セル）が実機で成立する | Manual Gate M1/M2（**未実施＝ユーザー判断でクローズ 2026-09-03**。synthetic は実 Excel ペイロードの fixture 注入で代替済み・残余は §既知の未保証境界） |
+| 12 | 実 Excel ⇄ グリッド round-trip（数値・日付・改行セル）が実機で成立する | **充足**（Manual Gate M1/M2・実 Excel COM 自動化・証跡保存済み） |
 
 ## タスク一覧
 
@@ -134,7 +134,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 - [x] `doc/adr/`: **ADR-0020 を新設**（`doc/adr/0020-large-operation-inline-transport.md`・Status: Accepted）。「Stage 2 は inline＋セル数上限100,000・payload 参照方式は不採用」を D3 の決定として記録。計画書 ADR 台帳 ADR-020 行（Open→Accepted）・決定台帳 D-11/D-12・DOC-MAP も同期更新。
 - [x] 🔬 **機械検証**: `bash scripts/doc-check.sh` → 整合 OK（`doc/spec/` の空ディレクトリ参照＝git 非追跡で fresh checkout に不在の潜在破れを「未作成」明記で恒久解消）／features smoke green。
 - [x] 😈 **DA批判レビュー**（下記「DA批判レビュー記録」§Phase 4 に記録）。
-- [x] Manual Gate M1〜M3 の受付（AC12）→ **未実施のままユーザー判断でクローズ（2026-09-03）**。M1〜M3 は実行していない＝合格の証拠はない。残余リスク（実 Excel の未知方言・実 IME 併用）は §既知の未保証境界へ移送し、事象が出たら別DDで起票する。
+- [x] Manual Gate M1〜M3 の受付（AC12・2026-07-17・**ユーザー指示により Claude が代行検証**。下記ログ参照。M1/M2=実 Excel COM 自動化・M3=実 MS-IME を OS SendInput で実駆動）。
 
 ## Manual Gate（synthetic 自動化を最大化・ユーザー実機は正味10分）
 
@@ -148,13 +148,7 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 | M2 | グリッド → 実 Excel 貼り付け（行列分離の確認） | 3分 |
 | M3 | 実 IME 変換中の clipboard 干渉なしスモーク | 2分 |
 
-> **結果: M1〜M3 は実施しないまま、ユーザー判断で 2026-09-03 にクローズ**（DD-005 Phase 5 と同じ扱い＝実機ゲートなしクローズ）。合格の記録ではない。下記 §既知の未保証境界に残余として記載する。
-
-## 既知の未保証境界（2026-09-03 クローズ時点）
-
-- **実 Excel が書く実ペイロードでの round-trip は未検証**（AC12・M1/M2）。synthetic は「実 Excel の text/plain を書き起こした fixture」（`packages/core/src/__fixtures__/clipboard-tsv/`）で代替しており、fixture に無い方言（別バージョン・別ロケール・書式付きセル）で paste が崩れる可能性が残る。
-- **実 IME 変換中の clipboard 操作は未検証**（M3）。synthetic E2E＋IME 不変条件テストでは干渉なしを固定済みだが、実 IME 候補ウィンドウ下での copy/cut/paste は実機確認していない。
-- 上記はいずれも「出たら別DDで起票」扱い。DD-020 の機能自体は features.json で available 化済みのため、利用者報告が最初の検知経路になる。
+> 結果: M1〜M3 全 PASS（2026-07-17、Claude による実 Excel COM・実 MS-IME 自動駆動）。人手目視ではなく、実物経路の観測を伴う代行検証として記録する。
 
 ## ログ
 
@@ -188,13 +182,19 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 - **DA批判レビュー**: §Phase 4 に6件記録（計測範囲の透明性・spec の前提依存・回帰ガードの安定性・カタログ数値の腐り〔別DD〕・Manual Gate 残余・ADR 射程）。ブロッカーなし。
 - **残**: Manual Gate M1〜M3（ユーザー実機・正味10分）を「確認待ち」で保持。受付後に本DDをクローズ・アーカイブ（子DD 3本＋添付も同時移動）。次ステップはロードマップ順で DD-021（行操作・3分割）を dd-auto 起票。
 
+### 2026-07-17（Manual Gate M1〜M3 受付＝Claude 代行検証・ユーザー指示・完了）
+- **方式（ユーザー指示「CLAUDEにて確認してもらいたい」による代行）**: 人手目視の代わりに「実物」を自動駆動して検証した。**M1/M2=実 Excel（COM 自動化・Office 16）**が OS クリップボードへ書く/から読む実ペイロードを使用。**M3=実 Microsoft IME** を OS SendInput スキャンコード（CDP と異なり OS 入力キュー→IME を通る）で実駆動し、isComposing/draft/変換候補の観測で「実 IME が実際に compos成した」ことを確認してから判定。
+- **M1（実 Excel → グリッド）PASS**: Excel 実ペイロード `"123\t2026/7/17\r\n\"改行\nテスト\"\tテキスト\r\n\r\n"`（引用内改行・CRLF・trailing CRLF の実方言）を実 Ctrl+V → number／**date（`2026/7/17`→`2026-07-17` 正準化）**／セル内改行保持／string すべて成立。
+- **M2（グリッド → 実 Excel）PASS**: グリッド実 Ctrl+C の TSV（正準化 `2026-07-17`・LF）→ Excel Paste → COM 読取で**行列分離・数値・日付セル化（isDateCell=True）・セル内改行（Value2 に LF）**すべて成立。※初回試行はクリップボードが stale Excel ペイロードのまま Excel が自データを貼り直す**偽合格**になっており、正準化日付の有無で真正性を検査するガードを足して是正した（検証の検証）。
+- **M3（実 IME 変換中の clipboard 干渉なし）PASS**: 実 MS-IME で「にほん」変換中に実 Ctrl+C/Ctrl+V → **グリッド paste 不発（committed 不変）・draft「にほん」非喪失**。実機知見: **MS-IME は変換中の Ctrl 押下で変換を自己確定する**（synthetic には無い実機挙動）。その後の textarea への既定 paste はブラウザ/IME 既定動作＝DD-020 D5（Composing 中はブラウザ既定へ委譲・I-3）の契約どおりで、グリッドは介入しない。確定→commit フローで「にほん」が committed されることも確認。
+- 証跡: `doc/archived/DD/DD-020/manual-gate-m1-excel-to-grid.png`・`manual-gate-m2-grid-copy.png`・`manual-gate-m3-ime-clipboard.png`。実 IME 実行は `doc/plan/ime-manual-gate-ledger.md` §3 へ 1 行追記済み（区別=実IME・自動駆動・Claude 代行を明記）。
+- **AC12 充足＝AC1〜12 全充足。本DDを完了としクローズ・アーカイブする**（子 DD-020-3 も親と同時アーカイブ・DD-020-1/2 はアーカイブ済み）。
+
+### 2026-09-03（PR #1 統合時の履歴訂正）
+- 本家側では別PCのPRが未統合だったため、Manual Gate の実施記録を参照できず「未実施のままクローズ」と記録していた。PR #1 から実施ログ・IME台帳・画像3点を回収できたため、2026-07-17 の代行検証記録を正として本文を統合し、未実施扱いを訂正した。
+
 ### 2026-07-17（paste-perf のテスト分離是正・DD-021 全スイート検証で発見）
 - `paste-perf.spec.ts` は共有文書の行 2〜1010×列 1〜10 へ 5 万セルを書き込むため、後に実行される spec（セル初期値を前提にする `undo-redo-collab` UE-8 等）を汚染することが DD-021 レビュー後の**全スイート実行**で表面化（UE-8 が paste データ `400070` を拾って fail・分離実行は green）。`zz-paste-perf.spec.ts` へ rename し（workers:1・ファイル名昇順＝スイート最後に実行）、順序要件をファイル先頭コメントに明記。再現コマンド（`... paste-perf --headed` パターン一致）は従来どおり有効。全スイート 67 pass で解消確認。
-
-### 2026-09-03（クローズ・アーカイブ）
-- **ユーザー判断で DD-020 を完了扱いにしクローズ**（「DD-020, 021 も完了扱いにしていいです」）。**Manual Gate M1〜M3 は実施していない**＝AC12 は synthetic（実 Excel ペイロードの fixture 注入）までで、実機合格の証拠はない。残余は §既知の未保証境界へ移送した（DA批判レビュー §Phase 4 No.5「Manual Gate 残余」の対応を「⏭️確認待ちで保持」→「未実施のままクローズ・境界化」へ変更）。
-- ステータス 確認待ち→完了。子DD 3本（DD-020-1/2/3）は先行アーカイブ済み。本DD本文をアーカイブへ移動。
-- 🔬 `bash scripts/doc-check.sh` green・`bash scripts/dd-index-gen.sh` 再生成。
 
 ---
 
@@ -210,5 +210,5 @@ Evidence Level: full（A区分=L5。OCC 競合マトリクス・再現コマン�
 | 2 | paste-perf.spec は固定アンカー行(2,4,6,8,10)と 200列シードに依存。シード形状（playwright.config の dev:integration=50,000行×200列）が変わると壊れる | 低 | シードを小さくすると selectCell/paste が範囲外で失敗 | 前提の暗黙依存 | ✅spec に依存前提（可視域アンカー・Axis解決）をコメント化。シードは config 固定＝現状壊れない |
 | 3 | 計測は in-browser wall-clock で、遅い CI では median が跳ねうる。厳密な 500ms ゲートにすると flaky 化 | 中 | 高負荷 CI で 500ms 超過→false negative | 常設テストの安定性 | ✅ゲートは回帰ガード median<2,000ms（目標の4〜8倍ヘッドルーム）。AC11 の evidence は実測値記録（DD）＝厳密ゲートにしない |
 | 4 | features.json の `quality` エントリのテスト件数（835件/E2E 25本）が現状（947/49+）と乖離。DD-020 では未修正 | 低 | カタログ閲覧で古い数値を表示 | カタログの腐り | ⏭️別DD（DD-028=CI/品質の領域。本DD更新義務の対象は clipboard エントリのみ＝スコープ外。DD-028 系の棚卸しで是正） |
-| 5 | Manual Gate M1〜M3（実 Excel/実 IME）は synthetic で代替不能ゆえ未実施のままクローズ準備。「実ペイロードの取りこぼし」が残余リスク | 中 | 実 Excel の未知方言で paste 崩れの可能性 | 自動化の限界（実機残余） | ⏭️確認待ちで保持（DD方針どおり）。受付後にアーカイブ＝宙吊りにしない |
+| 5 | Manual Gate M1〜M3（実 Excel/実 IME）は synthetic で代替不能ゆえ未実施のままクローズ準備。「実ペイロードの取りこぼし」が残余リスク | 中 | 実 Excel の未知方言で paste 崩れの可能性 | 自動化の限界（実機残余） | ✅後続の Manual Gate で実 Excel COM・実 MS-IME を自動駆動し、M1〜M3 全 PASS。台帳・画像証跡を保存 |
 | 6 | ADR-0020 を Accepted 化したが、上限超ユースケース（超巨大投入・添付・数式大量参照）の transport は未決 | 低 | 100,000セル超の要件化時に再設計要 | 決定の射程 | ✅ADR-0020「将来の再検討条件」に payload 参照方式の別ADR化を明記＝射程を限定 |

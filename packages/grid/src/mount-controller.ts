@@ -12,23 +12,37 @@ import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/ty
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
 import type { Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
 import {
+  BADGE_TEXT_PADDING,
   CELL_TEXT_LINE_HEIGHT,
+  CELL_TEXT_PADDING,
   backingSize,
   captureAnchor,
+  columnLabel,
   correctScroll,
   createBaseLayer,
   createOverlayLayer,
   createTextMetricsCache,
   createViewportTransform,
 } from '@nanairo-sheet/render';
-import type { FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
+import type { CellRect, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import { singleCell } from '@nanairo-sheet/selection';
 import type { CellRange } from '@nanairo-sheet/selection';
 import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
 import { cellScalarToDisplay } from './document-view';
+import { computeEditorPlacement } from './editor-placement';
 import type { PlacementConfig } from './editor-placement';
+import { captureEditStartRevision, draftToScalar, isRowLive } from './commit-bridge';
+import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } from './column-types';
+import type { ColumnTypeRegistry } from './column-types';
+import { FormatRuleConfigError, compileFormatRules } from './format-rules';
+import type { CompiledColumnFormats } from './format-rules';
+import { DisplayConfigError, compileDisplayFormats } from './display-format';
+import type { CompiledColumnDisplay } from './display-format';
+import { shouldArmLinkCandidate } from './link-column';
+import { createSelectDropdown, decideSelectKey } from './select-editor';
+import type { SelectDropdown } from './select-editor';
 import type { EditingDocumentPort } from './ime-editing-session';
 import { createIntegrationEditor } from './integration-editor';
 import type { IntegrationEditor } from './integration-editor';
@@ -43,9 +57,10 @@ import {
   shouldInterceptClipboard,
 } from './clipboard-controller';
 import type { ClipboardDocumentPort } from './clipboard-controller';
-import { computeResizeSize, resizeHitTest } from './resize-interaction';
+import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from './resize-interaction';
 import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
+import { shouldSuppressReadonlyKey } from './readonly-policy';
 import { decideRowStructureKey, rebaseRowIndex, resolveDeleteTargets } from './row-operations';
 import { createUndoController, decideUndoRedoKey } from './undo-stack';
 import type { UndoPatch } from './undo-stack';
@@ -75,8 +90,16 @@ const HEADER_HEIGHT = 24;
 const ROW_HEIGHT = 22;
 const COL_WIDTH = 80;
 const TICK_INTERVAL_MS = 1_000;
+// リンク列 dblclick の2打目抑止窓（ms・DD-027-2）。同一セルでこの間隔内の連打は「2打目」と見なし link-open を再発火しない
+// （実ブラウザーは PointerEvent.detail>=2 が主判定・本窓は detail=0 固定の synthetic 環境を補完する）。標準 dblclick 相当。
+const LINK_DBLCLICK_MS = 400;
 // セル文字フォント（base-layer 描画・自動行高の測定で共有する。両者で一致していないと wrap 行数がずれる・DD-012-5）。
 const CELL_FONT = '13px system-ui, sans-serif';
+// 列ヘッダーフォント（base-layer と一致。auto-fit のヘッダーラベル幅測定に使う・DD-027-3）。
+const HEADER_FONT = '12px system-ui, sans-serif';
+// auto-fit の非空セル走査上限（DD-027-3・C級）。50k 行列の単発 dblclick でも予算内に収めるため、これを超えたら
+// それまでの最大幅を採用して打ち切る（診断 info）。
+const AUTO_FIT_MAX_SCAN = 10_000;
 
 interface ResolvedConfig {
   documentId: string;
@@ -121,6 +144,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let pendingStandaloneData: GridStandaloneData | undefined;
   let editor: IntegrationEditor | undefined;
   let browserTransport: BrowserWebSocketTransport | undefined;
+  // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
+  let columnTypeRegistry: ColumnTypeRegistry | undefined;
+  let selectDropdown: SelectDropdown | undefined;
+  // DD-027-3: セル書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。書式なしなら hasAny()=false で
+  // base-layer への束縛を省き描画コスト増をゼロにする。
+  let compiledFormats: CompiledColumnFormats | undefined;
+  // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
+  // hasAny()=false（両オプション未指定）なら base-layer への columnHeaderLabel/formatCellText フック束縛を省く。
+  let compiledDisplay: CompiledColumnDisplay | undefined;
+  // 選択式ドロップダウンの制御は attachBackendRendering 内で backend/editor を閉じ込めた関数として定義し、
+  // createGridController 直下の handler（dblclick・pointerdown・redraw）からは以下の ref 経由で呼ぶ。
+  let openSelectForActive: (() => void) | undefined;
+  let isSelectColumnIndex: ((colIndex: number) => boolean) | undefined;
+  let closeSelectDropdown: (() => void) | undefined;
+  let refreshSelectPlacement: ((transform: ViewportTransform) => void) | undefined;
   let baseLayer: ReturnType<typeof createBaseLayer> | undefined;
   let dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
   let viewportWidth = 0;
@@ -149,6 +187,19 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // 診断ログ hook（opt-in・既定無出力）。GridEvent（consumer 契約）とは別系統の障害切り分け用。
   const diag = createDiagnosticSink(options.onDiagnostic);
+
+  // DD-033-1: 表示専用モード（readOnly）。mount 時固定・両モード共通。boolean 単値ゆえ構成不整合が無く fail-fast なし。
+  // TS 型（boolean|undefined）が正規経路を強制するが、JS 経路の非 boolean は `=== true` の厳密判定で編集可能側へ倒し、
+  // undefined 以外の非 boolean は mount 時に診断 warn（readonly-invalid・公開 error code へは追加しない・決定事項）。
+  const rawReadOnly: unknown = options.readOnly;
+  const readOnly = rawReadOnly === true;
+  if (rawReadOnly !== undefined && typeof rawReadOnly !== 'boolean') {
+    diag.emit('warn', 'readonly-invalid', `readOnly は boolean が必要（受領: ${typeof rawReadOnly}）→ 編集可能として扱う`);
+  }
+  if (readOnly) {
+    // mount 時に1件（E2E/障害切り分けの確認点・決定事項）。抑止発動ごとの readonly-blocked とは別。
+    diag.emit('info', 'readonly-mode', '表示専用モード（readOnly=true）でマウント: 文書変更を抑止し閲覧系のみ許可');
+  }
 
   function emit(event: GridEvent): void {
     for (const listener of [...listeners]) {
@@ -252,6 +303,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     baseLayer.draw(frameViewport(transform));
     overlayLayer.draw(overlayFrame(transform));
     editor?.refreshPlacement(transform, placementConfig());
+    // DD-027-1: 選択式ドロップダウン（listbox）と ▼ インジケーターを scroll/構造Op に追従させる。
+    refreshSelectPlacement?.(transform);
   }
 
   /**
@@ -421,6 +474,117 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // 「どの pointer のドラッグか」だけを持つ（マルチタッチの誤更新防止・resizeDrag と同型）。
   let selectionDrag: { readonly pointerId: number } | null = null;
 
+  // DD-027-2: ハイパーリンク列のクリック候補追跡（候補追跡方式・📐）。pointerdown で武装（arm）→ ドラッグで開始セルを
+  // 離れたら破棄 → pointerup で生存していれば link-open を発火する。既存経路（activeCell 移動・ドラッグ選択・編集確定）は
+  // 無変更のまま上乗せする（T1 非該当）。value は pointerdown 時点で捕捉（pointerup 時に行が消えていてもその値で発火してよい）。
+  let linkCandidate:
+    | { readonly pointerId: number; readonly rowId: RowId; readonly columnId: ColumnId; readonly value: string; readonly cell: CellPosition }
+    | null = null;
+  // dblclick 2打目の抑止（📐「detail===1」の実ブラウザー/synthetic 両対応）。直近 link-open 発火の論理セル（rowId/columnId）と
+  // 時刻を記録し、同一セルで既定間隔内の連打は「2打目」と見なして武装しない。実ブラウザーは detail>=2 が主判定で、
+  // 本 time-guard は detail 非供給（synthetic）環境の補完に**限定**する（Fable P2: detail>=1 の正当な2回目クリックを握り潰さない）。
+  // キーは行 index でなく rowId/columnId（Fable P2: 発火直後のリモート行挿入/削除で index がずれても別セルを誤抑止しない）。
+  let lastLinkFire: { rowId: RowId; columnId: ColumnId; time: number } | null = null;
+
+  /** 列 index がリンク列か（列単位・hover cursor と候補武装で共有・DD-027-2）。registry 未生成/列消失は false。 */
+  function isLinkColumnIndex(colIndex: number): boolean {
+    if (columnTypeRegistry === undefined || sync === undefined) {
+      return false;
+    }
+    const colId = sync.view.columnIdAt(colIndex);
+    return colId !== undefined && columnTypeRegistry.isLinkColumn(String(colId));
+  }
+
+  /**
+   * pointerdown 時点の状態でリンク候補を武装（arm）できるか判定して候補を組む（純関数 shouldArmLinkCandidate に委譲）。
+   * **pointerdownCell を呼ぶ前の位相**で評価する（編集中クリックは従来経路＝発火なし・AC8）。値/行ID/列IDは
+   * pointerdown 時点で捕捉する（pointerup 時に行が消えていてもその値で発火してよい＝navigate しない通知のみ・📐）。
+   */
+  function computeLinkArm(
+    cell: CellPosition,
+    event: PointerEvent,
+  ): { pointerId: number; rowId: RowId; columnId: ColumnId; value: string; cell: CellPosition } | null {
+    if (columnTypeRegistry === undefined || sync === undefined || editor === undefined) {
+      return null;
+    }
+    const rowId = sync.view.rowIdAt(cell.row);
+    const columnId = sync.view.columnIdAt(cell.col);
+    if (rowId === undefined || columnId === undefined) {
+      return null;
+    }
+    const value = sync.view.cellDisplay(rowId, columnId);
+    const armed = shouldArmLinkCandidate({
+      button: event.button,
+      pointerType: event.pointerType,
+      isPrimaryClick: isPrimaryClickPress(rowId, columnId, event),
+      isLinkColumn: columnTypeRegistry.isLinkColumn(String(columnId)),
+      valueNonEmpty: value !== '',
+      phase: editor.session.getPhase(),
+      composing: editor.session.isComposing(),
+      shiftKey: event.shiftKey,
+    });
+    return armed ? { pointerId: event.pointerId, rowId, columnId, value, cell } : null;
+  }
+
+  /**
+   * 単クリック/連打の1打目か（dblclick の2打目以降を除外・📐 の detail===1 相当）。実ブラウザーは
+   * `PointerEvent.detail`（1打目=1・2打目=2+）が権威判定＝そのまま通す。`detail===0`（synthetic・Playwright は
+   * detail 非供給）のときだけ直近 link-open 発火セル（rowId/columnId）＋既定間隔（LINK_DBLCLICK_MS）で dblclick 2打目を
+   * 補完判定する（Fable P2: detail>=1 の正当な2回目クリックを time-guard で握り潰さない）。
+   */
+  function isPrimaryClickPress(rowId: RowId, columnId: ColumnId, event: PointerEvent): boolean {
+    if (event.detail >= 2) {
+      return false; // 実ブラウザーの dblclick 2打目
+    }
+    if (
+      event.detail === 0 &&
+      lastLinkFire !== null &&
+      lastLinkFire.rowId === rowId &&
+      lastLinkFire.columnId === columnId &&
+      performance.now() - lastLinkFire.time < LINK_DBLCLICK_MS
+    ) {
+      return false; // detail 非供給環境（synthetic）の連打2打目（同一論理セル・既定間隔内）
+    }
+    return true;
+  }
+
+  /** pointercancel/capture 喪失で候補を破棄する（同一 pointer のときだけ）。 */
+  function discardLinkCandidate(pointerId: number): void {
+    if (linkCandidate !== null && linkCandidate.pointerId === pointerId) {
+      linkCandidate = null;
+    }
+  }
+
+  /**
+   * pointerup（finishSelectionDrag(confirm=true) の直後）で候補が生きていれば link-open を発火する（📐）。
+   * SDK は navigate しない（通知のみ）。列 `defaultOpen:true` のときだけ絶対 http/https URL を window.open で開く
+   * （不正 URL は open せず診断 warn・link-open は常に発火）。
+   */
+  function maybeEmitLinkOpen(pointerId: number): void {
+    if (linkCandidate === null || linkCandidate.pointerId !== pointerId) {
+      return;
+    }
+    const candidate = linkCandidate;
+    linkCandidate = null;
+    lastLinkFire = { rowId: candidate.rowId, columnId: candidate.columnId, time: performance.now() }; // dblclick 2打目抑止の基準（📐・Fable P2）
+    const rowId = String(candidate.rowId);
+    const columnId = String(candidate.columnId);
+    diag.emit('info', 'link-open', `link-open row=${rowId} col=${columnId}`);
+    emit({ type: 'link-open', rowId, columnId, value: candidate.value });
+    const linkType = columnTypeRegistry?.getLinkType(columnId);
+    if (linkType?.defaultOpen === true) {
+      if (isAbsoluteHttpUrl(candidate.value)) {
+        window.open(candidate.value, '_blank', 'noopener,noreferrer');
+      } else {
+        diag.emit(
+          'warn',
+          'link-open-blocked',
+          `defaultOpen: http/https の絶対 URL でないため open しない（link-open は発火済み）: 「${candidate.value}」`,
+        );
+      }
+    }
+  }
+
   /**
    * 範囲選択ドラッグ終了。confirm=true（pointerup）は矩形を明示レンジへ確定する（同一セルなら単一選択のまま）。
    * confirm=false（pointercancel/capture 喪失）はドラッグを破棄する（確定済みレンジは変更しない）。
@@ -494,6 +658,72 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
   }
 
+  /**
+   * ダブルクリック auto-fit（DD-027-3・C級・AC6/AC7）。対象列の非空セルを走査し、text-cache 最大幅＋列ヘッダー
+   * ラベル幅から clamp 内の列幅を求めて setColumnWidth → layout イベント発火（DD-012-4 D2 の保存契約を維持）。
+   * **wrap 列は対象外**（折り返し前提の列に内容 fit は無意味＝診断 info・無変更）。走査は 10,000 非空セルで打ち切り
+   * （それまでの最大値を採用＋診断 info・50k 行列の単発操作でも予算内）。バッジ指定値はチップ幅で見積もる。
+   */
+  function performAutoFitColumn(colIndex: number): void {
+    const backend = sync;
+    if (backend === undefined) {
+      return;
+    }
+    const columnId = backend.view.columnIdAt(colIndex);
+    if (columnId === undefined) {
+      return;
+    }
+    if (wrapColumnStrings.has(String(columnId))) {
+      diag.emit('info', 'auto-fit-skip-wrap', `auto-fit: wrap 列 ${String(columnId)} は対象外（無変更・DD-027-3）`);
+      return;
+    }
+    const rowCount = backend.view.rowAxis.count();
+    // 非空セル値を **AUTO_FIT_MAX_SCAN+1 件まで**収集して打ち切る（visitor が false を返すと queryRange が中断＝
+    // 50k 行列でも定数コスト・予算保護・Fable P2）。measure と truncated 判定は純関数 computeAutoFitContentWidth が担う。
+    const values: string[] = [];
+    backend.view.store.queryRange(0, rowCount, colIndex, colIndex + 1, (_row, _col, value) => {
+      values.push(value);
+      if (values.length > AUTO_FIT_MAX_SCAN) {
+        return false; // 打ち切り判定に十分な件数を確保したら即中断
+      }
+    });
+    const scan = computeAutoFitContentWidth(
+      values,
+      // DD-033-2: 内容幅は **display**（描画テキスト）で測る（描画と測定の一致・DD-027-3 Fable P3 の教訓踏襲）。
+      // 判定（バッジ match）は raw のまま。書式のない列は formatText が raw を返すため現行と一致（AC9）。
+      (value) => cellTextCache.measureWidth(compiledDisplay?.formatText(String(columnId), value) ?? value, CELL_FONT),
+      // バッジ指定値は丸角チップ幅（テキスト＋左右パディング）で見積もる（描画の drawBadgeCell と整合）。match は raw。
+      (value) => (compiledFormats?.getStyle(String(columnId), value)?.badge === true ? BADGE_TEXT_PADDING * 2 : 0),
+      AUTO_FIT_MAX_SCAN,
+    );
+    const width = autoFitColumnWidth({
+      maxContentWidth: scan.maxContentWidth,
+      // DD-033-2: ヘッダー幅はキャプション（指定時）で測る（未指定は列記号 A/B/…）。base-layer と同じ headerFont・描画と一致。
+      headerLabelWidth: cellTextCache.measureWidth(
+        compiledDisplay?.captionFor(String(columnId)) ?? columnLabel(colIndex),
+        HEADER_FONT,
+      ),
+      padding: CELL_TEXT_PADDING * 2,
+    });
+    backend.view.setColumnWidth(columnId, width);
+    // 列幅変更で wrap 列の折り返し行数が変わりうる（他の wrap 列は本列に依存しないが finishResize と同経路で保守的に再計算）。
+    if (wrapEnabled) {
+      backend.view.recomputeAllAutoRowHeights();
+    }
+    syncSpacer();
+    // DD-012-4 D2: override のみを含む layout を発火（利用側保存契約を維持＝F5 復元に載る）。
+    emit({
+      type: 'layout',
+      columnWidths: backend.view.columnWidthOverrideRecord(),
+      rowHeights: backend.view.rowHeightOverrideRecord(),
+    });
+    diag.emit(
+      'info',
+      'auto-fit',
+      `auto-fit col=${String(columnId)} width=${width} scanned=${scan.scanned}${scan.truncated ? ` (打ち切り>${AUTO_FIT_MAX_SCAN})` : ''}`,
+    );
+  }
+
   scroller.addEventListener(
     'pointermove',
     (event) => {
@@ -533,20 +763,30 @@ export function createGridController(target: GridMountTarget, options: GridMount
         if (event.pointerId !== selectionDrag.pointerId) {
           return; // active pointer 以外の move は無視（マルチタッチでの誤更新防止）
         }
-        // viewport 外は直近 focus を保持する（autoscroll 対象外=既定案・Codex[P1]）。pointer capture 中は
-        // 外へ出ても move が届き、hitTest は右/下端の**外側**も Axis 上のセルへ解決してしまうため、
-        // hitTest の前に境界で弾く（不可視セルへ範囲が伸び、Delete で画面外の値を消す事故を防ぐ）。
-        // 左/上（ヘッダー側）は下の hit.area==='cell' ガードが同じ役割を担う。
-        if (x < 0 || y < 0 || x >= viewportWidth || y >= viewportHeight) {
-          return;
-        }
         const transform = currentTransform();
         if (transform === undefined) {
           return;
         }
-        // セル領域のみ focus を更新する（ヘッダー上は直近セルを保持）。
-        const hit = transform.hitTest(x, y);
-        if (hit.area === 'cell') {
+        // viewport 外は直近 focus を保持する（autoscroll 対象外=既定案・Codex[P1]）。pointer capture 中は
+        // 外へ出ても move が届き、hitTest は右/下端の**外側**も Axis 上のセルへ解決してしまうため、
+        // 境界内のときだけ hit を解決する（不可視セルへ範囲が伸び、Delete で画面外の値を消す事故を防ぐ）。
+        const inViewport = x >= 0 && y >= 0 && x < viewportWidth && y < viewportHeight;
+        const hit = inViewport ? transform.hitTest(x, y) : null;
+        // DD-027-2[Fable P1]: ドラッグで pointer が開始セルの外（別セル・ヘッダー・viewport 外）へ動いたらリンク候補を
+        // 破棄する（=ドラッグ選択・発火なし・AC3）。selection の viewport 境界ガードより前で判定するため、
+        // ヘッダーへの離脱や高速フリックでの格子外離脱でも確実に破棄される（旧実装は cell hit ブロック内でのみ破棄し
+        // ヘッダー/viewport 外離脱が抜けていた）。
+        if (
+          linkCandidate !== null &&
+          (hit === null ||
+            hit.area !== 'cell' ||
+            hit.rowIndex !== linkCandidate.cell.row ||
+            hit.colIndex !== linkCandidate.cell.col)
+        ) {
+          linkCandidate = null;
+        }
+        // セル領域のみ focus を更新する（ヘッダー上・viewport 外は直近セルを保持）。
+        if (hit !== null && hit.area === 'cell') {
           selectionCtrl.updateDrag({ row: hit.rowIndex, col: hit.colIndex });
           sync.view.markViewportDirty();
         }
@@ -554,6 +794,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       // 非ドラッグ: ヘッダー境界上でのみ resize カーソルへ切替（セル領域は cheap に既定へ戻す）。
       if (x >= HEADER_WIDTH && y >= HEADER_HEIGHT) {
+        // DD-027-2: リンク列が 1 つでもあるときだけ列単位で cursor:pointer 判定（無ければ cheap path 不変・予算保護・AC9）。
+        if (columnTypeRegistry?.hasAnyLinkColumn() === true) {
+          const transform = currentTransform();
+          const hit = transform?.hitTest(x, y);
+          const desired = hit !== undefined && hit.area === 'cell' && isLinkColumnIndex(hit.colIndex) ? 'pointer' : '';
+          if (scroller.style.cursor !== desired) {
+            scroller.style.cursor = desired;
+          }
+          return;
+        }
         if (scroller.style.cursor !== '') {
           scroller.style.cursor = '';
         }
@@ -574,6 +824,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     (event) => {
       finishResize(event.pointerId, true);
       finishSelectionDrag(event.pointerId, true);
+      // DD-027-2: 選択ドラッグ確定の直後に、リンク候補が生きていれば link-open を発火する（同一セルクリック＝📐）。
+      maybeEmitLinkOpen(event.pointerId);
     },
     { signal },
   );
@@ -582,6 +834,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     (event) => {
       finishResize(event.pointerId, false);
       finishSelectionDrag(event.pointerId, false);
+      discardLinkCandidate(event.pointerId); // DD-027-2: 取消はリンク候補も破棄（発火しない）
     },
     { signal },
   );
@@ -590,6 +843,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     (event) => {
       finishResize(event.pointerId, false);
       finishSelectionDrag(event.pointerId, false);
+      discardLinkCandidate(event.pointerId); // DD-027-2: capture 喪失はリンク候補も破棄
     },
     { signal },
   );
@@ -602,6 +856,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       if (resizeDrag !== null || selectionDrag !== null) {
         return; // ドラッグ中の追加 pointerdown は無視（capture 漏れ・状態上書き防止・Codex[P2]）
+      }
+      // DD-027-1: 選択式ドロップダウン表示中の外クリック（候補は自前 pointerdown で処理済み＝ここへ来ない）は
+      // 取消（文書無変更・focus は textarea のまま・AC3）。続けて通常のセル選択も行う（Excel 風）。
+      // Fable P3: この dismiss クリックがリンクセルに当たっても link-open は発火させない（ポップアップの打ち消しと
+      // リンク起動を1クリックで兼ねさせない）。close する前に open 状態を捕捉し、後段の候補武装を抑止する。
+      const selectDropdownWasOpen = selectDropdown?.isOpen() === true;
+      if (selectDropdownWasOpen) {
+        closeSelectDropdown?.();
       }
       const transform = currentTransform();
       if (transform === undefined) {
@@ -655,6 +917,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
         sync.view.markViewportDirty();
         return;
       }
+      // DD-027-2: リンク候補の武装判定は pointerdownCell を呼ぶ前の位相で行う（編集中クリックは従来経路＝発火なし・AC8）。
+      // Fable P3: 選択式ドロップダウンの dismiss クリック（selectDropdownWasOpen）はリンク武装しない。
+      const linkArm = selectDropdownWasOpen ? null : computeLinkArm(cell, event);
       // 通常クリック: 明示レンジを解除（同一セル再クリックでも単一選択へ戻す・AC4）→ activeCell 移動。
       selectionCtrl.clear();
       editor.pointerdownCell(cell);
@@ -665,6 +930,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
         selectionCtrl.beginDrag(cell);
         scroller.setPointerCapture(event.pointerId);
       }
+      // 候補は既存処理の後に記録する（既存経路は無変更のまま上乗せ・pointerup で発火）。編集中クリックは linkArm=null。
+      linkCandidate = linkArm;
       sync.view.markViewportDirty();
     },
     { signal },
@@ -681,8 +948,31 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       const rect = stage.getBoundingClientRect();
-      const hit = transform.hitTest(event.clientX - rect.left, event.clientY - rect.top);
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      // DD-027-3: 列境界のダブルクリック → auto-fit（現状ヘッダー境界 dblclick は未使用＝既存 doubleClickCell と衝突しない）。
+      // resizeHitTest を先取りし、列境界なら auto-fit して return（セル編集 dblclick へ流さない）。行境界は対象外（無処理）。
+      const rz = resizeHit(transform, localX, localY);
+      if (rz !== null && rz.axis === 'column') {
+        event.preventDefault();
+        performAutoFitColumn(rz.index);
+        return;
+      }
+      const hit = transform.hitTest(localX, localY);
       if (hit.area === 'cell') {
+        // DD-033-1: readOnly はセル編集（doubleClickCell）・選択式ドロップダウンを開かない（入口抑止）。
+        // 列境界 dblclick の auto-fit（上の分岐）は閲覧系ゆえ維持する（要確認4・view-local layout）。
+        if (readOnly) {
+          diag.emit('info', 'readonly-blocked', 'readOnly: ダブルクリック編集を抑止（閲覧専用）');
+          return;
+        }
+        // DD-027-1: 選択式列（allowFreeText:false）は textarea 編集ではなくドロップダウンを開く（AC1）。
+        // 先に activeCell を対象セルへ合わせてから開く（openSelectForActive は activeCell を読む）。
+        if (isSelectColumnIndex?.(hit.colIndex) === true) {
+          editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
+          openSelectForActive?.();
+          return;
+        }
         editor.doubleClickCell({ row: hit.rowIndex, col: hit.colIndex });
       }
     },
@@ -741,6 +1031,42 @@ export function createGridController(target: GridMountTarget, options: GridMount
     };
   }
 
+  /**
+   * DD-027-1: columnTypes（mount オプション）から Internal registry を生成する（両モード共通）。成功=true。
+   * 不正設定（未知列・候補0件・重複・候補が非 round-trip・未対応 type〔DD-027-1〕／リンク列と wrapColumns の同一列併用
+   * ＝wrap-link-conflict〔DD-027-2〕）は ColumnTypeConfigError を catch し、公開 error（phase=config・
+   * code=column-types-invalid）＋診断で通知して false を返す（fail-fast・配線しない・AC8）。
+   */
+  function buildColumnTypeRegistry(columnOrder: readonly string[]): boolean {
+    try {
+      // DD-027-2: wrapColumns を渡してリンク列×折り返しの併用を fail-fast（wrap-link-conflict→column-types-invalid）。
+      columnTypeRegistry = createColumnTypeRegistry(options.columnTypes, columnOrder, wrapColumnStrings);
+      // DD-027-3: セル書式ルールをプリコンパイル（fail-fast）。不正は columnTypes と同じ column-types-invalid へ写像する。
+      compiledFormats = compileFormatRules(options.columnFormats, columnOrder);
+      // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
+      // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
+      compiledDisplay = compileDisplayFormats(options.columnDisplayFormats, options.columnCaptions, columnOrder, {
+        isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
+        isLinkColumn: (columnId) => columnTypeRegistry?.isLinkColumn(columnId) === true,
+      });
+      return true;
+    } catch (error) {
+      // DD-027-1/2: columnTypes 不正 ／ DD-027-3: columnFormats 不正 は column-types-invalid へ、
+      // DD-033-2: columnCaptions/columnDisplayFormats 不正 は column-display-invalid へ（意味を分けて障害切り分けを濁さない）。
+      if (error instanceof ColumnTypeConfigError || error instanceof FormatRuleConfigError) {
+        diag.emit('error', 'config-error', `column-types-invalid: ${error.message}`);
+        emit({ type: 'error', phase: 'config', code: 'column-types-invalid', message: error.message });
+        return false;
+      }
+      if (error instanceof DisplayConfigError) {
+        diag.emit('error', 'config-error', `column-display-invalid: ${error.message}`);
+        emit({ type: 'error', phase: 'config', code: 'column-display-invalid', message: error.message });
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async function boot(): Promise<void> {
     diag.emit('info', 'boot-start', `boot 開始（server=${serverOrigin}）`);
     let config: ResolvedConfig;
@@ -762,6 +1088,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     resolvedDocumentId = config.documentId;
     const columnOrder: ColumnId[] = config.columnOrder.map((c) => createColumnId(c));
+
+    // DD-027-1: 列タイプメタの registry を columnOrder 解決後に生成する（未知列検証のため）。不正設定は
+    // fail-fast＝公開 error（phase=config・code=column-types-invalid）を出して配線しない（AC8）。
+    if (!buildColumnTypeRegistry(config.columnOrder)) {
+      return;
+    }
 
     const clock: Clock = { now: () => Date.now() };
     const idGenerator: IdGenerator = { next: () => crypto.randomUUID() };
@@ -860,6 +1192,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
+    // DD-033-1（統合レビュー P2-2）: readOnly は undo 捕捉より前に破棄する。submitToBackend（絶対防衛線）だけだと
+    // op は破棄されるのに undo エントリが積まれ canUndo=false（AC2）が破れる（standalone は submit 結果を見ず記録するため）。
+    if (readOnly) {
+      diag.emit('warn', 'readonly-blocked', 'readOnly: submitSetCells で SetCells を破棄（undo 記録前）');
+      return;
+    }
     // DD-020-3: submit 直前に **view（committed＋own pending）** から逆値（前値）を捕捉する（単一記録点＝両モード同一経路）。
     // committed ではなく view を使うのは、直前の未 ACK 楽観編集を飛ばさないため（Codex P1: 連続編集の逆値正しさ）。
     const patches = captureUndoPatches(backend.session.viewDocument, op);
@@ -870,6 +1208,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   /** SetCells を backend へ submit し wrap 行高を再計算する低レベル経路（元操作・補償操作の両方が使う）。 */
   function submitToBackend(backend: GridBackend, op: SetCellsOperation): OperationId | void {
+    // DD-033-1: 絶対防衛線（chokepoint）。readOnly では SetCells 系（IME 確定・paste・cut・範囲クリア・Undo/Redo
+    // 補償）の唯一の submit 点である本関数で op を破棄する＝入口抑止をすり抜けた synthetic 経路や将来の編集入口でも
+    // 文書 Operation 送信ゼロを構造的に保証する（共同編集の受信専用化・AC5）。入口ガード（perform*・interceptKeydown）で
+    // 通常はここへ到達しないため diag は warn（到達自体が想定外＝障害切り分けの手掛かり）。
+    if (readOnly) {
+      diag.emit('warn', 'readonly-blocked', 'readOnly: submitToBackend で SetCells を破棄（絶対防衛線・送信ゼロ）');
+      return;
+    }
     const id = backend.session.submitLocalOperation(op);
     if (wrapEnabled) {
       backend.view.recomputeAutoRowHeightsForRows(op.changes.map((c) => c.rowId));
@@ -939,6 +1285,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * count≦0/非整数・未知アンカーは submit せず実行前拒否（AC8）。楽観適用直後に row-structure-change を発火する。
    */
   function performInsertRows(afterRowId: string | null, count: number): void {
+    // DD-033-1: readOnly は行挿入を抑止（公開 API・ショートカット共有＝1箇所で両方止まる・入口＝chokepoint 兼用）。
+    if (readOnly) {
+      diag.emit('info', 'readonly-blocked', 'readOnly: insertRows を抑止（文書無変更）');
+      return;
+    }
     const backend = sync;
     if (backend === undefined) {
       return; // boot 未完了 → 黙って無視（既存 API 流儀）
@@ -983,6 +1334,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * 対象皆無は実行前拒否（AC8）。削除後、アクティブ行が消えていれば最近傍生存行（下優先→上）へ縮退する（親④・AC5）。
    */
   function performDeleteRows(requested: readonly string[]): void {
+    // DD-033-1: readOnly は行削除を抑止（公開 API・ショートカット共有＝入口＝chokepoint 兼用）。
+    if (readOnly) {
+      diag.emit('info', 'readonly-blocked', 'readOnly: deleteRows を抑止（文書無変更）');
+      return;
+    }
     const backend = sync;
     if (backend === undefined) {
       return;
@@ -1104,6 +1460,32 @@ export function createGridController(target: GridMountTarget, options: GridMount
         const id = backend.view.columnIdAt(colIndex);
         return id !== undefined && wrapColumnStrings.has(String(id));
       },
+      // DD-027-2: リンク列はリンク色＋下線・自セル内クリップで描く（列単位・registry 判定）。リンク列が無ければ常に false。
+      isLinkColumn: (colIndex) => isLinkColumnIndex(colIndex),
+      // DD-027-3: セル書式の解決フック。書式が 1 つも無ければ束縛せず描画コスト増ゼロ（可視非空セルの O(1) lookup）。
+      ...(compiledFormats?.hasAny() === true
+        ? {
+            getCellStyle: (colIndex: number, value: string) => {
+              const id = backend.view.columnIdAt(colIndex);
+              return id === undefined ? undefined : compiledFormats?.getStyle(String(id), value);
+            },
+          }
+        : {}),
+      // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
+      // 完全一致（AC9）。判定は raw・描画は display（columnHeaderLabel=ヘッダー・formatCellText=セル）。
+      ...(compiledDisplay?.hasAny() === true
+        ? {
+            columnHeaderLabel: (colIndex: number) => {
+              const id = backend.view.columnIdAt(colIndex);
+              const caption = id === undefined ? undefined : compiledDisplay?.captionFor(String(id));
+              return caption ?? columnLabel(colIndex);
+            },
+            formatCellText: (colIndex: number, rawValue: string) => {
+              const id = backend.view.columnIdAt(colIndex);
+              return id === undefined ? rawValue : (compiledDisplay?.formatText(String(id), rawValue) ?? rawValue);
+            },
+          }
+        : {}),
     });
 
     // ---- IME×backend の結線（値の源は backend.session／backend.view）----
@@ -1152,6 +1534,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * （arrow 式: 上の backend undefined ガード後の narrowing を閉包へ効かせる＝hoist される function 宣言にしない）
      */
     const performRangeClear = (): void => {
+      if (readOnly) {
+        diag.emit('info', 'readonly-blocked', 'readOnly: 範囲クリアを抑止（文書無変更）');
+        return;
+      }
       const range = selectionCtrl.getRange();
       if (range === null) {
         return; // 裁定（delete-range）と実行の間に状態が変わった場合の防御（何もしない）
@@ -1195,6 +1581,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * （copy もしない＝クリップボード不変）通知する。クリア対象が全空でも copy は成立させる（TSV を返す）。
      */
     const performCut = (): string | null => {
+      if (readOnly) {
+        // cut は copy＋クリア＝文書変更系ゆえ全抑止（clipboard も変更しない・null=ブラウザ既定は readOnly textarea で no-op）。
+        diag.emit('info', 'readonly-blocked', 'readOnly: cut を抑止（文書無変更・クリップボード不変）');
+        return null;
+      }
       if (editor === undefined || !clipboardActive()) {
         return null;
       }
@@ -1222,6 +1613,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * ペーストテキストを流し込み Navigation の input が編集を開始してしまう（グリッド paste 意図と乖離）。
      */
     const performPaste = (text: string): boolean => {
+      if (readOnly) {
+        // 消費（true=preventDefault）して readOnly textarea への流し込みも止める（文書無変更）。
+        diag.emit('info', 'readonly-blocked', 'readOnly: paste を抑止（文書無変更）');
+        return true;
+      }
       if (editor === undefined || !clipboardActive()) {
         return false; // 編集/変換中は textarea へテキスト挿入（ブラウザ既定）
       }
@@ -1292,6 +1688,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     /** Ctrl/Cmd+Z: 直前の確定操作を補償 SetCells で戻す（空/pending/in-flight/stopped は no-op）。 */
     const performUndo = (): void => {
+      if (readOnly) {
+        diag.emit('info', 'readonly-blocked', 'readOnly: Undo を抑止（文書無変更）');
+        return;
+      }
       if (backend.session.isStopped) {
         return;
       }
@@ -1303,6 +1703,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     /** Ctrl+Y / Ctrl+Shift+Z: Undo の逆（元値の再適用）。 */
     const performRedo = (): void => {
+      if (readOnly) {
+        diag.emit('info', 'readonly-blocked', 'readOnly: Redo を抑止（文書無変更）');
+        return;
+      }
       if (backend.session.isStopped) {
         return;
       }
@@ -1310,6 +1714,181 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (built !== null) {
         submitCompensation(built.operation);
       }
+    };
+
+    // ---- DD-027-1 選択式入力列（列タイプメタ・ドロップダウン・editor 経路 validator）----
+    /**
+     * editor 経路（IME/textarea 確定）の commit を validator でラップする（決定②・📐）。非候補（allowFreeText:false
+     * 選択式列）は **未 submit**（文書無変更）＋ `value-not-allowed` 通知（共同編集のみ・standalone は診断のみ）＋
+     * 診断（拒否値を含む＝サイレント失敗なし・AC4）。paste/範囲クリア/リモートは submitSetCells を直接呼ぶため
+     * 本ラップを通らない＝保持される（AC6）。ドロップダウン確定は候補一致が保証されるため素通しする。
+     */
+    const editorSubmit = (op: SetCellsOperation): OperationId | void => {
+      const registry = columnTypeRegistry;
+      if (registry !== undefined) {
+        for (const change of op.changes) {
+          const columnId = String(change.columnId);
+          const text = cellScalarToDisplay(change.value);
+          if (!registry.validateEditorCommit(columnId, text).allowed) {
+            // 既存の実行前拒否経路へ集約する（Fable 5 P3-8）: 診断＋公開 rejected（共同編集のみ・standalone は診断のみ）。
+            notifyPreExecutionReject(
+              'value-not-allowed',
+              'value-not-allowed',
+              `選択式列 ${columnId} に非候補値「${text}」が入力されました（未 submit・文書無変更・DD-027-1）`,
+            );
+            return; // 未 submit（op を捨てる・ドラフト復元はしない＝📐）
+          }
+        }
+      }
+      return submitSetCells(op);
+    };
+
+    // 選択式列の判定（アクティブセルの前段裁定・dblclick 分岐・▼ 表示で共有）。allowFreeText:true 列は
+    // 従来どおり textarea 編集（ドロップダウンを強制しない・AC5）＝ここでは select 対象にしない。
+    const isSelectCellIndex = (colIndex: number): boolean => {
+      const registry = columnTypeRegistry;
+      if (registry === undefined) {
+        return false;
+      }
+      const colId = backend.view.columnIdAt(colIndex);
+      return colId !== undefined && registry.isSelectColumn(String(colId)) && !registry.allowsFreeText(String(colId));
+    };
+
+    // ドロップダウンを開いた時点の対象セル（beforeRevision 凍結・確定で OCC 裁定に使う・📐）。
+    let selectOpenTarget:
+      | { readonly rowId: RowId; readonly columnId: ColumnId; readonly beforeRevision: number; readonly currentValue: string }
+      | null = null;
+
+    const openSelect = (): void => {
+      if (readOnly) {
+        // 選択式列のドロップダウンは開かない（要確認2・文書変更経路の入口）。
+        diag.emit('info', 'readonly-blocked', 'readOnly: 選択式ドロップダウンを抑止');
+        return;
+      }
+      if (editor === undefined || selectDropdown === undefined || columnTypeRegistry === undefined) {
+        return;
+      }
+      // composition 中・非 Navigation は開かない（IME 経路無改変・I-3）。
+      if (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
+        return;
+      }
+      const active = editor.session.getActiveCell();
+      const rowId = backend.view.rowIdAt(active.row);
+      const columnId = backend.view.columnIdAt(active.col);
+      if (rowId === undefined || columnId === undefined) {
+        return;
+      }
+      const options = columnTypeRegistry.getSelectOptions(String(columnId));
+      if (options === undefined) {
+        return;
+      }
+      const currentValue = backend.view.cellDisplay(rowId, columnId);
+      const beforeRevision = captureEditStartRevision(backend.session.committedDocument, rowId, columnId);
+      selectOpenTarget = { rowId, columnId, beforeRevision, currentValue };
+      // 画面外セルで F2 等を押したとき、まず可視域へスクロールしてから配置する（1フレームのちらつき解消・Fable 5 P3-7）。
+      ensureActiveCellVisible();
+      const transform = currentTransform();
+      const placement = transform === undefined ? null : computeEditorPlacement(transform, active.row, active.col, placementConfig());
+      selectDropdown.open({
+        rect: placement !== null && placement.visible ? placement.rect : null,
+        options,
+        currentValue,
+      });
+      backend.view.markViewportDirty();
+    };
+
+    const cancelSelect = (): void => {
+      if (selectDropdown === undefined || !selectDropdown.isOpen()) {
+        return;
+      }
+      selectDropdown.close();
+      selectOpenTarget = null;
+      backend.view.markViewportDirty();
+    };
+
+    const confirmSelect = (): void => {
+      if (selectDropdown === undefined || !selectDropdown.isOpen() || selectOpenTarget === null) {
+        return;
+      }
+      const target = selectOpenTarget;
+      const value = selectDropdown.confirmValue(); // 内部で close 済み
+      selectOpenTarget = null;
+      backend.view.markViewportDirty();
+      // 無変更判定は open 時スナップショットでなく**確定時点**の表示値と比較する（Fable 5 P2-4）: open 中に
+      // リモート/ローカルで値が変わった後に「元の値」を選ぶとサイレント no-op になる事故を防ぐ。
+      const currentNow = backend.view.cellDisplay(target.rowId, target.columnId);
+      if (value === null || value === currentNow) {
+        return; // 候補なし or 確定時点で既に同値 → 文書を触らない
+      }
+      // 確定前に対象行の生存を確認する（表示中にリモート/ローカルで削除された場合の実行前拒否・📐）。
+      if (!isRowLive(backend.session.committedDocument, target.rowId)) {
+        notifyRowReject('row-unavailable', 'select-row-deleted', `選択確定対象の行が削除済み: row=${String(target.rowId)}`);
+        return;
+      }
+      const op: SetCellsOperation = {
+        type: 'setCells',
+        conflictPolicy: 'reject-overlap',
+        changes: [
+          {
+            rowId: target.rowId,
+            columnId: target.columnId,
+            beforeRevision: target.beforeRevision, // 開いた時点で凍結（OCC は既存 reject 経路が裁く）
+            value: draftToScalar(value),
+          },
+        ],
+      };
+      submitSetCells(op); // 既存 chokepoint（Undo 記録・cell-commit 通知・自動行高が既存経路で成立）
+      backend.view.markCellDirty();
+    };
+
+    // 選択式ドロップダウンは選択式列があるときだけ配線する（無ければ overhead ゼロ）。
+    if (columnTypeRegistry?.hasAnySelectColumn() === true) {
+      selectDropdown = createSelectDropdown({ host: stage, onConfirm: () => confirmSelect() });
+    }
+
+    // createGridController 直下の handler（dblclick・pointerdown・redraw）から呼ぶための ref を公開する。
+    openSelectForActive = openSelect;
+    isSelectColumnIndex = isSelectCellIndex;
+    closeSelectDropdown = cancelSelect;
+    refreshSelectPlacement = (transform: ViewportTransform): void => {
+      if (selectDropdown === undefined || editor === undefined) {
+        return;
+      }
+      // Fable 5 P2-2: open 中に IME composition が始まる/非 Navigation へ遷移したら閉じる（keydown consume では
+      // compositionstart は止められない＝状態不整合→自傷 cell-conflict を防ぐ）。毎フレームの防御。
+      if (selectDropdown.isOpen() && (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation')) {
+        cancelSelect();
+      }
+      // ▼ インジケーター: アクティブセルが選択式列 & Navigation & 非 composition のとき（発見性・in-scope 小）。
+      const active = editor.session.getActiveCell();
+      const showIndicator =
+        isSelectCellIndex(active.col) && !editor.session.isComposing() && editor.session.getPhase() === 'Navigation';
+      let indicatorRect: CellRect | null = null;
+      if (showIndicator) {
+        const ip = computeEditorPlacement(transform, active.row, active.col, placementConfig());
+        indicatorRect = ip.visible ? ip.rect : null;
+      }
+      // open 中の listbox 位置: 開いた対象セルの現在 index を引き直す。対象行/列が消えたら閉じて診断、
+      // 画面外へスクロールしたら閉じる（📐 エッジ・Fable 5 P2-2 の同経路）。
+      let openRect: CellRect | null = null;
+      if (selectDropdown.isOpen() && selectOpenTarget !== null) {
+        const r = backend.view.rowIndexOf(selectOpenTarget.rowId);
+        const c = backend.view.colIndexOf(selectOpenTarget.columnId);
+        if (r < 0 || c < 0) {
+          // 対象行/列が削除された → 閉じて診断（📐「閉じて診断」）。確定は起きない
+          // （confirmSelect の isRowLive はサブフレーム race に対する残余防御）。
+          diag.emit('warn', 'select-target-removed', `選択式ドロップダウンの対象セルが消失したため閉じる: row=${String(selectOpenTarget.rowId)} col=${String(selectOpenTarget.columnId)}`);
+          cancelSelect();
+        } else {
+          const op = computeEditorPlacement(transform, r, c, placementConfig());
+          if (op.visible) {
+            openRect = op.rect;
+          } else {
+            cancelSelect(); // 画面外スクロール → 閉じる（composition 不在ゆえ textarea の I-3 問題なし）
+          }
+        }
+      }
+      selectDropdown.refresh({ openRect, indicatorRect });
     };
 
     const editorLayout: GridLayout = {
@@ -1327,7 +1906,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     editor = createIntegrationEditor({
       host: stage,
       document: docPort,
-      submit: (op) => submitSetCells(op),
+      submit: editorSubmit,
+      // DD-033-1: 表示専用モードは常駐 textarea へ readOnly 属性＋編集 DOM イベントの dispatch 抑止（分岐追加のみ）。
+      readOnly,
+      // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
+      // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
+      onBlur: () => cancelSelect(),
       layout: editorLayout,
       onPresenceChange: (update: PresenceUpdate) => {
         backend.session.sendPresence(update);
@@ -1366,6 +1950,65 @@ export function createGridController(target: GridMountTarget, options: GridMount
         const backendNow = sync;
         if (current === undefined || backendNow === undefined) {
           return false;
+        }
+        // DD-033-1: readOnly の入口抑止（最優先）。編集開始/セルクリアを起こすキー（F2/Delete/Backspace）を消費する。
+        // 閲覧系（矢印・Shift+矢印・Ctrl+C・Escape・PageUp/Down）と composition/非 Navigation は素通し（純関数裁定・AC7）。
+        if (
+          readOnly &&
+          shouldSuppressReadonlyKey({
+            key: input.key,
+            ctrlKey: input.ctrlKey,
+            metaKey: input.metaKey,
+            altKey: input.altKey,
+            shiftKey: input.shiftKey,
+            eventComposing: input.isComposing,
+            sessionComposing: current.session.isComposing(),
+            phase: current.session.getPhase(),
+          })
+        ) {
+          diag.emit('info', 'readonly-blocked', `readOnly: 編集キー「${input.key}」を抑止（閲覧専用）`);
+          return true;
+        }
+        // DD-027-1: 選択式ドロップダウンの前段裁定（最優先）。open 中は ↑↓/Enter/Esc/Tab を消費し他キーを握り潰す。
+        // 閉じている選択式セル（allowFreeText:false）では編集開始キー（F2/Enter/Alt+↓/印字文字）でドロップダウンを開く。
+        // composition 中・非 Navigation では decideSelectKey が必ず 'none'＝IME 経路無改変（I-3）。
+        if (selectDropdown !== undefined) {
+          const active = current.session.getActiveCell();
+          const decision = decideSelectKey({
+            key: input.key,
+            ctrlKey: input.ctrlKey,
+            metaKey: input.metaKey,
+            altKey: input.altKey,
+            shiftKey: input.shiftKey,
+            eventComposing: input.isComposing,
+            sessionComposing: current.session.isComposing(),
+            phase: current.session.getPhase(),
+            isOpen: selectDropdown.isOpen(),
+            isSelectCell: isSelectCellIndex(active.col),
+          });
+          switch (decision) {
+            case 'open':
+              openSelect();
+              return true;
+            case 'move-down':
+              selectDropdown.highlightNext();
+              backendNow.view.markViewportDirty();
+              return true;
+            case 'move-up':
+              selectDropdown.highlightPrev();
+              backendNow.view.markViewportDirty();
+              return true;
+            case 'confirm':
+              confirmSelect();
+              return true;
+            case 'cancel':
+              cancelSelect();
+              return true;
+            case 'consume':
+              return true;
+            case 'none':
+              break;
+          }
         }
         // DD-020-3: Ctrl/Cmd+Z=Undo・Ctrl+Y/Ctrl+Shift+Z=Redo（Navigation 位相かつ非 composing のみ・親 (b)）。
         // Editing/Composing 中は decideUndoRedoKey が 'none' を返しブラウザ既定（textarea 内テキスト undo）へ委譲する（I-3）。
@@ -1473,6 +2116,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return; // 配線しない（rAF ループは sync=undefined で no-op）
     }
     const standaloneOptions = options as GridStandaloneMountOptions;
+    // DD-027-1: 列タイプ registry を生成（fail-fast）。不正なら配線しない（AC8）。
+    if (!buildColumnTypeRegistry(standaloneOptions.columnOrder)) {
+      return;
+    }
     resolvedDocumentId = standaloneOptions.documentId;
     diag.emit('info', 'standalone-boot', `columns=${standaloneOptions.columnOrder.length}`);
     standalone = createStandaloneSession({
@@ -1592,6 +2239,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       abort.abort(); // scroller listeners を解放
       resizeObserver.disconnect();
       editor?.destroy(); // 常駐 textarea/badge・editor listeners を解放
+      selectDropdown?.destroy(); // DD-027-1: listbox・▼ インジケーターを除去
       browserTransport?.close(); // WS を閉じ再接続タイマーを解放
       scaffold.dispose(); // container から stage を除去
       debugRegistry.delete(instance);
@@ -1642,6 +2290,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     activeCell: () => editor?.session.getActiveCell() ?? { row: 0, col: 0 },
     selectionRange: () => selectionCtrl.getRange(),
     dragRange: () => selectionCtrl.getDragRange(),
+    // DD-027-1: 選択式ドロップダウンの観測（開閉・候補・ハイライト）。
+    selectOpen: () => selectDropdown?.isOpen() ?? false,
+    selectOptions: () => [...(selectDropdown?.options() ?? [])],
+    selectHighlightedIndex: () => selectDropdown?.highlightedIndex() ?? -1,
+    selectHighlightedValue: () => selectDropdown?.highlightedValue() ?? null,
     // DD-020-3: Undo/Redo 可否・深さ（pending が読めないときは undo 不可側に倒す）。
     canUndo: () => undoCtrl.canUndo(sync?.session.pendingCount ?? 1),
     canRedo: () => undoCtrl.canRedo(sync?.session.pendingCount ?? 1),
@@ -1681,8 +2334,30 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     displayCell: (rowId, columnId) =>
       sync === undefined ? '' : sync.view.cellDisplay(createRowId(rowId), createColumnId(columnId)),
+    // DD-033-2: base-layer が実際に描く display テキスト（raw→表示書式適用後）。canvas 文字は DOM から読めないため、
+    // 描画経路と同じ compiledDisplay.formatText を通した結果を E2E に露出する（判定は raw・描画は display の検証用）。
+    cellRenderText: (rowId, columnId) => {
+      if (sync === undefined) {
+        return '';
+      }
+      const raw = sync.view.cellDisplay(createRowId(rowId), createColumnId(columnId));
+      return compiledDisplay?.formatText(columnId, raw) ?? raw;
+    },
+    // DD-033-2: 列ヘッダーに描く見出し（キャプション指定列はキャプション・未指定列は列記号 A/B/…）。
+    columnHeaderText: (col) => {
+      const id = sync?.view.columnIdAt(col);
+      const caption = id === undefined ? undefined : compiledDisplay?.captionFor(String(id));
+      return caption ?? columnLabel(col);
+    },
+    // DD-033-1（統合レビュー P3-1）: debug API（test-support）も readOnly では文書 Operation を送信しない。
+    // 行操作は submitToBackend を通らず session.submitLocalOperation 直呼びのため、素通しだと
+    // 「送信ゼロの構造的保証」の唯一の例外になる（perform* 先頭ガードの設計規約に合わせる）。
     submitInsertRowsAfter: (afterRowId, newRowId) => {
       if (sync === undefined) {
+        return;
+      }
+      if (readOnly) {
+        diag.emit('warn', 'readonly-blocked', 'readOnly: debug submitInsertRowsAfter を破棄');
         return;
       }
       const op: InsertRowsOperation = {
@@ -1694,6 +2369,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     submitDeleteRow: (rowId) => {
       if (sync === undefined) {
+        return;
+      }
+      if (readOnly) {
+        diag.emit('warn', 'readonly-blocked', 'readOnly: debug submitDeleteRow を破棄');
         return;
       }
       const op: DeleteRowsOperation = { type: 'deleteRows', rowIds: [createRowId(rowId)] };

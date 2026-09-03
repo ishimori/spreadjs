@@ -568,8 +568,11 @@ export class DocumentView {
         if (text === '') {
           continue; // blank は描画しない（chunk-store と同挙動）
         }
-        visit(ri, ci, text);
+        const stop = visit(ri, ci, text);
         visited += 1;
+        if (stop === false) {
+          return visited; // 訪問関数が中断を要求（DD-027-3・予算保護・Fable P2）
+        }
       }
     }
     return visited;

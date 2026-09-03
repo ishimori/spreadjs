@@ -114,7 +114,9 @@ describe('createSessionSync（ClientSession=正本・DocumentView=派生）', ()
     expect(sync.view.rowAxis.count()).toBe(3);
     expect(sync.view.rowIndexOf(row('r1'))).toBe(1);
     const cells: Array<[number, number, string]> = [];
-    sync.view.store.queryRange(0, 3, 0, 3, (r, c, v) => cells.push([r, c, v]));
+    sync.view.store.queryRange(0, 3, 0, 3, (r, c, v) => {
+      cells.push([r, c, v]);
+    });
     expect(cells).toEqual([[1, 0, 'hi']]);
     // committed（唯一の正本）と一致する view であること。
     expect(sync.session.committedDocument.revision).toBe(2);

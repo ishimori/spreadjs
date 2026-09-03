@@ -111,3 +111,60 @@ export function resizeHitTest(
 export function computeResizeSize(axis: 'column' | 'row', coord: number, edge: number): number {
   return axis === 'column' ? clampColumnWidth(coord - edge) : clampRowHeight(coord - edge);
 }
+
+/** auto-fit（DD-027-3・列内容 + 左右パディング）の列幅計算。 */
+export interface AutoFitColumnInput {
+  /** 列内の非空セル内容の最大表示幅（px・text-cache measureWidth 済み。バッジ値はチップ幅・空列は 0）。 */
+  readonly maxContentWidth: number;
+  /** 列ヘッダーラベル（A, B, ...）の表示幅（px・Excel 準拠で含める）。 */
+  readonly headerLabelWidth: number;
+  /** セル文字の左右パディング合計（px・CELL_TEXT_PADDING * 2）。 */
+  readonly padding: number;
+}
+
+/**
+ * ダブルクリック auto-fit の列幅を算出する（DD-027-3・C級・純関数＝TDD 対象）。列の最長表示内容とヘッダーラベル幅の
+ * 大きい方 ＋ 左右パディングを clampColumnWidth（20〜2000px）で丸める。走査打ち切り（10,000 セル超）は呼び出し側が
+ * それまでの最大値を maxContentWidth に渡すため、本関数は打ち切りの有無に依存しない（計算は同一）。
+ */
+export function autoFitColumnWidth(input: AutoFitColumnInput): number {
+  const content = Math.max(0, input.maxContentWidth, input.headerLabelWidth);
+  return clampColumnWidth(Math.ceil(content) + input.padding);
+}
+
+/** auto-fit 走査の結果（DD-027-3・Fable P2・純関数＝TDD 対象）。 */
+export interface AutoFitScan {
+  /** 走査したセル内容の最大表示幅（px・measure + badgeExtra）。 */
+  readonly maxContentWidth: number;
+  /** measure した非空セル数（打ち切り時は maxScan）。 */
+  readonly scanned: number;
+  /** maxScan を超える非空セルがあり打ち切ったか。 */
+  readonly truncated: boolean;
+}
+
+/**
+ * auto-fit の列内容最大幅を求める（DD-027-3・Fable P2・純関数＝TDD 対象）。非空セル値配列を `maxScan` で打ち切り、
+ * `measure`（text-cache 幅）と `badgeExtra`（バッジのチップ余白）を注入して最大幅を返す。呼び出し側は queryRange の
+ * 中断（visitor が false）で `cellValues` を **maxScan+1 件までに束ねて**渡す（走査の予算保護＝50k 行列でも定数コスト）。
+ * `truncated` は「maxScan を超える非空セルが存在した」＝`cellValues.length > maxScan` で判定する。
+ */
+export function computeAutoFitContentWidth(
+  cellValues: readonly string[],
+  measure: (value: string) => number,
+  badgeExtra: (value: string) => number,
+  maxScan: number,
+): AutoFitScan {
+  let maxContentWidth = 0;
+  let scanned = 0;
+  for (const value of cellValues) {
+    if (scanned >= maxScan) {
+      break; // 打ち切り: それまでの最大値を採用（measure しない・予算保護）
+    }
+    scanned += 1;
+    const width = measure(value) + badgeExtra(value);
+    if (width > maxContentWidth) {
+      maxContentWidth = width;
+    }
+  }
+  return { maxContentWidth, scanned, truncated: cellValues.length > maxScan };
+}
