@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-03 | 2026-09-03 | 進行中 | 不具合修正。固定ペインの列見出し／行番号に、スクロール側の見出しが重なって描かれる。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。根本原因は `base-layer.ts` の `drawHeaders` が pane 境界で clip を分けていないこと（実読で確定）。Phase 1 の 📐 実読まで完了＝修正設計を確定（決定事項）。**コード変更は未着手**（並行セッションが同リポジトリで release ビルド中のため待機） |
+| 2026-09-03 | 2026-09-03 | 進行中 | 不具合修正。固定ペインの列見出し／行番号に、スクロール側の見出しが重なって描かれる。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。原因は `base-layer.ts` の `drawHeaders` が pane 境界で clip を分けていないこと。**Phase 1・2 完了＝AC1〜7 充足**（unit 4 件・E2E 2 件を追加し、いずれも修正前コードでは fail することを実証。全回帰 green: unit 1216・E2E 154。frameP95 は修正前後とも 16.8ms）。Codex medium・M1 は未実施 |
 
 > アプローチ: バグ修正（原因は実読で特定済み。描画のみ・公開 API 変更なし。guides.md §1）
 
@@ -98,34 +98,34 @@ consumer 側の切り分けで **`frozenColumnCount: 1`（SDK 既定）でも再
 
 ## 受け入れ基準
 
-| # | 基準（操作 → 期待結果） | 検証方法 |
-|---|------------------------|---------|
-| 1 | `frozenColumnCount ≥ 1` で横スクロール → 固定列の見出しに**スクロール列の見出しが一切描かれない**。固定境界をまたぐ見出しは境界で切れる | unit（ctx スパイ: clip 矩形と fillText の x）＋ E2E スクショ |
-| 2 | `frozenRowCount ≥ 1` で縦スクロール → 行番号帯で同じ（固定行の番号にスクロール行の番号が重ならない） | unit ＋ E2E |
-| 3 | `frozenColumnCount: 0` / `frozenRowCount: 0` のとき、描画結果が修正前と同一 | unit（現行スナップショット） |
-| 4 | 固定数が既定（1／1）の既存 consumer で、`scrollLeft=0` かつ `scrollTop=0` の初期表示が修正前と同一 | unit ＋ 既存 E2E 無修正 green |
-| 5 | セル本体・列背景（`columnBackgrounds`）・選択・Presence・オーバーフロー表示に変化がない | 既存の全回帰 |
-| 6 | 描画フレーム予算に回帰がない（ヘッダー描画の clip が 1 回 → 最大 2 回になる影響） | headed 計測（DD-004 ハーネス） |
-| 7 | 公開 .d.ts snapshot に差分なし・CHANGELOG の Fixed に記載・boundary lint new=0 | contract test ＋ lint |
+| # | 基準（操作 → 期待結果） | 検証方法 | 結果 |
+|---|------------------------|---------|------|
+| 1 | `frozenColumnCount ≥ 1` で横スクロール → 固定列の見出しに**スクロール列の見出しが一切描かれない**。固定境界をまたぐ見出しは境界で切れる | unit（ctx スパイ: clip 矩形と fillText の x）＋ E2E | ✅ `base-layer.dd039.test.ts` #1・`frozen-panes.spec.ts` DD-039 AC1（修正前コードでは fail することを実証） |
+| 2 | `frozenRowCount ≥ 1` で縦スクロール → 行番号帯で同じ（固定行の番号にスクロール行の番号が重ならない） | unit ＋ E2E | ✅ 同 #2・DD-039 AC2（同上） |
+| 3 | `frozenColumnCount: 0` / `frozenRowCount: 0` のとき、描画結果が修正前と同一 | unit | ✅ 同 #3（clip は帯 2 枚のみ＝入れ子なし。修正前後とも pass） |
+| 4 | 固定数が既定（1／1）の既存 consumer で、`scrollLeft=0` かつ `scrollTop=0` の初期表示が修正前と同一 | unit ＋ 既存 E2E 無修正 green | ✅ 同 #4・既存 `frozen-panes.spec.ts` AC1/AC2 無修正 green |
+| 5 | セル本体・列背景（`columnBackgrounds`）・選択・Presence・オーバーフロー表示に変化がない | 既存の全回帰 | ✅ unit 1216 / E2E 154 全 green（overlay-layer は無改変） |
+| 6 | 描画フレーム予算に回帰がない（ヘッダー描画の clip が 1 回 → 最大 2 回になる影響） | headed 計測 | ✅ `frameP95` は修正前後とも 16.8ms（予算 33ms）。`test-results/dd-evidence/DD-039/perf-comparison.json` |
+| 7 | 公開 .d.ts snapshot に差分なし・CHANGELOG の Fixed に記載・boundary lint new=0 | contract test ＋ lint | ✅ `tests/contract/facade-surface.test.ts` green・CHANGELOG Fixed 追記・boundary new=0 |
 
 ## タスク一覧
 
 ### Phase 1: 実装前詳細化と修正
 - [x] 📐 `drawHeaders` の周辺（`columnHeaderRect` / `rowHeaderRect` / `panes()` / `frozenWidth()` / `frozenHeight()`）を実読し、ヘッダー帯の矩形を pane 境界で分ける最小の変更を確定 → 「決定事項」へ記録（2026-09-03）
-- [ ] `packages/render/src/base-layer.ts`: 列記号ヘッダー・行番号ヘッダーをそれぞれ「固定側」「スクロール側」の 2 回に分けて clip → 描画（固定数 0 のときは現行どおり 1 回）
-- [ ] 🔬 機械検証: `npm run typecheck` / `npm run lint` / `npm test`（既存が無修正 green＝AC3・4・5）
+- [x] `packages/render/src/base-layer.ts`: 列記号ヘッダー・行番号ヘッダーをそれぞれ「固定側」「スクロール側」の 2 回に分けて clip → 描画（固定数 0 のときは現行どおり 1 回）
+- [x] 🔬 機械検証: `npm run typecheck` / `npm run lint` / `npm test`（既存が無修正 green＝AC3・4・5）
 
 ### Phase 2: 回帰の追加と検証
-- [ ] `packages/render/src/base-layer` の描画テストへ「固定帯にスクロール側の見出しを描かない」ケースを追加（列・行の両方＝AC1・2）
-- [ ] playground E2E にスクショケースを追加（固定列 5 × 横スクロール／固定行 1 × 縦スクロール）
-- [ ] 🔬 機械検証: 追加した unit / E2E が green（AC1・2）／DD-004 ハーネスでフレーム予算の回帰なしを確認（AC6）
-- [ ] `CHANGELOG.md` の Fixed へ記載（AC7）
-- [ ] 📸 エビデンス: 修正前後のスクショを `DD-039/` へ
+- [x] `packages/render/src/base-layer` の描画テストへ「固定帯にスクロール側の見出しを描かない」ケースを追加（列・行の両方＝AC1・2）→ `base-layer.dd039.test.ts`（4 件）
+- [x] playground E2E にスクショケースを追加（固定列 5 × 横スクロール／固定行 1 × 縦スクロール）→ `frozen-panes.spec.ts` に 2 件
+- [x] 🔬 機械検証: 追加した unit / E2E が green（AC1・2）／wide-grid-perf ハーネスでフレーム予算の回帰なしを確認（AC6）
+- [x] `CHANGELOG.md` の Fixed へ記載（AC7）
+- [x] 📸 エビデンス: `test-results/dd-evidence/DD-039/`（E2E スクショ 2 点＋`perf-comparison.json`）
 
 ### 完了前チェック
-- [ ] 受け入れ基準を 1 項目ずつ照合
-- [ ] 😈 セルフレビュー 1 巡
-- [ ] 🔬 全回帰 1 回: `npm test` / `npm run typecheck` / `npm run lint` / `npm run test:e2e` → 全 green
+- [x] 受け入れ基準を 1 項目ずつ照合
+- [x] 😈 セルフレビュー 1 巡
+- [x] 🔬 全回帰 1 回: `npm test` / `npm run typecheck` / `npm run lint` / `npm run test:e2e` → 全 green
 - [ ] tarball 再生成は松下側 DD-014-2 が実施（`scripts/release/build-release.sh`）
 
 ## Manual Gate（クローズ非ブロック・正味）
@@ -148,3 +148,13 @@ consumer 側の切り分けで **`frozenColumnCount: 1`（SDK 既定）でも再
 - **コード変更には着手していない**（ユーザー指示: 別セッションが作業中なので邪魔しない範囲で）。理由: 同リポジトリで `scripts/release/build-release.sh`（**作業ツリーから `npm pack`**）が回っており、`packages/**` を編集すると**書きかけのコードが相手の tarball へ混入する**。`npm test` / `npm run build` の同時実行も避けた。ビルド完了を確認してから Phase 1 の実装タスクから再開する
 - 競合の確認: 起票時のメモ「DD-038 が Phase 2 実装中」は解消済み（DD-038 は `6f5cbab` で完了・アーカイブ）。`base-layer.ts` の最終更新は DD-036（`ca33b9f`）で、**現在この DD 以外に触っているものはない**
 - 所見（**本 DD のスコープ外・要判断**）: `overlay-layer.ts` の選択枠・ドラッグ枠は `rangePiecesAcrossPanes` で pane ごとに clip しており正しいが、**Presence マーカーだけは `contentClip`（ヘッダーを除いた全セル領域）で描いており**、スクロール行列の Presence が固定ペインへはみ出しうる。ヘッダー帯の欠陥とは別物で、AC5（Presence 不変）にも触れるため DD-039 では扱わない。別 DD 化するか既知の未保証境界に置くかはユーザー判断
+  → **ユーザー指示で `DD-041` として起票**（実読で範囲を再確定: 壊れているのは activeCell 枠と名前タグだけで、Presence の選択範囲ハイライトは pane 分割済み＝正しい）
+
+### 2026-09-03（実装・Phase 1〜2 完了）
+- ビルド完了の確認後に実装を再開（`packages/render/**` に限定・release スクリプトは別セッションが作業中のため触っていない）
+- `base-layer.ts` の `drawHeaders` を修正。帯の背景 fill・左上コーナー・境界線は無改変で、**帯 clip の内側に入れ子 clip を張ってテキスト描画だけを固定側／スクロール側に分けた**。固定幅・固定高が 0 のときは入れ子を張らず現行どおり 1 回で描く（論点3(a) を実装レベルでも守る＝無駄な clip を張らない）
+- 追加テスト `base-layer.dd039.test.ts`（4 件）: ctx スパイで **各 fillText がどの clip の内側で呼ばれたか**を記録して検証する。「固定帯の内側に落ちるスクロール列/行が実在すること」も同時に assert し、テストが空振りしないようにした
+- **テストの有効性を実証**: 修正前のコード（`git show HEAD:` のコピー）に同じテストを当てると **unit 3/4 が fail**（`expected 52 to be 292` 等＝スクロール列の見出しが帯 clip の中で描かれていた）、**E2E も 2/2 が fail**。「固定 0 なら現行と同一」の 1 件だけは修正前後とも pass＝AC3 の意味どおり
+- E2E は `frozen-panes.spec.ts` へ 2 件追加。**固定側のヘッダー帯の実ピクセル指紋（FNV-1a）がスクロール前後で一致すること**を検証する（スクロール側の指紋が変化したことを先に確認して再描画を担保）
+- AC6 計測: `zz-wide-grid-perf`（382 列・--headed）を **修正前後で交互に 6 本**実行。横スクロールの `frameP95` は**修正前後とも 16.8ms**（予算 33ms）で同一。`initialDrawMs` は最初の 2 本だけ 125/130ms と高かったが、順序を入れ替えると修正後も 92.9〜97.7ms で修正前（87.9〜101.9ms）と重なる＝**暖機影響であって本修正に起因しない**。記録は `test-results/dd-evidence/DD-039/perf-comparison.json`
+- `features.json` は更新しない（機能の追加・提供開始・スコープ変更ではなく、既掲載機能〔固定列・列網掛け〕の不具合修正のため。AGENTS.md の更新義務の対象外）

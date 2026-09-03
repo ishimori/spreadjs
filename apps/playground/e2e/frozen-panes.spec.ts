@@ -50,6 +50,44 @@ async function scrollLeft(page: Page): Promise<number> {
   return page.evaluate(() => document.querySelector('.nsheet-scroller')?.scrollLeft ?? -1);
 }
 
+async function scrollTop(page: Page): Promise<number> {
+  return page.evaluate(() => document.querySelector('.nsheet-scroller')?.scrollTop ?? -1);
+}
+
+/**
+ * DD-039: 指定矩形（CSS 座標）の実ピクセルを読み、内容を表す指紋（FNV-1a）で返す。
+ * ヘッダー帯は「スクロールしても固定側は 1 ピクセルも変わらない」ことが期待値なので、
+ * 個別の文字位置ではなく帯まるごとの同一性で検証する。
+ */
+async function regionSignature(page: Page, x: number, y: number, w: number, h: number): Promise<string> {
+  return page.evaluate(
+    ({ rx, ry, rw, rh }: { rx: number; ry: number; rw: number; rh: number }) => {
+      const canvas = document.querySelector('.nsheet-stage canvas');
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error('base canvas が見つからない');
+      }
+      const ctx = canvas.getContext('2d');
+      if (ctx === null) {
+        throw new Error('2d context が取れない');
+      }
+      const dpr = canvas.width / canvas.clientWidth;
+      const data = ctx.getImageData(
+        Math.round(rx * dpr),
+        Math.round(ry * dpr),
+        Math.max(1, Math.round(rw * dpr)),
+        Math.max(1, Math.round(rh * dpr)),
+      ).data;
+      let hash = 0x811c9dc5;
+      for (let i = 0; i < data.length; i += 1) {
+        hash ^= data[i] ?? 0;
+        hash = Math.imul(hash, 0x01000193);
+      }
+      return (hash >>> 0).toString(16);
+    },
+    { rx: x, ry: y, rw: w, rh: h },
+  );
+}
+
 test('AC1: frozenColumnCount=5 で先頭 5 列が横スクロールしても画面左に残る（ヒットテストも pane 境界でずれない）', async ({
   browser,
 }) => {
@@ -178,6 +216,73 @@ test('AC4-2: 網掛け列に値ベース書式を重ねると、そのセルだ�
       .poll(async () => pixelAt(page, hit.x + 3, hit.y + hit.height / 2), { message: '値ベース書式の再描画待ち' })
       .toBe('0,255,0');
     expect(await pixelAt(page, empty.x + empty.width / 2, empty.y + empty.height / 2)).toBe('238,243,255');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-039 AC1: 横スクロールしても固定列の見出し帯が変化しない（スクロール列の見出しが重ならない）', async ({
+  browser,
+}) => {
+  const { context, page } = await open(browser, QUERY);
+  try {
+    // 固定 5 列。row0/col0 の矩形からヘッダー帯の寸法を得る（x=headerWidth・y=headerHeight）。
+    const first = (await sa.cellRectAt(page, 0, 0))!;
+    const lastFrozen = (await sa.cellRectAt(page, 0, 4))!;
+    const band = { x: first.x, w: lastFrozen.x + lastFrozen.width - first.x, h: first.y };
+    const scrollBandX = band.x + band.w;
+    const frozenBefore = await regionSignature(page, band.x, 0, band.w, band.h);
+    const scrollBefore = await regionSignature(page, scrollBandX, 0, 200, band.h);
+
+    await page.evaluate(() => {
+      const scroller = document.querySelector('.nsheet-scroller');
+      if (scroller instanceof HTMLElement) {
+        scroller.scrollLeft = 800;
+      }
+    });
+    await expect.poll(async () => scrollLeft(page)).toBe(800);
+    // まずスクロール側の見出し帯が変わったこと＝ヘッダーが再描画されたことを確認する。
+    await expect
+      .poll(async () => regionSignature(page, scrollBandX, 0, 200, band.h), { message: 'ヘッダー再描画待ち' })
+      .not.toBe(scrollBefore);
+    // 本題: 固定側の見出し帯は 1 ピクセルも変わらない（修正前はここへスクロール列の見出しが重なっていた）。
+    expect(await regionSignature(page, band.x, 0, band.w, band.h)).toBe(frozenBefore);
+    await page.screenshot({ path: sa.evidencePath('../DD-039/e2e-header-clip-columns.png') });
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-039 AC2: 縦スクロールしても固定行の行番号帯が変化しない', async ({ browser }) => {
+  const { context, page } = await open(browser, QUERY);
+  try {
+    // スクロール余地を作る（既定シードは行数が少なく scrollTop を取れない）。
+    await page.evaluate(() => {
+      window.__standalone?.reinject({
+        rows: Array.from({ length: 60 }, (_v, i) => ({ rowId: `r${i}`, cells: { 'col-a': `A${i}` } })),
+      });
+    });
+    await expect.poll(async () => sa.rowCount(page)).toBe(60);
+
+    const first = (await sa.cellRectAt(page, 0, 0))!;
+    // 固定 1 行ぶんの行番号帯（x=0..headerWidth・y=headerHeight..+行高）。
+    const band = { y: first.y, w: first.x, h: first.height };
+    const scrollBandY = band.y + band.h;
+    const frozenBefore = await regionSignature(page, 0, band.y, band.w, band.h);
+    const scrollBefore = await regionSignature(page, 0, scrollBandY, band.w, 120);
+
+    await page.evaluate(() => {
+      const scroller = document.querySelector('.nsheet-scroller');
+      if (scroller instanceof HTMLElement) {
+        scroller.scrollTop = 300;
+      }
+    });
+    await expect.poll(async () => scrollTop(page)).toBe(300);
+    await expect
+      .poll(async () => regionSignature(page, 0, scrollBandY, band.w, 120), { message: '行番号帯の再描画待ち' })
+      .not.toBe(scrollBefore);
+    expect(await regionSignature(page, 0, band.y, band.w, band.h)).toBe(frozenBefore);
+    await page.screenshot({ path: sa.evidencePath('../DD-039/e2e-header-clip-rows.png') });
   } finally {
     await context.close();
   }

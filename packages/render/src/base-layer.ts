@@ -509,6 +509,21 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.restore();
   };
 
+  // DD-039: ヘッダー帯の中を pane 境界で切り分けるための入れ子 clip。帯の clip の内側で呼ぶため
+  // 交差＝帯からはみ出さない。幅・高さが 0 以下の側は clip を張らずスキップする（drawPane と同じガード）
+  // ＝固定行列が 0 のときスクロール側の矩形は帯 clip と一致し、現行と同一の描画に落ちる。
+  const withBandClip = (x: number, y: number, width: number, height: number, draw: () => void): void => {
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, width, height);
+    ctx.clip();
+    draw();
+    ctx.restore();
+  };
+
   const drawHeaders = (frame: FrameViewport): void => {
     const { transform, viewportWidth, dpr } = frame;
     const panes = transform.panes();
@@ -539,11 +554,24 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       ctx.font = headerFont; // fitText の measure コールバックが ctx.font を触るため描画前に復帰させる。
       ctx.fillText(text, rect.x + rect.width / 2, headerHeight / 2);
     };
-    for (let col = corner.cols.start; col < corner.cols.end; col += 1) {
-      drawColHeader(col);
-    }
-    for (let col = body.cols.start; col < body.cols.end; col += 1) {
-      drawColHeader(col);
+    const drawScrollColHeaders = (): void => {
+      for (let col = body.cols.start; col < body.cols.end; col += 1) {
+        drawColHeader(col);
+      }
+    };
+    // DD-039: 固定列の見出しとスクロール列の見出しを pane 境界で切り分ける。scrollColRange() は
+    // 固定境界に半分かかる列と overscan 分の列を含むため、単一 clip だとそれらが固定帯の内側へ描かれる。
+    const frozenW = transform.frozenWidth();
+    if (frozenW <= 0) {
+      // 固定列なし＝スクロール側の矩形が帯 clip と一致するので入れ子を張らない（現行と同一の描画）。
+      drawScrollColHeaders();
+    } else {
+      withBandClip(headerWidth, 0, frozenW, headerHeight, () => {
+        for (let col = corner.cols.start; col < corner.cols.end; col += 1) {
+          drawColHeader(col);
+        }
+      });
+      withBandClip(headerWidth + frozenW, 0, viewportWidth - headerWidth - frozenW, headerHeight, drawScrollColHeaders);
     }
     ctx.restore();
 
@@ -562,11 +590,22 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       const rect = transform.rowHeaderRect(row);
       ctx.fillText(String(row + 1), headerWidth / 2, rect.y + rect.height / 2);
     };
-    for (let row = corner.rows.start; row < corner.rows.end; row += 1) {
-      drawRowHeader(row);
-    }
-    for (let row = body.rows.start; row < body.rows.end; row += 1) {
-      drawRowHeader(row);
+    const drawScrollRowHeaders = (): void => {
+      for (let row = body.rows.start; row < body.rows.end; row += 1) {
+        drawRowHeader(row);
+      }
+    };
+    // DD-039: 行番号も同型（固定行の番号にスクロール行の番号が重なるのを pane 境界で止める）。
+    const frozenH = transform.frozenHeight();
+    if (frozenH <= 0) {
+      drawScrollRowHeaders();
+    } else {
+      withBandClip(0, headerHeight, headerWidth, frozenH, () => {
+        for (let row = corner.rows.start; row < corner.rows.end; row += 1) {
+          drawRowHeader(row);
+        }
+      });
+      withBandClip(0, headerHeight + frozenH, headerWidth, frame.viewportHeight - headerHeight - frozenH, drawScrollRowHeaders);
     }
     ctx.restore();
 
