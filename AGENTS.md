@@ -39,6 +39,7 @@ spreadjs — 業務Webアプリへ組み込む TypeScript製リアルタイム�
 - **スキル**: `/dd new|list|log|archive|search|rebuild-index|health`（Claude Code: `.claude/skills/` / Codex: `.agents/skills/` — 同一内容のミラー）
 - **開発フロー**: DD作成 → 仕様確認 → 実装 → 検証 → 完了（いきなりコードを書かない）
 - **レビュー**: DDタスクに組み込まない。1モデル（Opus / Codex）でDDを完走し、完了報告を見たユーザーがもう一方のモデルへ都度指示する（`doc/templates/guides.md` §10。v7で `/dd-auto` の自動振り分けは廃止）
+- **Manual Gate（実機確認）はDDのクローズをブロックしない**: 未実施でも「完了」にしてアーカイブし、未確認範囲をDDの `## 既知の未保証境界` へ1行移送する。「確認待ち」で保持しない（DD-020/021 が正味15分の実機確認待ちで6週間滞留した反省。2026-09-03決定）。例外はリリース・移行判定DD（DD-031/032）と実IME の T2 ゲートのみ。正本: `doc/plan/dd-risk-class-header.md`「Manual Gate の扱い」
 - **外部レビュー記録**: ChatGPT等の外部レビューを実施したら、指摘・採否・反映先を **`doc/DD/DD-{番号}/chatgpt-review-YYYYMMDD.md`**（添付フォルダ・複数回は日付で区別）に記録し、DD本文のログへ参照を1行残す。反映自体は通常どおりDD本文（決定事項・AC・タスク）へ。アーカイブ時は添付フォルダごと移動されるため記録はDDと一緒に残る（初出: DD-006/007）
 - **DA 深掘り手法（参考文書）**: `doc/da-method.md` / **コミット**: `DD-{番号}: 概要` 形式
 
