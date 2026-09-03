@@ -7,7 +7,6 @@
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
 | DD-039 | 固定ペインのヘッダーclip漏れ | 検討中 | 不具合修正。固定ペインの列見出し／行番号に、スクロール側の見出しが重なって描かれる。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。根本原因は `base-layer.ts` の `drawHeaders` が pane 境界で clip を分けていないこと（実読で確定） |
-| DD-038 | 貼り付け後の選択レンジ | 完了 | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。論点①は(a)＝selection の不変条件により技術的に強制（起票時の所見を否定）。AC 1〜13 全て充足。tarball 引き渡しは松下 DD-016 の追補が受け取る |
 
 ## 保留・見送り
 
@@ -18,6 +17,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-038 | 貼り付け後の選択レンジ | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。論点①は(a)＝selection の不変条件により技術的に強制（起票時の所見を否定）。AC 1〜13 全て充足。tarball 引き渡しは松下 DD-016 の追補が受け取る |
 | DD-037 | 自由入力併存の選択式列 | consumer 駆動（松下 DD-012-3 の実機検証で判明）。要件正本は松下リポ `doc/DD/DD-012/sdk-requirements.md` **R8**。DD-027-1 の未達分の回収。論点①は(a)既定挙動変更を採用（CHANGELOG に破壊的変更として記載）。Manual Gate T1（実 IME での絞り込み）は未実施＝既知の未保証境界へ移送 |
 | DD-036 | 固定列・列背景・行readOnly | 松下 DD-014（納入計画のSpreadJS化）からの持ち込み。契約=`DD-036/contract.md`・計測=`DD-036/measurement.md`。Codex high の P2×4 を全反映。Manual Gate T1/M1 は未実施＝既知の未保証境界へ移送 |
 | DD-035 | 列タイプ拡張と命令API | 日付列（カレンダー）・readOnlyColumns・scrollToRow/setActiveCell・React handle 4 メソッド＋列スキーマ props 6 点を提供。AC1〜9 充足・Codex high P1×1/P2×3 全反映・全回帰 green（unit 1155・E2E 123＋3）。T1/M1 は事後に実 IME 代行で全 PASS（順序B×10）。ユーザー確認済みでアーカイブ（2026-09-03） |
