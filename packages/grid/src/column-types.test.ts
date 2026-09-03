@@ -111,6 +111,21 @@ describe('ColumnTypeRegistry: 参照系', () => {
     expect(reg.allowsFreeText('col-0')).toBe(true);
     expect(reg.getSelectOptions('col-0')).toBeUndefined();
   });
+
+  it('showsSuggestions は allowFreeText と独立（DD-037 決定①: 候補 UI と検証の厳格さを分離）', () => {
+    // 厳格モード・自由入力併存モードのどちらでも候補 UI を出す。
+    expect(reg.showsSuggestions('col-3')).toBe(true);
+    expect(reg.showsSuggestions('col-1')).toBe(true);
+    // 非選択式列は候補 UI なし。
+    expect(reg.showsSuggestions('col-0')).toBe(false);
+  });
+
+  it('自由入力併存列は候補 UI を出しつつ候補外の commit も通す（DD-037 の主旨）', () => {
+    expect(reg.showsSuggestions('col-1')).toBe(true);
+    expect(reg.validateEditorCommit('col-1', 'マスタに無い品番').allowed).toBe(true);
+    // 厳格モードは従来どおり候補外を拒否する（挙動不変・AC4）。
+    expect(reg.validateEditorCommit('col-3', 'マスタに無い品番').allowed).toBe(false);
+  });
 });
 
 describe('ハイパーリンク列（DD-027-2）: registry・fail-fast・非退行', () => {

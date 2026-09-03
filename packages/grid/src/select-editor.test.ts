@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSelectController, decideSelectKey } from './select-editor';
+import { createSelectController, decideSelectKey, filterOptionsByPrefix } from './select-editor';
 import type { SelectKeyInput } from './select-editor';
 
 describe('createSelectController: 純粋状態（開閉・ハイライト）', () => {
@@ -49,6 +49,78 @@ describe('createSelectController: 純粋状態（開閉・ハイライト）', (
     expect(c.getHighlightedValue()).toBeNull();
     c.highlightNext();
     expect(c.getHighlightedIndex()).toBe(-1); // 閉じている間は no-op
+  });
+});
+
+describe('filterOptionsByPrefix: 前方一致の絞り込み（DD-037 決定③）', () => {
+  const OPTIONS = ['A-100', 'A-200', 'B-100', 'あいうえお', 'あかさたな'];
+
+  it('空プレフィクスは全件（絞り込み前の初期表示）', () => {
+    expect(filterOptionsByPrefix(OPTIONS, '')).toEqual(OPTIONS);
+  });
+
+  it('前方一致だけを返す（部分一致は含めない）', () => {
+    expect(filterOptionsByPrefix(OPTIONS, 'A-')).toEqual(['A-100', 'A-200']);
+    expect(filterOptionsByPrefix(OPTIONS, 'A-1')).toEqual(['A-100']);
+    expect(filterOptionsByPrefix(OPTIONS, '100')).toEqual([]); // 部分一致は対象外
+  });
+
+  it('日本語も前方一致で絞れる（IME 変換中の draft を想定）', () => {
+    expect(filterOptionsByPrefix(OPTIONS, 'あ')).toEqual(['あいうえお', 'あかさたな']);
+    expect(filterOptionsByPrefix(OPTIONS, 'あい')).toEqual(['あいうえお']);
+  });
+
+  it('大小文字は無視する（品番コードの実用性）', () => {
+    expect(filterOptionsByPrefix(OPTIONS, 'a-2')).toEqual(['A-200']);
+  });
+
+  it('候補外の入力は 0 件（呼び出し側が閉じる＝自由入力の邪魔をしない）', () => {
+    expect(filterOptionsByPrefix(OPTIONS, 'マスタに無い品番')).toEqual([]);
+  });
+
+  it('元配列を変更しない（純関数）', () => {
+    const source = ['a', 'b'];
+    filterOptionsByPrefix(source, 'a');
+    expect(source).toEqual(['a', 'b']);
+  });
+});
+
+describe('createSelectController: suggest モード（ハイライト無しで開く・絞り込み・DD-037）', () => {
+  it('highlight:false で開くとハイライト無し＝Enter は入力文字列を確定する側に倒れる（決定④）', () => {
+    const c = createSelectController();
+    c.open({ options: ['A-100', 'A-200'], currentValue: 'A-100', highlight: false });
+    expect(c.isOpen()).toBe(true);
+    expect(c.getHighlightedIndex()).toBe(-1);
+    expect(c.getHighlightedValue()).toBeNull();
+  });
+
+  it('ハイライト無しから ↑↓ で候補を選べる（先頭から始まる）', () => {
+    const c = createSelectController();
+    c.open({ options: ['A-100', 'A-200'], currentValue: '', highlight: false });
+    c.highlightNext();
+    expect(c.getHighlightedValue()).toBe('A-100');
+  });
+
+  it('setOptions は開いたまま候補を差し替え、ハイライトを解除する', () => {
+    const c = createSelectController();
+    c.open({ options: ['A-100', 'A-200', 'B-100'], currentValue: 'A-200' });
+    expect(c.getHighlightedIndex()).toBe(1);
+    c.setOptions(['A-100', 'A-200']);
+    expect(c.getOptions()).toEqual(['A-100', 'A-200']);
+    expect(c.getHighlightedIndex()).toBe(-1); // 絞り込みで勝手に選ばない
+  });
+
+  it('閉じている間の setOptions は no-op', () => {
+    const c = createSelectController();
+    c.setOptions(['A-100']);
+    expect(c.isOpen()).toBe(false);
+    expect(c.getOptions()).toEqual([]);
+  });
+
+  it('既定（highlight 省略）は従来どおり現値をハイライト＝picker の挙動不変', () => {
+    const c = createSelectController();
+    c.open({ options: ['A-100', 'A-200'], currentValue: 'A-200' });
+    expect(c.getHighlightedIndex()).toBe(1);
   });
 });
 
@@ -106,6 +178,31 @@ describe('decideSelectKey: 閉じている選択式セルの編集開始キー�
   it('非選択式セルは none（現行挙動・AC7）', () => {
     expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'Enter', isSelectCell: false })).toBe('none');
     expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'x', isSelectCell: false })).toBe('none');
+  });
+});
+
+describe('decideSelectKey: 自由入力併存モード（DD-037 決定①）', () => {
+  const free: SelectKeyInput = { ...NAV_SELECT_CLOSED, allowsFreeText: true };
+
+  it('印字文字は open にしない（textarea 編集を開始させる＝候補外を打ち切れる）', () => {
+    expect(decideSelectKey({ ...free, key: 'x' })).toBe('none');
+    expect(decideSelectKey({ ...free, key: 'あ' })).toBe('none');
+    expect(decideSelectKey({ ...free, key: '1' })).toBe('none');
+  });
+
+  it('明示操作（F2 / Enter / Alt+↓）では候補を開く＝候補 UI は厳格モードと同じ発見性', () => {
+    expect(decideSelectKey({ ...free, key: 'F2' })).toBe('open');
+    expect(decideSelectKey({ ...free, key: 'Enter' })).toBe('open');
+    expect(decideSelectKey({ ...free, key: 'ArrowDown', altKey: true })).toBe('open');
+  });
+
+  it('厳格モード（既定・allowsFreeText 未指定/false）は印字文字で open＝DD-027-1 の挙動不変', () => {
+    expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'x' })).toBe('open');
+    expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'x', allowsFreeText: false })).toBe('open');
+  });
+
+  it('非選択式セルは自由入力併存でも none（現行挙動）', () => {
+    expect(decideSelectKey({ ...free, key: 'F2', isSelectCell: false })).toBe('none');
   });
 });
 

@@ -40,6 +40,8 @@ const isColumnTypesScenario = scenario.id === 'column-types';
 const columnTypes: Record<string, GridColumnType> | undefined = isColumnTypesScenario
   ? {
       // allowFreeText:true=既存シード値（候補外）も編集でき、非候補値も保持・表示される（決定②）。
+      // DD-037 以降はこのモードでも候補 UI が出る（ダブルクリック/F2/Enter/Alt+↓ で候補・入力中は前方一致で絞り込み）
+      // ＝「候補を出しつつ候補外も打てる」列。allowFreeText が決めるのは commit 検証の厳格さだけ。
       'col-3': { type: 'select', options: ['進行中', '受注', '失注'], allowFreeText: true },
       'col-4': { type: 'link' },
     }

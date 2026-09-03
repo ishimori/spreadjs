@@ -19,6 +19,19 @@
 
 ### Added
 
+- **grid 自由入力併存の選択式列（Experimental・DD-037）**: `columnTypes` の `{ type: 'select', options, allowFreeText: true }`
+  で「**候補を出しつつ、候補外の値も入力できる**」列を提供する（Excel の入力規則リストでエラー停止を設定しない状態＝
+  実務で最も多い使い方。松下 生産納期 consumer 駆動）。`allowFreeText` の意味を **commit 検証の厳格さだけ**に限定し、
+  候補 UI の表示可否と分離した（→「破壊的変更」節）。
+  - **候補を開く**: ダブルクリック／F2／Enter／Alt+↓（`allowFreeText:false` と同じキー体系）。▼ インジケーターも出る。
+    ↑↓ でハイライト → Enter で候補を確定（既存 chokepoint 経由＝Undo・cell-commit・OCC は従来どおり）。
+  - **入力中の絞り込み**: 自由入力併存列を**編集中**は、入力（IME 変換中を含む）の**前方一致**で候補リストが自動表示され
+    絞り込まれる（大小文字は無視）。**候補 0 件になったら閉じる**＝自由入力の邪魔をしない。
+    このリストは**キーを一切奪わない** passive な表示で、印字・IME・キャレット移動・Enter/Tab の確定はすべて従来の
+    editor 経路のまま。ハイライトは付かない＝**Enter は入力文字列をそのまま確定する**（候補外でも通る）。
+    候補の選択はクリックで行う（編集中の ↑↓ はキャレット移動のまま＝キーボードでの候補選択は Alt+↓ の候補表示から）。
+  - editor-state-machine・ime-editing-session・`integration-editor` は**無改変**（I-3 維持）。`validateEditorCommit` も無改変
+    （`allowFreeText:true` は従来どおり候補外を通し、`false` は従来どおり `value-not-allowed` で拒否する）。
 - **grid 固定行列数 `frozenRowCount` / `frozenColumnCount`（Experimental・DD-036 C1）**: 先頭 n 行 / n 列を
   スクロール時に固定する（マトリクス型シートのラベル列。松下 納入計画 consumer 駆動）。**既定は 1／1**＝
   DD-036 以前のハードコード値と完全一致（未指定の consumer は無影響）。`0` で固定なし。両モード共通・mount 時固定・
@@ -246,6 +259,20 @@
     境界ドラッグ確定時（pointerup）に発火し、**既定値と異なる列/行だけ**（override のみ）を含む。利用側はこれを保存し、次回 mount の
     `columnWidths`/`rowHeights` へ渡すと F5 リロードで復元できる（保存先を共有にすれば他ユーザーへも反映）。
   - IME 不変（I-3）維持: リサイズの pointer 操作は編集状態機械へ流さず、変換中でも textarea の value/selection/DOM 親に触れない。
+
+### Changed（破壊的変更・Experimental 0.x）
+
+- **grid `columnTypes` の `allowFreeText: true` で候補ドロップダウンが出るようになった（DD-037）**: 従来は
+  `allowFreeText: true` の選択式列で候補 UI が**一切出ず**（ドロップダウン・▼ インジケーターとも）、実質プレーン
+  テキスト列と同じだった。DD-037 で「候補 UI を出すか」と「候補外の commit を許すか」を分離した結果、
+  `allowFreeText: true` でも候補 UI が出る。
+  - **公開 `.d.ts` の記載範囲では契約変更ではない**（`allowFreeText` の doc comment は候補外 commit の可否だけを
+    約束しており、候補 UI の表示可否には言及していなかった）。ただし**実挙動が変わる**ため破壊的変更として記録する。
+  - **影響**: `allowFreeText: true` を「候補を隠す」目的で使っていた consumer は、ダブルクリック／F2／Enter／Alt+↓ で
+    候補が開き、編集中に前方一致の候補リストが出るようになる。**commit の可否・文書状態・protocol・snapshot・
+    コピー TSV は一切変わらない**（表示と編集 UI だけの変更）。
+  - **`allowFreeText: false`（既定）の挙動は完全に不変**（候補のみモード＝候補外は `value-not-allowed` で拒否）。
+  - 現時点で「候補を出さない選択式列」の設定は提供しない（要求が出たら registry の `showsSuggestions` だけが分岐する）。
 
 ## [0.1.0-alpha.0] — 2026-07-14（DD-017）
 

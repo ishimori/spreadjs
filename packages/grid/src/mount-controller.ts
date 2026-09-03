@@ -41,7 +41,7 @@ import type { CompiledColumnBackgrounds, CompiledColumnFormats } from './format-
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
 import { shouldArmLinkCandidate } from './link-column';
-import { createSelectDropdown, decideSelectKey } from './select-editor';
+import { createSelectDropdown, decideSelectKey, filterOptionsByPrefix } from './select-editor';
 import type { SelectDropdown } from './select-editor';
 import { createDatePicker, decideDateKey } from './date-editor';
 import type { DatePicker } from './date-editor';
@@ -1285,7 +1285,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
           diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 列 ${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
           return;
         }
-        // DD-027-1: 選択式列（allowFreeText:false）は textarea 編集ではなくドロップダウンを開く（AC1）。
+        // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列
+        // （allowFreeText:true）も対象＝候補は明示操作で開き、自由入力は印字文字から始める（DD-037 決定①）。
         // 先に activeCell を対象セルへ合わせてから開く（openSelectForActive は activeCell を読む）。
         if (isSelectColumnIndex?.(hit.colIndex) === true) {
           editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
@@ -2118,21 +2119,49 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return submitSetCells(op);
     };
 
-    // 選択式列の判定（アクティブセルの前段裁定・dblclick 分岐・▼ 表示で共有）。allowFreeText:true 列は
-    // 従来どおり textarea 編集（ドロップダウンを強制しない・AC5）＝ここでは select 対象にしない。
+    // 候補 UI の対象セル判定（アクティブセルの前段裁定・dblclick 分岐・▼ 表示で共有）。
+    // DD-037 決定①: `allowFreeText` の値によらず選択式列なら候補 UI を出す（候補 UI の可否と commit 検証の
+    // 厳格さを分離した）。キー裁定での差（印字文字を奪うか）は allowsFreeTextIndex 側で表現する。
     const isSelectCellIndex = (colIndex: number): boolean => {
       const registry = columnTypeRegistry;
       if (registry === undefined) {
         return false;
       }
       const colId = backend.view.columnIdAt(colIndex);
-      return colId !== undefined && registry.isSelectColumn(String(colId)) && !registry.allowsFreeText(String(colId));
+      return colId !== undefined && registry.showsSuggestions(String(colId));
+    };
+
+    /** 列 index で自由入力が許可されているか（DD-037・印字文字を textarea 編集へ流すかの判定）。 */
+    const allowsFreeTextIndex = (colIndex: number): boolean => {
+      const registry = columnTypeRegistry;
+      if (registry === undefined) {
+        return true;
+      }
+      const colId = backend.view.columnIdAt(colIndex);
+      return colId === undefined || registry.allowsFreeText(String(colId));
     };
 
     // ドロップダウンを開いた時点の対象セル（beforeRevision 凍結・確定で OCC 裁定に使う・📐）。
     let selectOpenTarget:
       | { readonly rowId: RowId; readonly columnId: ColumnId; readonly beforeRevision: number; readonly currentValue: string }
       | null = null;
+
+    /**
+     * 開いているドロップダウンの種類（DD-037 決定①③）。
+     * - `'picker'`: Navigation で明示操作（F2 / Enter / Alt+↓ / ダブルクリック）から開いた従来のドロップダウン。
+     *   ↑↓/Enter/Esc/Tab を奪い、他キーは握り潰す（DD-027-1 の挙動そのまま）。
+     * - `'suggest'`: 自由入力併存列（allowFreeText:true）の**編集中**に draft の前方一致で自動表示する候補リスト。
+     *   **キーを一切奪わない**（decideSelectKey は非 Navigation 位相で必ず 'none'）＝印字・IME・キャレット移動・
+     *   Enter/Tab の確定はすべて従来の editor 経路のまま流れる。表示だけの passive なオーバーレイ。
+     */
+    let selectOpenMode: 'picker' | 'suggest' | null = null;
+
+    /**
+     * suggest モードで最後に適用した絞り込みの識別子（`columnId\u0000draft`）。`refreshSelectPlacement` は毎フレーム
+     * 走るため、これが同じ間は listbox の DOM 再構築（`setOptions`→`replaceChildren`）を省く（60fps の無駄な
+     * 再構築＝ちらつき・hover/スクロール状態のリセットを避ける）。閉じるたびに null へ戻す。
+     */
+    let suggestFilterKey: string | null = null;
 
     const openSelect = (): void => {
       if (readOnly) {
@@ -2173,6 +2202,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         options,
         currentValue,
       });
+      selectOpenMode = 'picker';
       backend.view.markViewportDirty();
     };
 
@@ -2182,6 +2212,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       selectDropdown.close();
       selectOpenTarget = null;
+      selectOpenMode = null;
+      suggestFilterKey = null;
       backend.view.markViewportDirty();
     };
 
@@ -2189,9 +2221,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (selectDropdown === undefined || !selectDropdown.isOpen() || selectOpenTarget === null) {
         return;
       }
-      const target = selectOpenTarget;
+      const target = selectOpenTarget; // Escape 投入より前に確保する（以降の副作用で null 化されても安全）
+      // DD-037: suggest モード（編集中の候補リスト）から候補をクリックで確定するときは、先に編集セッションを
+      // 取り消す。そうしないと編集中の draft が後から commit されて候補の確定を上書きしてしまう。
+      // 状態機械の公開入口（handleEvent）へ Escape を投げるだけ＝editor-state-machine・IME は無改変（I-3）。
+      // 変換中は IME を最優先して何もしない（確定は変換確定後の操作で行う）。
+      if (selectOpenMode === 'suggest' && editor !== undefined) {
+        if (editor.session.isComposing()) {
+          return;
+        }
+        if (editor.session.getPhase() !== 'Navigation') {
+          editor.session.handleEvent({ type: 'keydown', key: 'Escape', isComposing: false, shiftKey: false });
+        }
+      }
       const value = selectDropdown.confirmValue(); // 内部で close 済み
       selectOpenTarget = null;
+      selectOpenMode = null;
       backend.view.markViewportDirty();
       // 無変更判定は open 時スナップショットでなく**確定時点**の表示値と比較する（Fable 5 P2-4）: open 中に
       // リモート/ローカルで値が変わった後に「元の値」を選ぶとサイレント no-op になる事故を防ぐ。
@@ -2383,15 +2428,91 @@ export function createGridController(target: GridMountTarget, options: GridMount
     openSelectForActive = openSelect;
     isSelectColumnIndex = isSelectCellIndex;
     closeSelectDropdown = cancelSelect;
+    /**
+     * DD-037 決定③: 自由入力併存列（allowFreeText:true）の**編集中**に、draft の前方一致で候補リストを自動表示する
+     * （suggest モード）。候補 0 件になったら閉じる＝自由入力の邪魔をしない。
+     *
+     * **キーを一切奪わない**のが本モードの契約: `decideSelectKey` は非 Navigation 位相で必ず 'none' を返すため、
+     * 印字・IME 変換・キャレット移動・Enter/Tab の確定はすべて従来の editor 経路のまま流れる。ゆえに変換中
+     * （composition）に出したままでも状態不整合が起きない（picker と違い入力の所有権を持たないため）。
+     * ハイライトは付けずに開く＝Enter は候補でなく入力文字列を確定する（決定④）。候補の選択はクリック
+     * （listbox の pointerdown → confirmSelect）で行う。
+     */
+    const syncSuggestList = (): void => {
+      if (selectDropdown === undefined || editor === undefined || columnTypeRegistry === undefined) {
+        return;
+      }
+      const active = editor.session.getActiveCell();
+      const eligible =
+        editor.session.getPhase() !== 'Navigation' && // 編集中だけ（Navigation の候補は picker が担当）
+        !readOnly &&
+        isSelectCellIndex(active.col) &&
+        allowsFreeTextIndex(active.col) && // 厳格モードは picker が開くため suggest は出さない
+        !isActiveCellReadOnly();
+      if (!eligible) {
+        if (selectOpenMode === 'suggest') {
+          cancelSelect(); // 編集終了・対象外セルへ移動 → 候補リストを畳む
+        }
+        return;
+      }
+      if (selectOpenMode === 'picker') {
+        return; // 明示操作で開いた picker を優先（編集中に picker は開かないが防御）
+      }
+      const rowId = backend.view.rowIdAt(active.row);
+      const columnId = backend.view.columnIdAt(active.col);
+      if (rowId === undefined || columnId === undefined) {
+        return;
+      }
+      const options = columnTypeRegistry.getSelectOptions(String(columnId));
+      if (options === undefined) {
+        return;
+      }
+      const draft = editor.session.getDraft();
+      const filterKey = `${String(columnId)}\u0000${draft}`;
+      if (selectOpenMode === 'suggest' && filterKey === suggestFilterKey) {
+        return; // draft も対象列も変わっていない → listbox の再構築は不要（毎フレーム呼ばれるため必須の間引き）
+      }
+      const filtered = filterOptionsByPrefix(options, draft);
+      if (filtered.length === 0) {
+        if (selectOpenMode === 'suggest') {
+          cancelSelect(); // 候補 0 件 → 閉じる（決定③・suggestFilterKey も null へ戻る）
+        }
+        return;
+      }
+      if (selectOpenMode === 'suggest') {
+        selectDropdown.setOptions(filtered); // 開いたまま絞り込み（ハイライトは解除される）
+        suggestFilterKey = filterKey;
+        return;
+      }
+      // 初回表示: 対象セルを凍結して開く（rect は本フレームの placement 更新で入る）。
+      selectOpenTarget = {
+        rowId,
+        columnId,
+        beforeRevision: captureEditStartRevision(backend.session.committedDocument, rowId, columnId),
+        currentValue: backend.view.cellDisplay(rowId, columnId),
+      };
+      selectOpenMode = 'suggest';
+      suggestFilterKey = filterKey;
+      selectDropdown.open({ rect: null, options: filtered, currentValue: '', highlight: false });
+      backend.view.markViewportDirty();
+    };
+
     refreshSelectPlacement = (transform: ViewportTransform): void => {
       if (selectDropdown === undefined || editor === undefined) {
         return;
       }
       // Fable 5 P2-2: open 中に IME composition が始まる/非 Navigation へ遷移したら閉じる（keydown consume では
       // compositionstart は止められない＝状態不整合→自傷 cell-conflict を防ぐ）。毎フレームの防御。
-      if (selectDropdown.isOpen() && (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation')) {
+      // DD-037: 対象は picker（入力の所有権を持つドロップダウン）だけ。suggest は編集中/変換中に出ているのが
+      // 正常な状態で、キーを奪わないため同じ不整合は起こらない。
+      if (
+        selectOpenMode === 'picker' &&
+        selectDropdown.isOpen() &&
+        (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation')
+      ) {
         cancelSelect();
       }
+      syncSuggestList();
       // ▼ インジケーター: アクティブセルが選択式列 & Navigation & 非 composition のとき（発見性・in-scope 小）。
       const active = editor.session.getActiveCell();
       const showIndicator =
@@ -2602,7 +2723,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
           }
         }
         // DD-027-1: 選択式ドロップダウンの前段裁定（最優先）。open 中は ↑↓/Enter/Esc/Tab を消費し他キーを握り潰す。
-        // 閉じている選択式セル（allowFreeText:false）では編集開始キー（F2/Enter/Alt+↓/印字文字）でドロップダウンを開く。
+        // 閉じている選択式セルでは編集開始キー（F2/Enter/Alt+↓）でドロップダウンを開く。印字文字も開くのは
+        // 厳格モード（allowFreeText:false）だけで、自由入力併存列では textarea 編集へ流す（DD-037 決定①）。
         // composition 中・非 Navigation では decideSelectKey が必ず 'none'＝IME 経路無改変（I-3）。
         if (selectDropdown !== undefined) {
           const active = current.session.getActiveCell();
@@ -2619,6 +2741,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
             // DD-035 R4: readOnly 列の選択式セルは「非選択式」として裁定する（Enter=下移動等の閲覧系キーを奪わない。
             // 編集開始キーは readonly 裁定/列ロックが遮断済み）。
             isSelectCell: isSelectCellIndex(active.col) && !isActiveCellReadOnly(),
+            // DD-037 決定①: 自由入力併存列では印字文字を奪わない（textarea 編集を開始させる）。
+            allowsFreeText: allowsFreeTextIndex(active.col),
           });
           switch (decision) {
             case 'open':

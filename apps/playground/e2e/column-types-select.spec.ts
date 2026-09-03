@@ -1,4 +1,6 @@
-// DD-027-1 E2E: 選択式入力列（ドロップダウン制約）。
+// DD-027-1 / DD-037 E2E: 選択式入力列（候補ドロップダウンと commit 検証）。
+// DD-037 で「候補 UI を出すか」と「候補外の commit を許すか（allowFreeText）」を分離したため、col-3=厳格モード
+// （候補のみ）・col-5=自由入力併存モード（候補を出しつつ候補外も打てる）の 2 列で両モードを検証する。
 //
 // 選択式列は URL パラメータ `?select=col-3:進行中|受注|失注`（?wrap= と同方式・main.ts）で宣言する。値は Canvas に
 // 描かれ DOM から読めないため、ドロップダウン状態は debug API（selectOpen/selectOptions/... test-support 経由）で
@@ -195,12 +197,100 @@ test('AC5: allowFreeText:true 列 → 自由入力が従来どおり確定（候
     const freeValue = `自由${Date.now() % 1000}`;
 
     await selectCell(page, row, 5);
-    // 印字文字は前段で横取りされない（allowFreeText:true＝isSelectCell 対象外）→ 従来どおり textarea 編集。
+    // 印字文字は前段で横取りされない（DD-037: 自由入力併存列では印字文字を奪わない）→ 従来どおり textarea 編集。
     await plainTypeAndCommit(page, freeValue);
     await expect
       .poll(async () => committedCell(page, rowId, columnId), { message: '候補外の自由入力が確定' })
       .toBe(freeValue);
-    expect(await selectOpen(page)).toBe(false); // ドロップダウンは開いていない
+    // 候補（X|Y|Z）に前方一致しない入力なので候補リストは閉じたまま（DD-037 決定③「候補 0 件で閉じる」）。
+    expect(await selectOpen(page)).toBe(false);
+  } finally {
+    await context.close();
+  }
+});
+
+// ---- DD-037: 自由入力併存の選択式列（候補 UI と commit 検証の分離）--------------------------------
+
+test('DD-037 AC1: 自由入力併存列（allowFreeText:true）でも明示操作で候補ドロップダウンが開く', async ({ browser }) => {
+  const { context, page } = await openSelectClient(browser, 'DD037-候補UI');
+  try {
+    // Alt+↓ で開く（Excel 準拠の「リストを開く」操作）。
+    await selectCell(page, 10, 5);
+    await page.keyboard.press('Alt+ArrowDown');
+    await expect.poll(async () => selectOpen(page), { message: 'Alt+↓ で候補が開く' }).toBe(true);
+    expect(await selectOptions(page)).toEqual(['X', 'Y', 'Z']);
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => selectOpen(page)).toBe(false);
+
+    // F2 でも開く。
+    await page.keyboard.press('F2');
+    await expect.poll(async () => selectOpen(page), { message: 'F2 で候補が開く' }).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => selectOpen(page)).toBe(false);
+
+    // dblclick でも開く（DD-036 以前は allowFreeText:true だと一切出なかった＝本 DD の回収点）。
+    await page.locator('.nsheet-scroller').dblclick({ position: await positionInScroller(page, 11, 5) });
+    await expect.poll(async () => selectOpen(page), { message: 'dblclick で候補が開く' }).toBe(true);
+    expect((await snapshot(page)).draft).toBe(''); // picker は textarea 編集を開始しない
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-037 AC2: 入力中は前方一致で候補が絞り込まれ、0 件で閉じても入力は継続できる', async ({ browser }) => {
+  const { context, page } = await openSelectClient(browser, 'DD037-絞り込み');
+  try {
+    const row = 12;
+    const rowId = (await rowIdAt(page, row))!;
+    const columnId = (await colIdAt(page, 5))!;
+
+    await selectCell(page, row, 5);
+    await page.locator('textarea.int-cell-editor').focus();
+    // 印字文字は textarea 編集を開始する（候補に奪われない）。同時に前方一致の候補リストが出る。
+    await page.keyboard.type('x'); // 大小文字は無視して 'X' に一致する
+    await expect.poll(async () => selectOpen(page), { message: '入力中に候補リストが出る' }).toBe(true);
+    expect(await selectOptions(page)).toEqual(['X']);
+    // ハイライトは付かない＝Enter は候補でなく入力文字列を確定する側に倒れる（決定④）。
+    expect(await selectHighlightedIndex(page)).toBe(-1);
+
+    // 候補 0 件になったら閉じる（自由入力の邪魔をしない・決定③）。
+    await page.keyboard.type('q');
+    await expect.poll(async () => selectOpen(page), { message: '候補 0 件でリストが閉じる' }).toBe(false);
+    expect((await snapshot(page)).draft).toBe('xq'); // 入力は継続している
+
+    // そのまま Enter → 候補外の入力文字列が確定する（併存の肝）。
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(async () => committedCell(page, rowId, columnId), { message: '候補外の入力がそのまま確定' })
+      .toBe('xq');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-037 AC3: 候補をハイライトして Enter → その候補で確定（自由入力併存列でも候補選択が使える）', async ({
+  browser,
+}) => {
+  const { context, page } = await openSelectClient(browser, 'DD037-候補確定');
+  try {
+    const row = 16;
+    const rowId = (await rowIdAt(page, row))!;
+    const columnId = (await colIdAt(page, 5))!;
+
+    await selectCell(page, row, 5);
+    await page.keyboard.press('Alt+ArrowDown');
+    await expect.poll(async () => selectOpen(page)).toBe(true);
+    // ↓ でハイライトを動かし Enter で確定（picker モード＝DD-027-1 と同じキー体系）。
+    await page.keyboard.press('ArrowDown');
+    const highlighted = await selectHighlightedIndex(page);
+    expect(highlighted).toBeGreaterThanOrEqual(0);
+    const expected = (await selectOptions(page))[highlighted]!;
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => selectOpen(page)).toBe(false);
+    await expect
+      .poll(async () => committedCell(page, rowId, columnId), { message: 'ハイライト候補が確定' })
+      .toBe(expected);
   } finally {
     await context.close();
   }

@@ -27,6 +27,10 @@ export interface GridSelectColumnType {
    * 自由入力の許可（既定 false）。false のとき editor 経路（IME/textarea 確定・ドロップダウン）で候補外の値は
    * commit されない（`value-not-allowed` 通知＋文書無変更）。true なら候補外も従来どおり確定できる（AC5）。
    * いずれの場合も paste/setData/リモート由来の非候補値は保持される（validator を通らないため・決定②）。
+   *
+   * **本フラグが決めるのは「検証の厳格さ」だけ**（DD-037 決定①）。候補ドロップダウンの表示可否とは独立で、
+   * `true`（自由入力併存）でも候補 UI は出る（`showsSuggestions`）。両者を分けたことで「候補を出しつつ候補外も
+   * 入力できる」＝Excel の入力規則リスト（エラー停止なし）相当が表現できる。
    */
   readonly allowFreeText?: boolean;
 }
@@ -135,6 +139,15 @@ export interface ColumnTypeRegistry {
   getSelectOptions(columnId: string): readonly string[] | undefined;
   /** その列で自由入力が許可されているか（非選択式列は true＝制約なし）。 */
   allowsFreeText(columnId: string): boolean;
+  /**
+   * その列で候補 UI（ドロップダウン・▼ インジケーター）を出すか（DD-037 決定①）。**`allowsFreeText` とは別軸**で、
+   * 選択式列なら自由入力の可否によらず true を返す。`allowsFreeText` が決めるのは commit 検証の厳格さだけで、
+   * 「候補を出すか」は本述語が決める（両者を 1 フラグに束ねていた DD-027-1 の設計を分離した）。
+   *
+   * 現状は `isSelectColumn` と一致するが、意味が違うため別述語として持つ（型の問い合わせ vs 候補 UI の方針）。
+   * 将来「候補を出さない選択式列」が要求されたら本述語だけが分岐する。
+   */
+  showsSuggestions(columnId: string): boolean;
   /**
    * editor 経路（IME/textarea 確定）の commit 前検証。非選択式列・`allowFreeText:true` 列・空文字（クリア）は
    * 常に許可。選択式（`allowFreeText:false`）は候補一致のみ許可。**この関数は editor 経路だけが呼ぶ**
@@ -312,6 +325,7 @@ export function createColumnTypeRegistry(
       const select = selectOf(columnId);
       return select === undefined || select.allowFreeText === true;
     },
+    showsSuggestions: (columnId) => selectOf(columnId) !== undefined,
     validateEditorCommit: (columnId, value) => {
       const select = selectOf(columnId);
       // 非選択式列・自由入力許可・空文字（クリアは常に許可＝ユーザーを閉じ込めない）は通す。

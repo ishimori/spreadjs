@@ -14,10 +14,32 @@ import type { CellRect } from '@nanairo-sheet/render';
 
 // ---- 純粋コントローラ（TDD 対象） ------------------------------------------------------------
 
+/**
+ * 前方一致で候補を絞る（DD-037 決定③・純関数＝TDD 対象）。空プレフィクスは全件。大小文字は無視する
+ * （英数の品番コードで実用的・日本語には影響しない）。**絞り込みは表示だけの関心**で、commit 検証
+ * （`validateEditorCommit`）とは無関係＝候補 0 件でも自由入力は続けられる。
+ */
+export function filterOptionsByPrefix(options: readonly string[], prefix: string): readonly string[] {
+  if (prefix === '') {
+    return [...options];
+  }
+  const needle = prefix.toLowerCase();
+  return options.filter((option) => option.toLowerCase().startsWith(needle));
+}
+
 export interface SelectController {
   isOpen(): boolean;
-  /** 開く（候補・現値ハイライト）。現値が候補に無ければ先頭をハイライト。 */
-  open(params: { readonly options: readonly string[]; readonly currentValue: string }): void;
+  /**
+   * 開く（候補・現値ハイライト）。現値が候補に無ければ先頭をハイライト。
+   * `highlight:false`（DD-037 の suggest モード）はハイライト無しで開く＝Enter は候補でなく入力文字列を確定する
+   * （決定④「ハイライトなしなら入力文字列をそのまま確定」）。
+   */
+  open(params: { readonly options: readonly string[]; readonly currentValue: string; readonly highlight?: boolean }): void;
+  /**
+   * 開いたまま候補を差し替える（DD-037 決定③の絞り込み）。ハイライトは解除する
+   * （絞り込み結果を勝手に選ばせない＝入力文字列の確定を邪魔しない）。
+   */
+  setOptions(options: readonly string[]): void;
   getOptions(): readonly string[];
   getHighlightedIndex(): number;
   /** ハイライト中の候補値（未 open/候補空は null）。 */
@@ -42,11 +64,22 @@ export function createSelectController(): SelectController {
 
   return {
     isOpen: () => open,
-    open: ({ options: opts, currentValue }) => {
+    open: ({ options: opts, currentValue, highlight = true }) => {
       open = true;
       options = [...opts];
+      if (!highlight) {
+        highlighted = -1; // suggest モード: 明示的に ↑↓ を押すまで何も選ばれていない状態で開く。
+        return;
+      }
       const idx = options.indexOf(currentValue);
       highlighted = idx >= 0 ? idx : clamp(0);
+    },
+    setOptions: (opts) => {
+      if (!open) {
+        return;
+      }
+      options = [...opts];
+      highlighted = -1; // 絞り込みのたびにハイライトを解除（入力文字列の確定を既定に保つ）。
     },
     getOptions: () => options,
     getHighlightedIndex: () => highlighted,
@@ -79,7 +112,7 @@ export function createSelectController(): SelectController {
 export type SelectKeyDecision =
   /** 前段消費しない（従来経路＝undo/redo・行操作・navigation・状態機械へ流す）。 */
   | 'none'
-  /** 選択式列（allowFreeText:false）で編集開始キー → ドロップダウンを開く。 */
+  /** 選択式列で編集開始キー（F2/Enter/Alt+↓・厳格モードでは印字文字も）→ ドロップダウンを開く。 */
   | 'open'
   | 'move-down'
   | 'move-up'
@@ -102,8 +135,15 @@ export interface SelectKeyInput {
   readonly sessionComposing: boolean;
   readonly phase: EditPhase;
   readonly isOpen: boolean;
-  /** アクティブセルが選択式列（allowFreeText:false）か。 */
+  /** アクティブセルが選択式列（候補 UI の対象）か。DD-037 以降は `allowFreeText` の値によらず選択式列なら true。 */
   readonly isSelectCell: boolean;
+  /**
+   * アクティブセルの列で自由入力が許可されているか（DD-037 決定①）。既定 false＝従来の厳格モード。
+   * - `false`（厳格・DD-027-1 と同一）: 印字文字もドロップダウンを開く（textarea 編集へ入らせない）。
+   * - `true`（自由入力併存）: 印字文字は前段消費せず従来どおり textarea 編集を開始する。候補は明示操作
+   *   （F2 / Enter / Alt+↓ / ダブルクリック）で開く＝「候補を出しつつ候補外も打てる」。
+   */
+  readonly allowsFreeText?: boolean;
 }
 
 /** 印字可能な単一文字キー（修飾なし）か（Excel: 選択式セルで文字キー→ドロップダウン）。 */
@@ -114,7 +154,8 @@ function isPrintable(input: SelectKeyInput): boolean {
 /**
  * 選択式列の keydown 前段裁定。composition 中（DOM/内部いずれか）と非 Navigation 位相では必ず 'none'
  * （IME・編集中のキー処理は従来どおり状態機械が裁く＝IME 経路無改変・I-3）。open 中は ↑↓/Enter/Esc/Tab を処理し、
- * 残りは 'consume'（textarea への漏れ防止）。閉じているときは選択式セルでのみ編集開始キーを 'open' に写す。
+ * 残りは 'consume'（textarea への漏れ防止）。閉じているときは選択式セルでのみ編集開始キーを 'open' に写す
+ * （DD-037: 印字文字を 'open' に写すのは厳格モード＝`allowsFreeText:false` のときだけ）。
  */
 export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
   if (input.eventComposing || input.sessionComposing || input.phase !== 'Navigation') {
@@ -140,7 +181,7 @@ export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
   if (!input.isSelectCell) {
     return 'none';
   }
-  // 閉じている & 選択式セル: 編集開始キー（F2・Enter・Alt+↓・印字文字）でドロップダウンを開く。
+  // 閉じている & 選択式セル: 編集開始キー（F2・Enter・Alt+↓）でドロップダウンを開く。
   // F2/Enter は修飾なしのみ（Fable 5 P3-6: Shift+Enter=確定して上移動、Ctrl/Alt 系ショートカットを奪わない）。
   if (
     (input.key === 'F2' || input.key === 'Enter') &&
@@ -154,7 +195,9 @@ export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
   if (input.key === 'ArrowDown' && input.altKey && !input.ctrlKey && !input.metaKey) {
     return 'open';
   }
-  if (isPrintable(input)) {
+  // 印字文字は「厳格モードだけ」ドロップダウンを開く（DD-037 決定①）。自由入力併存列では前段消費せず
+  // 従来どおり textarea 編集を開始する（候補外の値を打ち切れることが併存の肝＝決定④）。
+  if (isPrintable(input) && input.allowsFreeText !== true) {
     return 'open';
   }
   return 'none';
@@ -176,8 +219,15 @@ export interface SelectDropdownConfig {
 export interface SelectDropdown {
   readonly controller: SelectController;
   isOpen(): boolean;
-  /** 開く（cellRect の直下へ listbox を配置）。 */
-  open(params: { readonly rect: CellRect | null; readonly options: readonly string[]; readonly currentValue: string }): void;
+  /** 開く（cellRect の直下へ listbox を配置）。`highlight:false` はハイライト無しで開く（DD-037 suggest モード）。 */
+  open(params: {
+    readonly rect: CellRect | null;
+    readonly options: readonly string[];
+    readonly currentValue: string;
+    readonly highlight?: boolean;
+  }): void;
+  /** 開いたまま候補を差し替える（DD-037 決定③の絞り込み。ハイライトは解除される）。 */
+  setOptions(options: readonly string[]): void;
   highlightNext(): void;
   highlightPrev(): void;
   /** ハイライト中の値を返して閉じる（未 open/候補空は null）。 */
@@ -292,12 +342,20 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   return {
     controller,
     isOpen: () => controller.isOpen(),
-    open: ({ rect, options, currentValue }) => {
-      controller.open({ options, currentValue });
+    open: ({ rect, options, currentValue, highlight }) => {
+      controller.open({ options, currentValue, highlight });
       renderOptions();
       paintHighlight();
       listbox.style.display = 'block';
       placeListbox(rect);
+    },
+    setOptions: (options) => {
+      if (!controller.isOpen()) {
+        return;
+      }
+      controller.setOptions(options);
+      renderOptions();
+      paintHighlight();
     },
     highlightNext: () => {
       controller.highlightNext();
