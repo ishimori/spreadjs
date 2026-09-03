@@ -71,3 +71,21 @@ if (failures.length > 0) {
 console.log(
   `[verify-manifest] OK: ${manifest.packages.length} tarball が manifest（version ${manifest.version} / channel ${manifest.channel}）と一致（sha256 検証済）`,
 );
+
+// DD-040: 再現性の注意喚起。**同一性検査とは別物なので失敗にはしない**（tarball と manifest は一致しており、
+// 問題は「その manifest が指すコミットから再生成できない」こと）。配布ディレクトリは repo の外にも置かれる
+// ため再計算はできず、manifest に記録された値をそのまま伝える。古い manifest はフィールドを持たない＝
+// undefined になるので、その場合は何も言わない（後方互換）。
+if (manifest.closureDirty === true) {
+  const paths = Array.isArray(manifest.closureDirtyPaths) ? manifest.closureDirtyPaths : [];
+  console.warn(
+    `[verify-manifest] WARN: closureDirty=true — この成果物は gitCommit ${manifest.gitCommit ?? '(不明)'} から再現できません（配布に影響するパスに未コミット変更があった状態で生成された）。配布判断の証拠には使わないでください。`,
+  );
+  for (const p of paths) {
+    console.warn('  - ' + p);
+  }
+} else if (manifest.closureDirty === false && manifest.gitDirty === true) {
+  console.log(
+    '[verify-manifest] note: gitDirty=true ですが配布 closure の外の変更のみ（成果物は gitCommit から再現可能）。',
+  );
+}

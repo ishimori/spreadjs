@@ -43,7 +43,19 @@ Evidence Level: standard
 
 ## 決定事項
 
-（Human Spec Gate で確定後に記載）
+**Human Spec Gate 実施: 2026-09-03**（ユーザー指示「論点は全部推奨で良い」。明示の推奨が無かった③④も下記で確定）。
+
+| # | 論点 | 決定 | 根拠 |
+|---|------|------|------|
+| 1 | 既存 `gitDirty` | **(a) 残したまま別フィールドを追加** | 追加のみで後方互換。同名フィールドの意味を変えると DD-018 の S1-6 判定（`gitDirty: true` を根拠に再現 build 未充足とした）の読み替えが発生する |
+| 2 | 「配布に影響するパス」 | **(b) `packages/` ＋ ビルド入力** = `packages` / `scripts/release` / `package.json` / `package-lock.json` / `tsconfig.base.json` | tarball の中身は `packages/` だが、**何をどう pack するか**は release スクリプトと workspace 定義が決める。`packages/` だけでは「スクリプトを書き換えたまま pack した」を見逃す |
+| 3 | 追加フィールドの形 | **(b) boolean ＋ 汚れているパスの要約**（`closureDirty` / `closureDirtyPaths`・上限20件）＋ 読み方を書いた `dirtyNote` | 「なぜ true なのか」を manifest 単体で説明でき、consumer への引き渡し時に口頭の補足が要らなくなる（今回まさにそれが必要だった）。社内配布のためパス名の露出に支障はない |
+| 4 | 判定を誰が使うか | **(a) 人間が読む＋(b) `verify-manifest.mjs` が WARN を出す。(c) build 失敗は採らない** | (b) は manifest の記録値を伝えるだけ（配布ディレクトリは repo 外にも置かれ再計算できない）。**同一性検査とは別物なので exit code は変えない**（tarball と manifest は一致しており、問題は「その manifest が指すコミットから再生成できない」こと）。(c) は doc を書きかけたまま緊急ビルドしたい場面を潰す |
+| 5 | ログ出力 | **出し分ける**。closureDirty なら「この成果物は再現できません」＋該当パス列挙、gitDirty のみなら「配布 closure の外＝再現可能」の note | 従来は無関係な dirt でも同じ WARN で、常時 true のオオカミ少年化を招いていた |
+
+**後方互換**: 古い manifest（`closureDirty` を持たない）を `verify-manifest.mjs` が読んでも `undefined` で何も言わない。既存 `gitDirty` の値・意味は不変。
+
+**パス集合の保守**: `scripts/release/build-release.sh` の `CLOSURE_PATHSPEC` が実体で、増減させたら本 DD の論点②も更新する（スクリプト側のコメントに明記済み）。
 
 ## 受け入れ基準
 

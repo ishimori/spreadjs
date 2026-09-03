@@ -41,14 +41,42 @@ fail() { echo "[release] NG: $*" >&2; exit 1; }
 log "=== DD-017 Alpha 配布成果物 build（channel=$CHANNEL）$(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
 # ---- 0. git 状態（再現性の記録・DA #1: 成果物と working tree の乖離検出） ----
+#
+# 2 段階で記録する（DD-040）:
+#   gitDirty     … working tree 全体が汚れているか。**従来からある項目で意味は変えない**
+#                  （DD-018 が S1-6 再現 build の gate 判定に使った実績があるため）。
+#   closureDirty … **配布に影響するパスだけ**が汚れているか。「この tarball は gitCommit から
+#                  再現できるか」を判断できるのはこちら。doc を書きかけたまま build しても false のまま。
+# gitDirty だけだと無関係な dirt で常時 true になり（オオカミ少年化）、packages/ を編集したまま
+# pack した本物の再現性違反を見落とす。
 GIT_COMMIT="$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo 'unknown')"
 if [ -n "$(cd "$REPO_ROOT" && git status --porcelain 2>/dev/null)" ]; then
   GIT_DIRTY="true"
-  log "WARN: working tree が dirty です。成果物は未コミットの変更を含みます（manifest に gitDirty=true を記録）。"
 else
   GIT_DIRTY="false"
 fi
-log "生成コミット: $GIT_COMMIT (dirty=$GIT_DIRTY)"
+
+# 配布に影響するパス（DD-040 論点②）。tarball の中身（packages/）だけでなく、**何をどう pack するかを
+# 決めるファイル**も含める。`packages/` だけに絞ると「release スクリプトを書き換えたまま pack した」を
+# 見逃す。ここを増減させたら DD-040 の決定事項も更新すること。
+CLOSURE_PATHSPEC=(packages scripts/release package.json package-lock.json tsconfig.base.json)
+CLOSURE_STATUS="$(cd "$REPO_ROOT" && git status --porcelain -- "${CLOSURE_PATHSPEC[@]}" 2>/dev/null)"
+if [ -n "$CLOSURE_STATUS" ]; then
+  CLOSURE_DIRTY="true"
+  # manifest へ載せる要約（porcelain の状態プレフィックス3文字を落としてパスだけにする・上限20件）。
+  CLOSURE_DIRTY_PATHS="$(printf '%s\n' "$CLOSURE_STATUS" | cut -c4- | head -20)"
+else
+  CLOSURE_DIRTY="false"
+  CLOSURE_DIRTY_PATHS=""
+fi
+
+log "生成コミット: $GIT_COMMIT (gitDirty=$GIT_DIRTY / closureDirty=$CLOSURE_DIRTY)"
+if [ "$CLOSURE_DIRTY" = "true" ]; then
+  log "WARN: 配布に影響するパスに未コミット変更があります。**この成果物は $GIT_COMMIT から再現できません**。"
+  printf '%s\n' "$CLOSURE_DIRTY_PATHS" | while IFS= read -r p; do [ -n "$p" ] && log "        - $p"; done
+elif [ "$GIT_DIRTY" = "true" ]; then
+  log "  note: working tree は dirty ですが、汚れているのは配布 closure の外です（成果物は $GIT_COMMIT から再現可能）。"
+fi
 
 # ---- 1. 再現 build ゲート（closure 宣言健全性 → typecheck / lint / test） ----
 # closure 宣言健全性（check-closure.mjs）は typecheck/lint/test が hoisting で通過してしまう「実行時 inter-dep の
@@ -102,11 +130,13 @@ log "  ok: $TARBALL_COUNT tarball 生成"
 # ---- 4. manifest 出力（版数・sha256・bytes・生成コミット・チャネル） ----
 log "4. manifest 生成（版数・sha256・生成コミット・channel）"
 MANIFEST="$OUT_DIR/manifest.json"
-node - "$OUT_DIR" "$CHANNEL" "$EXPECTED_VERSION" "$GIT_COMMIT" "$GIT_DIRTY" "${CLOSURE_PKGS[@]}" <<'NODE'
+node - "$OUT_DIR" "$CHANNEL" "$EXPECTED_VERSION" "$GIT_COMMIT" "$GIT_DIRTY" "$CLOSURE_DIRTY" "$CLOSURE_DIRTY_PATHS" "${CLOSURE_PKGS[@]}" <<'NODE'
 const { createHash } = require('node:crypto');
 const { readFileSync, readdirSync, writeFileSync, statSync } = require('node:fs');
 const { join } = require('node:path');
-const [outDir, channel, version, gitCommit, gitDirty, ...pkgs] = process.argv.slice(2);
+const [outDir, channel, version, gitCommit, gitDirty, closureDirty, closureDirtyPathsRaw, ...pkgs] =
+  process.argv.slice(2);
+const closureDirtyPaths = closureDirtyPathsRaw.split('\n').filter((p) => p !== '');
 const tgz = readdirSync(outDir).filter((f) => f.endsWith('.tgz'));
 // npm pack のファイル名は nanairo-sheet-<pkg>-<version>.tgz（scope の '/' が '-' に）。
 // 前方一致だと 'server' が 'server-hono-...' を誤選択しうる（readdir 順依存）ため版込みで完全一致させる（P1-2）。
@@ -135,7 +165,12 @@ const manifest = {
   apiVersion: '0.1.0-experimental',
   generatedAt: new Date().toISOString(),
   gitCommit,
+  // gitDirty は working tree 全体（従来からの意味を変えない）。再現性の判断には closureDirty を見る（DD-040）。
   gitDirty: gitDirty === 'true',
+  closureDirty: closureDirty === 'true',
+  closureDirtyPaths,
+  dirtyNote:
+    'gitDirty は working tree 全体、closureDirty は配布に影響するパス（packages/・scripts/release/・package.json・package-lock.json・tsconfig.base.json）のみを見る。closureDirty=false なら本 tarball は gitCommit から再現できる（gitDirty=true でも doc 等の無関係な変更に過ぎない）。closureDirty=true の tarball は gitCommit と一致しないため、配布判断の証拠には使わないこと。',
   // install は tarball が cwd にある前提（./ 明示）。tarball は release/ 内にあるため、consumer は tarball を
   // 自プロジェクトへコピーしてから実行するか、release/ を cwd にして実行する（P1-4・installNote 参照）。
   installNote:
