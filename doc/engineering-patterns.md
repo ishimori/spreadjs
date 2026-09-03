@@ -67,4 +67,24 @@
   ```
 - **元DD**: DD-025（React Facade。Codex[high] P1a/P1b で発見 → useLayoutEffect＋参照比較へ。将来の `@nanairo-sheet/element`・他フレームワークラッパーでも同型）
 
+## 7. 挿入順 `JSON.stringify` の checksum は「キー順を保持しない保存先」（Postgres jsonb 等）で必ず壊れる
+
+- **症状**: ファイルでは通っていた persisted snapshot の checksum 検証が、保存先を利用側 DB（jsonb）に差し替えた途端「checksum 不一致（破損の疑い）」で再起動 fail-fast する。データは壊れていない。
+- **原因**: checksum の元文字列を `JSON.stringify(obj)`（プロパティ挿入順）で作っていた。jsonb はキーを長さ→バイト順に並べ替えて格納するため、往復すると同値 JSON でも文字列が変わる。同じ罠は「一度オブジェクトに展開して保存する」経路すべて（ORM の Json 型・別言語の dict）で再発する。
+- **正しいやり方**: 保存先を跨ぐ checksum/hash は **正準直列化（全階層のキーを昇順・配列順は保持・undefined は省略）** で作る。既存フォーマットがあれば version を上げ、旧 version は旧算法で読む（読込互換のみ・書込は新算法）。テストは「キー順を逆にした JSON でも一致する」を固定する。
+  ```ts
+  // ❌ 挿入順依存
+  sha256(JSON.stringify({ formatVersion, documentId, revision, createdAt, snapshot }));
+  // ✅ 正準化（深いキー順ソート）
+  sha256(canonicalJson({ formatVersion, documentId, revision, createdAt, snapshot }));
+  ```
+- **元DD**: DD-026-1（consumer の `sheet_snapshots.data jsonb` を成立させるため persisted snapshot format v2 へ。`packages/server/src/snapshot-store.ts`）
+
+## 8. 「revision 0 ＝ 空文書」の暗黙前提は、状態を外部から供給した瞬間に破れる（bootstrap が送られない）
+
+- **症状**: 初期文書を外部（DB）から revision 0 で供給すると、fresh join したクライアントが空グリッドのままになる。エラーは出ない（サーバーは非空・クライアントは空のまま「同期済み」）。
+- **原因**: protocol の bootstrap 判定が `frontier > 0` を「送る価値がある＝非空」の代用にしていた（server `shouldBootstrap`・client `willReceiveBootstrap`・`handleBootstrap` の `revision <= committed` ガード）。空文書しか revision 0 に存在しない時代の前提が、初期文書の外部供給（oplog に載せない）で崩れた。
+- **正しいやり方**: 「送る/受ける」の判定は **revision ではなく内容（文書が非空か）と受信状態（未 bootstrap か）** で行う。server は fresh join に対し非空なら bootstrap@0 を送り、client は committed 0 かつ未 bootstrap のときだけ受理する（重複は無視）。空文書@0 の挙動は不変にして後方互換テストを残す。外部供給した状態は oplog だけでは再構築できないため、**listen 前に snapshot@0 を durable 化**する。
+- **元DD**: DD-026-1（`packages/server/src/room.ts`・`packages/collab/src/session.ts`。`restoreFrom` にも同じ潜在問題があった＝seed 済み snapshot しか使っていなかったため未露見）
+
 <!-- 以降、パターンを追記していく。番号は通し番号 -->

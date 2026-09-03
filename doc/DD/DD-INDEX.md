@@ -6,10 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-026 | consumer統合①松下生産納期 | 進行中 | consumer を松下 生産納期へ変更（D-007）。Phase 1〜4 完了（DD-026-1〜3 実装・1018 test green・公開型 snapshot 更新）。残: Codex レビュー反映 → Phase 5（consumer 側 Manual Gate・KPI-1/5 は松下 DD-012-2 で採取） |
-| DD-026-1 | ストア注入と初期文書 | 進行中 | 親=DD-026。契約: `DD-026/contract.md` §2〜§5（26-1 節） |
-| DD-026-2 | 認証フック | 進行中 | 親=DD-026。契約: `DD-026/contract.md` §2〜§5（26-2 節） |
-| DD-026-3 | サーバー起点操作 | 進行中 | 親=DD-026。契約: `DD-026/contract.md` §2〜§5（26-3 節） |
 
 ## 保留・見送り
 
@@ -22,6 +18,10 @@
 |----|------|---------|
 | DD-029-1 | KPI計測契約 | 承認①②済（2026-07-16）・kpi-ledger.md 新設・Codex high 7件全反映（見送り0）。契約確定＝DD-026 起票可能 |
 | DD-028 | 継続回帰CI・API差分監視 | CI常設（Actions 2job・連続4run green）・API型snapshot=公開宣言closure・migration dry-run常設test・deprecation policy 3層（P-10/D-006）・IME実機台帳常設。835 test/E2E 25 green・Codex high P2×2 全反映 |
+| DD-026 | consumer統合①松下生産納期 | consumer を松下 生産納期へ変更（D-007）。U1〜U3 を server-hono 公開 API として提供（DD-026-1〜3）。新規テスト 25 件・全回帰 green・Codex xhigh P1×3/P2×2 全反映・公開型 snapshot 追加のみ。consumer 実機（2 ブラウザ収束・JWT 拒否・再起動復旧）と KPI-1/5 は未実施＝既知の未保証境界（松下 DD-012-2 で実施） |
+| DD-026-1 | ストア注入と初期文書 | U1 成立: `serve({ oplog, snapshotStore, initialDocument })`・snapshot format v2（jsonb 可・v1 互換）・bootstrap@0。stores 9 件＋単体 5 件 green・Codex xhigh P1×2 反映（append 直列化 fail-stop／非有限数・非正準 date の拒否／bootstrap@0 接続ごと受理） |
+| DD-026-2 | 認証フック | U2 成立: `serve({ authenticate })`（null=401・throw=500・identity で actorId/presence を上書き）。auth 5 件 green・Codex xhigh P2×2 反映（診断から hook の message を除去／認証待ち socket を stop で破棄） |
+| DD-026-3 | サーバー起点操作 | U3 成立: `ServerInstance.submit(setCells, { actorId })`（通常受理経路・clientId 'server' 予約・reject は結果で返す）。submit 5 件＋grid own-echo 1 件 green・Codex xhigh 指摘（並行 append 直列化・値検証）は 26-1 側で反映 |
 | DD-025 | ReactFacade | 全Phase完了・Manual Gate実機OK（IME確定→onCellCommit・再注入・再mount正常・console clean） |
 | DD-024 | 単独グリッドモード | 単独グリッドモード成立（判別union・cell-commit通知のみ・mount時＋setData再注入・案B backend）。814 test/E2E 18 green・Codex high 3件全反映・見送り0・**実機確認OK（ユーザー 2026-07-16）＝AC1〜8 充足** |
 | DD-023 | Stage2ロードマップ策定 | phase2-dd-roadmap 正式版昇格（S2-1〜6 ゲート・DD-024〜032 採番・命名/P-07 ゲート）＋stage3-outlook 新設。突合3点全OK・Codex high 10件全反映・見送り0・ユーザー承認2回 |

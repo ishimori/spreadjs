@@ -48,9 +48,12 @@ interface ServerInstance { …既存; submit(operation: ServeSetCellsInput, opti
 ```
 
 - `append` の契約: **解決＝durable**（consumer は投影を同じトランザクションへ入れる）。reject（例外）は当該 op を破棄し、以降の write を停止する（既存 PersistentRoom の poisoning）。
+- **SDK は `append` を直列に呼ぶ**（前の解決を待ってから次を呼ぶ・呼び出し順＝revision 順）。1 度 reject すると以降は SDK 側で呼ばずに reject（fail-stop・欠番を作らない）。`entries` は複製（consumer が変更しても内部状態に影響しない）。— Codex P1 反映
+- **値検証**: number は有限数のみ・date は正準 `YYYY-MM-DD`（実在日）のみ。違反は `initialDocument` なら起動エラー、`submit` なら reject（JSON で null になる NaN 等が権威文書と wire/snapshot の hash を分岐させるのを防ぐ）。— Codex P1 反映
 - `readAll` は revision 昇順・1..N 連番であること（既存 fail-fast がそのまま検査する）。
 - `ServePersistedSnapshot.snapshot` は SDK 内部形式で**不透明**（consumer は JSON として保存し、そのまま返す。中身を読み書きしない）。
-- 診断コード追加（`onDiagnostic`）: `auth-rejected`（warn・null 返却）/ `auth-error`（error・hook の throw）。Cookie 等の値は載せない。
+- 診断コード追加（`onDiagnostic`）: `auth-rejected`（warn・null 返却）/ `auth-error`（error・hook の throw。**hook の error message は載せず種別＝`Error.name` のみ**＝Cookie/トークン/DB 資格情報の混入を防ぐ・Codex P2）。`onDiagnostic` 未指定時は種別のみ console.error。
+- 認証待ち（`authenticate` の await 中）の raw socket はサーバーが追跡し、`stop()` で明示破棄する（hook が settle しない＋peer が接続を保つ場合に `server.close` が待ち続けるのを防ぐ・Codex P2）。
 
 ## 3. fail-fast 条件（`serve()` の reject）
 
@@ -68,7 +71,7 @@ interface ServerInstance { …既存; submit(operation: ServeSetCellsInput, opti
 ## 4. 内部設計の要点（実装者判断・DD ログへ転記）
 
 1. **初期文書は document@0**（revision 0・cell `lastChangedRevision` 0・oplog 空）として保持し、ストアがあれば **snapshot@0 を durable 化してから listen** する。再起動は snapshot@0 ＋ tail で復旧（oplog は消費者の操作だけを含む＝「操作ログを汚さない」）。
-2. **bootstrap 経路の拡張**（protocol 挙動・server/collab 両側）: 従来「frontier 0 ＝ 空文書」を前提に fresh join は bootstrap を送らなかった。初期文書があると frontier 0 でも非空になるため、**fresh join は文書が非空なら bootstrap@0 を送り、クライアントは committed 0 かつ未 bootstrap のとき受理**する。空文書の挙動は不変（既存テスト維持）。
+2. **bootstrap 経路の拡張**（protocol 挙動・server/collab 両側）: 従来「frontier 0 ＝ 空文書」を前提に fresh join は bootstrap を送らなかった。初期文書があると frontier 0 でも非空になるため、**fresh join は文書が非空なら bootstrap@0 を送り、クライアントは committed 0 かつ「この接続で未 bootstrap」のとき受理**する（同一接続内の重複は無視・**接続ごとに受け直す**＝in-memory server の再起動で初期文書が変わっても revision が等しく diverged 検出が効かないため、Codex P1）。空文書の挙動は不変（既存テスト維持）。
 3. **persisted snapshot format v2**: checksum の正準化を**深いキー順ソート**へ変更する。理由: Postgres `jsonb` はキー順を保持しないため、v1（挿入順 `JSON.stringify`）では consumer の snapshot が再起動時に必ず「checksum 不一致」で fail-fast する。v1 ファイルは旧算法で検証し読める（既存 dev 永続化ディレクトリを壊さない）。
 4. **`recoverSequencerState` の「復旧あり」判定**は `totalOps > 0 || snapshot あり`（snapshot@0 のみの状態＝初期文書起動直後の再起動を fresh と誤判定しない）。
 5. **identity 上書き**は RoomBridge（transport 層）で行う: 接続ごとに `ServeIdentity` を保持し、`submitOperation.envelope.actorId`・`presence.payload.userId/displayName` を書き換えてから Room へ渡す。`authenticate` 未指定なら従来どおり申告値（trusted internal）。

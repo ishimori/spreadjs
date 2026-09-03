@@ -30,6 +30,7 @@ import type {
   ClientMessageExceptJoin,
   ClientOperationEnvelope,
   JoinMessage,
+  SetCellsOperation,
 } from '@nanairo-sheet/core';
 import {
   FileOpLogStore,
@@ -482,6 +483,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
   const wss = new WebSocketServer({ noServer: true });
   const authenticate = options.authenticate;
+  // 認証待ち（await 中）の raw socket。wss にも RoomBridge にも未登録のため、stop() で明示 destroy しないと server.close が
+  // 待ち続ける（hook が settle しない＋peer が接続を保つ場合・Codex P2）。
+  const pendingAuthSockets = new Set<Duplex>();
   const acceptUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer, identity: ServeIdentity | undefined): void => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       bridge.onConnect(ws, identity);
@@ -498,11 +502,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       return;
     }
     // DD-026-2: 認証（非同期）を待つ間、raw socket の error を listener 無しで放置しない（uncaught 化でプロセスを落とさない）。
-    // ws は handleUpgrade 以降しか listener を持たないため、この層で受ける。受理時は ws の listener に引き継ぐ。
+    // ws は handleUpgrade 以降しか listener を持たないため、この層で受ける。受理時は ws の listener に引き継ぐ（拒否時は
+    // 応答を書いて destroy するまで本 listener を残す）。
     const onSocketError = (): void => {};
     socket.on('error', onSocketError);
+    pendingAuthSockets.add(socket);
     void runAuthenticate(authenticate, req)
       .then((identity) => {
+        pendingAuthSockets.delete(socket);
+        if (socket.destroyed) {
+          return; // await 中に peer が切断 or stop() が破棄済み
+        }
         if (identity === null) {
           diagnostics?.('warn', 'auth-rejected', 'websocket upgrade rejected (401): authenticate returned null');
           rejectUpgrade(socket, 401, 'Unauthorized');
@@ -512,9 +522,19 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
         acceptUpgrade(req, socket, head, identity);
       })
       .catch((error: unknown) => {
-        // hook の失敗は通さない（500 で拒否）。原因は診断へ（値・ヘッダは載せない）。
-        diagnostics?.('error', 'auth-error', `websocket upgrade rejected (500): authenticate failed: ${errorMessage(error)}`);
-        rejectUpgrade(socket, 500, 'Internal Server Error');
+        pendingAuthSockets.delete(socket);
+        // hook の失敗は通さない（500 で拒否）。hook の error message は Cookie/トークン/DB 資格情報を含み得るため診断へ載せず、
+        // 種別（Error.name）だけを出す（Codex P2）。詳細は hook 側で記録する。onDiagnostic 未指定時も黙らせない（P08）。
+        const kind = error instanceof Error ? error.name : typeof error;
+        const summary = `websocket upgrade rejected (500): authenticate threw ${kind}（詳細は hook 側で記録すること）`;
+        if (diagnostics !== undefined) {
+          diagnostics('error', 'auth-error', summary);
+        } else {
+          console.error(`collaboration-server: ${summary}`);
+        }
+        if (!socket.destroyed) {
+          rejectUpgrade(socket, 500, 'Internal Server Error');
+        }
       });
   });
 
@@ -537,6 +557,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (operation.changes.length === 0) {
       return Promise.reject(new Error('submit: changes が空です（SetCells は 1 件以上）'));
     }
+    let lifted: SetCellsOperation;
+    try {
+      lifted = liftSetCellsInput(operation); // 値検証（有限数・正準 LocalDate）は同期 throw → reject へ写す
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
     const operationId = createOperationId(randomUUID());
     const envelope: ClientOperationEnvelope = {
       protocolVersion: PROTOCOL_VERSION,
@@ -547,7 +573,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       clientId: SERVER_CLIENT_ID,
       clientSequence: (sequencer.clientSequenceTable.get(SERVER_CLIENT_ID) ?? 0) + 1,
       baseRevision: sequencer.currentRevision,
-      operation: liftSetCellsInput(operation),
+      operation: lifted,
     };
     return bridge.submitFromServer(envelope);
   };
@@ -564,7 +590,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     submit,
     close: () => {
       closed = true;
-      return closeServer(server, wss, sweepTimer, persistentRoom);
+      return closeServer(server, wss, sweepTimer, persistentRoom, pendingAuthSockets);
     },
   };
 }
@@ -642,12 +668,19 @@ async function closeServer(
   wss: WebSocketServer | undefined,
   sweepTimer: ReturnType<typeof setInterval> | undefined,
   persistentRoom?: PersistentRoom,
+  pendingAuthSockets?: Set<Duplex>,
 ): Promise<void> {
   if (sweepTimer !== undefined) {
     clearInterval(sweepTimer);
   }
   if (persistentRoom !== undefined) {
     await persistentRoom.close(); // 保留中の durable 書込を確定して oplog/snapshot ハンドルを閉じる
+  }
+  if (pendingAuthSockets !== undefined) {
+    for (const socket of pendingAuthSockets) {
+      socket.destroy(); // 認証待ちの raw socket は wss 管理外＝明示破棄しないと server.close が待ち続ける（Codex P2）
+    }
+    pendingAuthSockets.clear();
   }
   if (wss !== undefined) {
     for (const client of wss.clients) {

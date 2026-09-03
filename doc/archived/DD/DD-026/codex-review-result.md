@@ -1,0 +1,18 @@
+The patch introduces reproducible durable-frontier corruption and client/server non-convergence paths, plus authentication lifecycle and diagnostic issues. These affect supported public APIs under realistic concurrent, restart, numeric-input, and shutdown scenarios.
+
+Full review comments:
+
+- [P1] Serialize injected oplog appends before advancing the frontier — C:\repo\spreadjs\packages\server-hono\src\serve-adapters.ts:39-39
+  In a single process, two concurrent `submit()` calls—or a client operation overlapping a server submission—can invoke this adapter again before the previous `append` resolves. Independent database transactions may therefore commit revision 3 before revision 2; I reproduced the second submission resolving as accepted and the durable snapshot reporting revision 3 while the store contained only revisions `[1, 3]`. If revision 2 then fails or the process crashes, an acknowledged state cannot recover. Queue injected appends in invocation order and fail-stop subsequent entries after an error.
+
+- [P1] Reject non-finite cell numbers before applying them — C:\repo\spreadjs\packages\server-hono\src\serve-adapters.ts:124-125
+  A type-valid `number` can be `NaN` or `±Infinity`, and this branch installs it directly into the authoritative document for both `initialDocument` and `ServerInstance.submit`. Actual WebSocket and snapshot JSON serialization converts these values to `null`; with `NaN` in `initialDocument`, I observed the TCP client's committed hash differ from the server immediately after bootstrap, while restart also silently changes the persisted value. Validate `Number.isFinite` before applying and reject the submission/startup appropriately.
+
+- [P1] Revalidate bootstrap@0 after reconnecting — C:\repo\spreadjs\packages\collab\src\session.ts:475-477
+  If a long-lived client receives initial document A at revision 0, then reconnects over TCP after an in-memory server restart whose `initialDocument` now yields B under the same document ID, `_bootstrapRevision` remains `0` and this condition discards the new authoritative bootstrap. I reproduced the connection succeeding while the client retained A and the server held B; equal revisions also prevent the divergence check from firing. Track bootstrap acceptance per connection, or compare same-revision documents and adopt the new authority or report divergence.
+
+- [P2] Sanitize authentication failures before emitting diagnostics — C:\repo\spreadjs\packages\server-hono\src\server.ts:516-516
+  When `authenticate` throws an error containing a JWT, cookie, or database credential, `errorMessage(error)` forwards that text verbatim to `onDiagnostic`, contradicting the contract that token and cookie values are not included. This is reachable from a normal rejected WebSocket upgrade, for example with `throw new Error('token=' + cookie)`. Emit a generic message or explicitly sanitized metadata instead of the hook's arbitrary error text.
+
+- [P2] Close pending authentication sockets during shutdown — C:\repo\spreadjs\packages\server-hono\src\server.ts:503-504
+  While an asynchronous `authenticate` is pending, the raw TCP socket is not registered with `wss` or tracked elsewhere. If the hook stalls and the peer keeps the socket open, `stop()` closes `wss` and then waits indefinitely in `server.close`; this is reproducible with a never-settling hook and an open WebSocket upgrade. Track pending upgrade sockets and destroy them during shutdown, optionally adding cancellation or a timeout, and remove their temporary listeners when settled.

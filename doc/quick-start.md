@@ -117,12 +117,16 @@ if (result.status === 'rejected') {
 ```
 
 - **durable ACK**: `append` が resolve するまでクライアントに ACK は出ない。`append` が reject（投影失敗）した操作は受理されず、
-  以降の書込は停止する（fail-stop・接続は切断される）。復旧は再起動（snapshot＋tail）。
+  以降の書込は停止する（fail-stop・接続は切断される）。復旧は再起動（snapshot＋tail）。**SDK は `append` を直列に呼ぶ**（前の呼び出しが
+  resolve するまで次を呼ばない）ので、トランザクションは revision 順に commit できる。渡される `entries` は複製（変更しても SDK 内部に影響しない）。
 - **初期文書**: `initialDocument` の結果は document@0（revision 0）。ストア指定時は snapshot@0 を保存してから listen する。
-  行 ID の重複・`columnOrder` 外の列は起動時エラー。
+  行 ID の重複・`columnOrder` 外の列は起動時エラー。**セル値は number が有限数のみ・date が正準 `YYYY-MM-DD`（実在日）のみ**
+  （NaN/Infinity・`2026/9/3` は起動時エラー／`submit` では reject。JSON で null になる値は共同編集の収束を壊すため）。
 - **身元**: `authenticate` 指定時、クライアント申告の `actorId`/`displayName` は無視され、受理 envelope の `actorId` と presence の表示名は
   認証結果になる。`clientId` は再接続の同一性のため申告のまま（trusted internal の境界＝別ユーザーの `clientId` 乗っ取りは防がない）。
   Cookie はポートを区別しないため、同期サーバーは API と同一ホスト（本番は同一オリジンのリバースプロキシ配下）に置く。
+  hook が throw したときの診断（`auth-error`）には **error message を載せない**（Cookie/トークンの混入防止・種別のみ）。詳細は hook 側で記録する。
+  ブラウザーの WebSocket は 401 を判別できない（`close 1006`＝grid は `connect-failed` を通知）ため、認証状態は mount 前に自 API で確認する。
 - **無限ループ防止**: `submit` の envelope は `clientId: 'server'`（予約語）・`actorId` は指定値。`append` で投影→再評価する利用側は、
   この `actorId`/`clientId` を見て再評価を抑止する（SDK 側は関知しない）。
 - **Undo**: サーバー起点の操作は利用者の Undo 対象にならない（Undo は自クライアントの操作のみ）。

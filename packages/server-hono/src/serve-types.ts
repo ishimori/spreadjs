@@ -5,7 +5,10 @@
 
 // ---- 値・操作・envelope（wire 形式の公開ミラー）----
 
-/** セル値（計画書 §6.4 の PoC サブセット）。date は LocalDate `YYYY-MM-DD`（ADR-0012）。 */
+/**
+ * セル値（計画書 §6.4 の PoC サブセット）。number は**有限数のみ**（NaN/±Infinity は JSON で null になり収束を壊すため
+ * 起動/submit 時エラー）。date は**正準 LocalDate** `YYYY-MM-DD`（実在暦日・ADR-0012）のみ（`2026/9/3` 等は事前に正準化すること）。
+ */
 export type ServeCellScalar =
   | { readonly kind: 'blank' }
   | { readonly kind: 'string'; readonly value: string }
@@ -76,6 +79,9 @@ export interface ServeOpLogReadResult {
  * append-only operation log ストア（consumer 実装・例: Postgres）。
  * - `append` は**解決した時点で durable** であることが契約（ACK はその後に出る）。consumer が業務表への投影を同じ
  *   トランザクションへ入れれば「操作ログと業務表が常に一致」する。reject（例外）は当該 op を破棄し以降の書込を停止する。
+ * - SDK は `append` を**直列に呼ぶ**（前の呼び出しが解決するまで次を呼ばない＝revision 順に commit できる）。1 度 reject
+ *   すると以降の `append` は SDK 側で呼ばずに reject する（fail-stop・欠番を作らない）。渡される `entries` は複製で、
+ *   consumer が変更しても SDK の内部状態に影響しない。
  * - `readAll` は revision 昇順・1..N 連番で返す（連番違反は起動時 fail-fast）。
  */
 export interface ServeOpLogStore {

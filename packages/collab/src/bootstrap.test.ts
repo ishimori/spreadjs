@@ -188,9 +188,24 @@ describe('初期文書 document@0 の bootstrap@0（DD-026-1）', () => {
     expect(h.session.bootstrapRevision).toBe(0);
     expect(h.session.isOnline).toBe(true);
 
-    // 再接続などで届く重複 bootstrap@0 は無視する（committed は不変）。
+    // 同一接続内の重複 bootstrap@0 は無視する（committed は不変）。
     const other = applyOperation(createDocument([...COLUMNS]), insertRows(null, ['row-X']), { revision: 0 }).document;
     h.transport.receive(bootstrap(serializeDocument(other), 0));
+    expect(h.session.committedDocument.rowOrder.map(String)).toEqual(['row-1']);
+
+    // 再接続後の bootstrap@0 は受け直す（Codex P1: in-memory server の再起動で初期文書が変わっても revision が等しく diverged
+    // 検出が効かないため、接続ごとに server の権威 document@0 へ追従する）。
+    h.transport.drop();
+    h.transport.reconnect();
+    h.transport.receive(welcome(0));
+    h.transport.receive(bootstrap(serializeDocument(other), 0));
+    expect(h.session.committedDocument.rowOrder.map(String)).toEqual(['row-X']);
+    expect(h.session.committedDocument.revision).toBe(0);
+    // 戻して以後の op 適用を確認する。
+    h.transport.drop();
+    h.transport.reconnect();
+    h.transport.receive(welcome(0));
+    h.transport.receive(bootstrap(serializeDocument(initial), 0));
     expect(h.session.committedDocument.rowOrder.map(String)).toEqual(['row-1']);
 
     h.transport.receive(

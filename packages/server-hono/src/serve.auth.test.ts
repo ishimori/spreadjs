@@ -7,7 +7,7 @@ import { col, row, setCells, str } from '@nanairo-sheet/collab/test-support';
 
 import { serve } from './index';
 import type { ServeAuthenticate, ServeDiagnostic } from './index';
-import { MemoryServeOpLog, MemoryServeSnapshots, createSessionClient, waitFor } from './test-support';
+import { MemoryServeOpLog, MemoryServeSnapshots, createSessionClient, delay, waitFor } from './test-support';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -26,7 +26,7 @@ const authenticate: ServeAuthenticate = (request) => {
     return Promise.resolve({ actorId: 'u-bob', displayName: 'Bob' });
   }
   if (cookie === 'token=boom') {
-    throw new Error('boom');
+    throw new Error(`boom: ${String(cookie)}`); // hook の error message に秘密（Cookie）が混ざる最悪ケースを模す
   }
   return null;
 };
@@ -92,8 +92,10 @@ describe('serve() 認証フック（U2・DD-026-2）', () => {
     cleanups.push(() => server.stop());
     const wsUrl = `ws://127.0.0.1:${server.port}/ws`;
     expect(await rawUpgrade(wsUrl, { cookie: 'token=boom' })).toBe(500);
-    expect(diagnostics.filter((d) => d.code === 'auth-error' && d.level === 'error')).toHaveLength(1);
-    expect(diagnostics.some((d) => d.message.includes('token='))).toBe(false); // 値は診断に載せない
+    const authError = diagnostics.filter((d) => d.code === 'auth-error' && d.level === 'error');
+    expect(authError).toHaveLength(1);
+    expect(authError[0].message).toContain('Error'); // 種別（Error.name）だけを載せる
+    expect(diagnostics.some((d) => d.message.includes('token=') || d.message.includes('boom'))).toBe(false); // hook の message は載せない（Codex P2）
 
     const ok = createSessionClient(wsUrl, { clientId: 'client-ok', headers: { cookie: 'token=bob' } });
     cleanups.push(() => ok.transport.close());
@@ -111,5 +113,20 @@ describe('serve() 認証フック（U2・DD-026-2）', () => {
     a.session.submitLocalOperation(setCells([{ rowId: row('row-1'), columnId: col('col-a'), value: str('v') }]));
     await waitFor(() => a.session.pendingCount === 0, 'acked');
     expect(oplog.entries[1].actorId).toBe('declared-user');
+  });
+});
+
+describe('serve() 認証フック — Codex xhigh 指摘の回帰固定（DD-026-2）', () => {
+  it('A5: authenticate が settle しないまま stop() しても、認証待ち socket を破棄して停止できる（Codex P2）', async () => {
+    const server = await serve({ port: 0, seedRows: 1, authenticate: () => new Promise(() => {}) });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    ws.on('error', () => {}); // 破棄由来の error を吸収
+    const closed = new Promise<void>((resolve) => {
+      ws.on('close', () => resolve());
+    });
+    await delay(60); // upgrade 要求がサーバーに届き authenticate が pending になる余地
+    const outcome = await Promise.race([server.stop().then(() => 'stopped' as const), delay(3_000).then(() => 'timeout' as const)]);
+    expect(outcome).toBe('stopped');
+    await closed;
   });
 });

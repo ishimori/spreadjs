@@ -2,7 +2,7 @@
 // 公開→内部は brand ファクトリ（createRowId 等）で組み直す（ダブルキャスト不使用・coding-standards P19）。
 // 内部→公開は構造的に代入可能（brand 付き string → string・readonly 化）ゆえ変換不要。
 
-import { applyOperation, createDocument } from '@nanairo-sheet/core';
+import { applyOperation, createDocument, parseCellInput } from '@nanairo-sheet/core';
 import type {
   CellScalar,
   DocumentOperation,
@@ -33,10 +33,42 @@ import type {
   ServeSnapshotStore,
 } from './serve-types';
 
-/** consumer の oplog ストアを内部 OpLogStore へ包む（readAll の公開 envelope を brand 付き内部形へ持ち上げる）。 */
+/**
+ * consumer の oplog ストアを内部 OpLogStore へ包む（readAll の公開 envelope を brand 付き内部形へ持ち上げる）。
+ * - **直列化＋fail-stop（Codex P1）**: PersistentRoom は accepted op ごとに append を呼び、前の append の解決を待たない
+ *   （ファイル実装は内部 queue で順序と group commit を担う）。consumer 実装（独立トランザクション）へ並行に渡すと revision 3 が
+ *   2 より先に commit し得て、2 の失敗/クラッシュで ACK 済み 3 が欠番になる（復旧不能）。adapter が呼び出し順の FIFO で
+ *   1 件ずつ待ち、1 度でも失敗したら以降を全て reject する（FileOpLogStore の fail-stop と同じ契約）。
+ * - entries は複製して渡す（consumer が受け取ったオブジェクトを変更しても Sequencer の operationLog を汚さない）。
+ */
 export function adaptOpLogStore(store: ServeOpLogStore): OpLogStore {
+  let queue: Promise<void> = Promise.resolve();
+  let failure: unknown;
+  const failStop = (): Error =>
+    new Error(`serve: oplog fail-stop（先行 append の durable 書込が失敗済み）: ${errorMessage(failure)}`);
   return {
-    append: (entries) => store.append(entries),
+    append: (entries) => {
+      if (failure !== undefined) {
+        return Promise.reject(failStop());
+      }
+      const copies: ServeOperationEnvelope[] = structuredClone([...entries]);
+      const run = queue.then(async () => {
+        if (failure !== undefined) {
+          throw failStop(); // 直前の append が失敗＝この op を durable 化しない（欠番を作らない）
+        }
+        try {
+          await store.append(copies);
+        } catch (error) {
+          failure = error;
+          throw error;
+        }
+      });
+      queue = run.then(
+        () => undefined,
+        () => undefined, // 失敗しても FIFO は生かす（後続は上の failure 検査で reject される）
+      );
+      return run;
+    },
     readAll: async () => {
       const result = await store.readAll();
       return {
@@ -115,19 +147,42 @@ function liftSetCellsChange(change: ServeSetCellsChange): SetCellsChange {
   };
 }
 
+/**
+ * 公開セル値を内部 CellScalar へ（実行時検証つき・fail-fast）。
+ * - number は有限数のみ（Codex P1: NaN/±Infinity は JSON で null になり、wire/snapshot と権威文書の hash がずれる＝非収束・
+ *   再起動で値が変わる）。
+ * - date は正準 LocalDate（`YYYY-MM-DD`・実在暦日・ADR-0012）のみ。parseCellInput の正準化結果と一致するかで判定する。
+ */
 export function liftCellScalar(value: ServeCellScalar): CellScalar {
   switch (value.kind) {
     case 'blank':
       return { kind: 'blank' };
     case 'string':
+      if (typeof value.value !== 'string') {
+        throw new Error(`serve: string セルの value が文字列ではありません: ${JSON.stringify(value)}`);
+      }
       return { kind: 'string', value: value.value };
     case 'number':
+      if (typeof value.value !== 'number' || !Number.isFinite(value.value)) {
+        throw new Error(`serve: number セルの value は有限数のみです（NaN/Infinity 不可）: ${JSON.stringify(value)}`);
+      }
       return { kind: 'number', value: value.value };
-    case 'date':
-      return { kind: 'date', value: value.value };
+    case 'date': {
+      const parsed = typeof value.value === 'string' ? parseCellInput(value.value) : undefined;
+      if (parsed === undefined || parsed.kind !== 'date' || parsed.value !== value.value) {
+        throw new Error(
+          `serve: date セルの value は正準 LocalDate（YYYY-MM-DD・実在日）のみです: ${JSON.stringify(value)}`,
+        );
+      }
+      return { kind: 'date', value: parsed.value };
+    }
     default:
       return unknownCellScalar(value);
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

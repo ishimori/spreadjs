@@ -184,6 +184,7 @@ export class ClientSession implements TransportListener {
   private awaitingBootstrap = false; // fresh join（committed.revision=0）で snapshot bootstrap を待つ（P1-6/P1-7）
   private reconcileInfo: ReconcileInfo | undefined = undefined; // 再接続 reconcile（committed が権威化してから適用＝Codex P1-2）
   private welcomeSeen = false; // この接続で welcome を受信済み（reorder で bootstrap 先着時に buffer するか判定・Codex P1-c）
+  private bootstrapAcceptedOnConnection = false; // この接続で bootstrap を受理済み（bootstrap@0 の受理判定・DD-026-1 Codex P1）
   private bufferedBootstrap: BootstrapMessage | undefined = undefined; // welcome より先着した bootstrap（reconcile 情報を待って処理・P1-c）
   private knownServerRevision: number | undefined = undefined;
   private _appliedServerOpCount = 0; // committed へ適用したサーバー op 総数（AC1/AC8 の「全 replay 非依存」計測用）
@@ -301,6 +302,7 @@ export class ClientSession implements TransportListener {
     this.reconcileInfo = undefined; // 前接続の未適用 reconcile は破棄（この join の welcome.reconcile を正とする）
     this.welcomeSeen = false; // この接続の welcome をまだ受けていない（bootstrap 先着なら buffer・P1-c）
     this.bufferedBootstrap = undefined;
+    this.bootstrapAcceptedOnConnection = false; // 接続ごとに bootstrap@0 を受け直せる（server 再起動で初期文書が変わっても権威へ追従）
     this.sendJoin();
     this.emitConnection(); // online へ遷移（stopped 中は stopped が優先＝emitConnection が判定）
   }
@@ -461,8 +463,9 @@ export class ClientSession implements TransportListener {
   /**
    * snapshot bootstrap（§8 既知制約回収・P1-6/P1-7）: 全 operationLog を replay せず document@revision から committed を確立する。
    * fresh join（committed.revision=0）でのみ前進する。deserialize は core の共有関数（server serialize と wire 一致）。
-   * 初期文書（DD-026-1）: server は非空 document@0 への fresh join にも bootstrap@0 を送る。committed 0 かつ未 bootstrap のとき
-   * だけ受理して空文書を初期文書へ差し替え、以後の重複 bootstrap@0（再接続）は従来どおり無視する。
+   * 初期文書（DD-026-1）: server は非空 document@0 への fresh join にも bootstrap@0 を送る。committed 0 かつ**この接続で未 bootstrap**
+   * のとき受理して committed@0 を server の権威 document@0 へ差し替える（同一接続内の重複は無視）。接続ごとに受け直すのは、
+   * in-memory server の再起動で初期文書が変わった場合に revision が等しく diverged 検出が効かないため（Codex P1）。
    */
   private handleBootstrap(message: BootstrapMessage): void {
     // reorder で welcome より先着した bootstrap は buffer する（Codex P1-c）: reconcile 情報（welcome.reconcile）が無いまま
@@ -472,11 +475,12 @@ export class ClientSession implements TransportListener {
       return;
     }
     const acceptsInitialAtZero =
-      message.revision === 0 && this.committed.revision === 0 && this._bootstrapRevision === undefined;
+      message.revision === 0 && this.committed.revision === 0 && !this.bootstrapAcceptedOnConnection;
     if (message.revision <= this.committed.revision && !acceptsInitialAtZero) {
       this.awaitingBootstrap = false;
       return; // 既に同等以上（reconnect は tail 経路・二重 bootstrap を無視）
     }
+    this.bootstrapAcceptedOnConnection = true;
     this.committed = deserializeDocument(message.document); // committed.revision = message.document.revision (= R)
     this.expectedRevision = this.committed.revision + 1;
     this._bootstrapRevision = message.revision;

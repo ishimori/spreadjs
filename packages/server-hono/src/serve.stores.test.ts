@@ -224,3 +224,66 @@ describe('serve() ストア注入（U1・DD-026-1）', () => {
     ).rejects.toThrow(/columnOrder/);
   });
 });
+
+describe('serve() ストア注入 — Codex xhigh 指摘の回帰固定（DD-026-1）', () => {
+  it('S9: 並行 append でも consumer ストアは呼び出し順に 1 件ずつ呼ばれ、失敗後は以降が reject される（fail-stop・Codex P1）', async () => {
+    const calls: number[][] = [];
+    let active = 0;
+    let maxActive = 0;
+    class RecordingOpLog extends MemoryServeOpLog {
+      override async append(entries: readonly import('./index').ServeOperationEnvelope[]): Promise<void> {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        calls.push(entries.map((e) => e.revision));
+        try {
+          if (calls.length === 2) {
+            await delay(80); // 2 件目（最初の submit）だけ遅い＝直列化が無ければ 3 件目が先に完了する
+          }
+          await super.append(entries);
+        } finally {
+          active -= 1;
+        }
+      }
+    }
+    const oplog = new RecordingOpLog();
+    const server = await serve({ port: 0, seedRows: 1, oplog, snapshotStore: new MemoryServeSnapshots() });
+    cleanups.push(() => server.stop());
+    const change = (value: string) => ({ type: 'setCells' as const, changes: [{ rowId: 'row-1', columnId: 'col-a', value: { kind: 'string' as const, value } }] });
+    const [r2, r3] = await Promise.all([server.submit(change('a'), { actorId: 'system' }), server.submit(change('b'), { actorId: 'system' })]);
+    expect(r2.status).toBe('accepted');
+    expect(r3.status).toBe('accepted');
+    expect(maxActive).toBe(1); // 並行に呼ばれない
+    expect(calls).toEqual([[1], [2], [3]]); // 呼び出し順＝revision 順
+    expect(oplog.entries.map((e) => e.revision)).toEqual([1, 2, 3]);
+
+    // fail-stop: 4 件目が失敗 → 同時に投入した 5 件目はストアを呼ばずに reject。以後は PersistentRoom も poisoned。
+    oplog.failNext = true;
+    const [p4, p5] = await Promise.allSettled([server.submit(change('c'), { actorId: 'system' }), server.submit(change('d'), { actorId: 'system' })]);
+    expect(p4.status).toBe('rejected');
+    expect(p5.status).toBe('rejected');
+    if (p4.status === 'rejected' && p5.status === 'rejected') {
+      expect(String(p4.reason)).toMatch(/append failed/);
+      expect(String(p5.reason)).toMatch(/fail-stop/);
+    }
+    expect(calls).toHaveLength(4); // 5 件目はストアに届かない
+    expect(oplog.entries.map((e) => e.revision)).toEqual([1, 2, 3]); // 欠番の revision がストアへ書かれない
+    await expect(server.submit(change('e'), { actorId: 'system' })).rejects.toThrow(/poisoned/);
+  });
+
+  it('S10: 非有限 number・非正準 date は initialDocument の起動エラー／submit の reject（Codex P1・収束を壊す値を入れない）', async () => {
+    await expect(
+      serve({ port: 0, initialDocument: () => ({ rows: [{ rowId: 'x', cells: { 'col-a': { kind: 'number', value: Number.NaN } } }] }) }),
+    ).rejects.toThrow(/有限数/);
+    await expect(
+      serve({ port: 0, initialDocument: () => ({ rows: [{ rowId: 'x', cells: { 'col-a': { kind: 'date', value: '2026/09/03' } } }] }) }),
+    ).rejects.toThrow(/LocalDate/);
+    const server = await serve({ port: 0, seedRows: 1 });
+    cleanups.push(() => server.stop());
+    const cell = (value: import('./index').ServeCellScalar) => ({ type: 'setCells' as const, changes: [{ rowId: 'row-1', columnId: 'col-a', value }] });
+    await expect(server.submit(cell({ kind: 'number', value: Number.POSITIVE_INFINITY }), { actorId: 'system' })).rejects.toThrow(/有限数/);
+    await expect(server.submit(cell({ kind: 'date', value: '2026-02-30' }), { actorId: 'system' })).rejects.toThrow(/LocalDate/);
+    await expect(server.submit(cell({ kind: 'date', value: '2026-9-3' }), { actorId: 'system' })).rejects.toThrow(/LocalDate/);
+    const ok = await server.submit(cell({ kind: 'date', value: '2026-09-03' }), { actorId: 'system' });
+    expect(ok.status).toBe('accepted');
+  });
+});
