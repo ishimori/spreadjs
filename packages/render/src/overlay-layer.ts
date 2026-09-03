@@ -4,6 +4,8 @@
 //
 // 固定行列をまたぐ範囲（選択・Presence）は 4 象限 pane ごとに分割し、各 pane の clip 内で描く
 // （固定側始点とスクロール側終点を単一矩形で結ぶと横スクロールで幅が負になり表示が消えるため。Codex 指摘）。
+// **単一セルの描画（Presence の activeCell 枠・名前タグ）も同じ経路を通す**。content 全域を 1 枚で clip
+// すると、固定帯の裏へ回った他者のセルが固定ペインの上へ描かれる（DD-041。DD-039 と同根）。
 // Canvas API 依存の描画アダプタ。単体検証は座標側（viewport）と RenderScheduler の振り分けで担保する。
 
 import type { FrameViewport } from './base-layer';
@@ -82,7 +84,9 @@ function rangePiecesAcrossPanes(transform: ViewportTransform, range: CellRange):
 }
 
 export function createOverlayLayer(deps: OverlayLayerDeps): OverlayLayer {
-  const { ctx, headerWidth, headerHeight } = deps;
+  // headerWidth/headerHeight は DD-041 で未使用になった（clip は全て pane 側が持つ）が、
+  // 公開 deps の形は base-layer と揃えたまま保つ（.d.ts 契約を壊さない）。
+  const { ctx } = deps;
   const colors = deps.colors ?? DEFAULT_OVERLAY_COLORS;
 
   const withClip = (clip: CellRect, draw: () => void): void => {
@@ -96,13 +100,6 @@ export function createOverlayLayer(deps: OverlayLayerDeps): OverlayLayer {
     draw();
     ctx.restore();
   };
-
-  const contentClip = (frame: OverlayFrame): CellRect => ({
-    x: headerWidth,
-    y: headerHeight,
-    width: Math.max(0, frame.viewportWidth - headerWidth),
-    height: Math.max(0, frame.viewportHeight - headerHeight),
-  });
 
   const drawSelection = (frame: OverlayFrame): void => {
     if (frame.selection === null) {
@@ -145,7 +142,6 @@ export function createOverlayLayer(deps: OverlayLayerDeps): OverlayLayer {
   };
 
   const drawPresence = (frame: OverlayFrame): void => {
-    const clip = contentClip(frame);
     for (const user of frame.presences) {
       const color = PRESENCE_PALETTE[user.colorKey % PRESENCE_PALETTE.length] ?? '#888';
       // 選択範囲の淡いハイライト（pane 分割）。
@@ -163,29 +159,40 @@ export function createOverlayLayer(deps: OverlayLayerDeps): OverlayLayer {
           ctx.globalAlpha = 1;
         });
       }
-      // activeCell 枠＋名前タグ（単一セルは 1 pane 内。content 領域でクリップ）。
-      withClip(clip, () => {
-        const active = frame.transform.cellRect(user.activeRow, user.activeCol);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = Math.max(2 * deviceLineWidth(frame.dpr), 1.5);
-        ctx.strokeRect(
-          snapToDevice(active.x, frame.dpr),
-          snapToDevice(active.y, frame.dpr),
-          active.width,
-          active.height,
-        );
-        ctx.textBaseline = 'bottom';
-        ctx.textAlign = 'left';
-        ctx.font = '11px system-ui, sans-serif';
-        const label = user.displayName;
-        const tagWidth = ctx.measureText(label).width + 8;
-        const tagHeight = 14;
-        const tagY = active.y - tagHeight;
-        ctx.fillStyle = color;
-        ctx.fillRect(active.x, tagY, tagWidth, tagHeight);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, active.x + 4, tagY + tagHeight - 2);
-      });
+      // activeCell 枠＋名前タグ。単一セルも「所属 pane と交差させて得た clip」で描く（DD-041）。
+      // content 全域の単一 clip だと、固定帯の裏へ回った他者のセル矩形が固定ペインの内側に落ち、
+      // 枠とタグが固定行列の上へ重なる（選択ハイライトと同じ経路に揃え、pane 判定を二重に持たない）。
+      // 半開区間なので単一セルは [r, r+1) × [c, c+1)。可視範囲外なら piece は 0 個＝何も描かない。
+      const activeRange: CellRange = {
+        rowStart: user.activeRow,
+        rowEnd: user.activeRow + 1,
+        colStart: user.activeCol,
+        colEnd: user.activeCol + 1,
+      };
+      for (const piece of rangePiecesAcrossPanes(frame.transform, activeRange)) {
+        const active = piece.rect;
+        withClip(piece.clip, () => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(2 * deviceLineWidth(frame.dpr), 1.5);
+          ctx.strokeRect(
+            snapToDevice(active.x, frame.dpr),
+            snapToDevice(active.y, frame.dpr),
+            active.width,
+            active.height,
+          );
+          ctx.textBaseline = 'bottom';
+          ctx.textAlign = 'left';
+          ctx.font = '11px system-ui, sans-serif';
+          const label = user.displayName;
+          const tagWidth = ctx.measureText(label).width + 8;
+          const tagHeight = 14;
+          const tagY = active.y - tagHeight;
+          ctx.fillStyle = color;
+          ctx.fillRect(active.x, tagY, tagWidth, tagHeight);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(label, active.x + 4, tagY + tagHeight - 2);
+        });
+      }
     }
   };
 

@@ -477,6 +477,11 @@ export function evidencePath(fileName: string): string {
   return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-005/${fileName}`, import.meta.url));
 }
 
+/** DD-041 証跡（スクショ等）を保存する絶対パス（DD-005 と同じ理由で test-results/ 配下）。 */
+export function evidencePathDD041(fileName: string): string {
+  return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-041/${fileName}`, import.meta.url));
+}
+
 /** DD-015 証跡（スクショ等）を保存する絶対パス（DD-005 と同じ理由で test-results/ 配下）。 */
 export function evidencePathDD015(fileName: string): string {
   return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-015/${fileName}`, import.meta.url));
