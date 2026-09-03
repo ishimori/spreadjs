@@ -1,0 +1,312 @@
+{
+  "meta": {
+    "chromium": "149.0.7827.55",
+    "url": "http://localhost:5885/standalone.html?readonlycols=col-b&date=col-c",
+    "os": "Windows_NT 10.0.26200",
+    "ime": "OK unknown",
+    "method": "OS SendInput KEYEVENTF_SCANCODE (実IME 自動駆動・Claude 代行) — engineering-patterns #9 / DD-033 と同手法",
+    "startedAt": "2026-09-03T05:07:44.161Z",
+    "reach": {
+      "fg": "OK fg=True match=True",
+      "before": {
+        "row": 2,
+        "col": 0
+      },
+      "after": {
+        "row": 2,
+        "col": 1
+      },
+      "reached": true
+    },
+    "finishedAt": "2026-09-03T05:08:05.727Z"
+  },
+  "scenarios": {
+    "S1": {
+      "draftAfterRomaji": {
+        "isComposing": true,
+        "draft": "かき",
+        "activeCell": {
+          "row": 2,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r2",
+          "columnId": "col-a"
+        }
+      },
+      "afterSpace": {
+        "isComposing": true,
+        "draft": "夏季",
+        "activeCell": {
+          "row": 2,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r2",
+          "columnId": "col-a"
+        }
+      },
+      "afterImeConfirm": {
+        "isComposing": false,
+        "draft": "夏季",
+        "activeCell": {
+          "row": 2,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r2",
+          "columnId": "col-a"
+        }
+      },
+      "committedValue": "夏季",
+      "committedEqualsConverted": true,
+      "activeCellAfterArrow": {
+        "row": 4,
+        "col": 0
+      },
+      "editingAfterMove": null,
+      "cellCommitDelta": 1
+    },
+    "S2": {
+      "draftAfterRomaji": {
+        "isComposing": true,
+        "draft": "にほｎ",
+        "activeCell": {
+          "row": 3,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r3",
+          "columnId": "col-a"
+        }
+      },
+      "afterImeConfirm": {
+        "isComposing": false,
+        "draft": "にほｎ",
+        "activeCell": {
+          "row": 3,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r3",
+          "columnId": "col-a"
+        }
+      },
+      "committedValue": "にほｎ",
+      "cellCommitDelta": 1
+    },
+    "S3": {
+      "draftOnF2": "にほｎ",
+      "draftAfterHeadInsert": {
+        "isComposing": true,
+        "draft": "いいいにほｎ",
+        "activeCell": {
+          "row": 3,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r3",
+          "columnId": "col-a"
+        }
+      },
+      "committedValue": "いいいにほｎ",
+      "expected": "いいいにほん",
+      "pass": false,
+      "cellCommitDelta": 1
+    },
+    "S4": {
+      "firstDraft": {
+        "isComposing": true,
+        "draft": "ねこ",
+        "activeCell": {
+          "row": 4,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r4",
+          "columnId": "col-a"
+        }
+      },
+      "secondSnap": {
+        "isComposing": true,
+        "draft": "とり",
+        "activeCell": {
+          "row": 5,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r5",
+          "columnId": "col-a"
+        }
+      },
+      "committedFirst": "ねこ",
+      "committedSecond": "とり",
+      "noHeadLoss": true,
+      "cellCommitDelta": 2
+    },
+    "S5": {
+      "cellValueBefore": "A6",
+      "draftBeforeConvert": {
+        "isComposing": true,
+        "draft": "とり",
+        "activeCell": {
+          "row": 6,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r6",
+          "columnId": "col-a"
+        }
+      },
+      "converting": {
+        "isComposing": true,
+        "draft": "鳥",
+        "activeCell": {
+          "row": 6,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r6",
+          "columnId": "col-a"
+        }
+      },
+      "afterEsc1": {
+        "isComposing": true,
+        "draft": "とり",
+        "activeCell": {
+          "row": 6,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r6",
+          "columnId": "col-a"
+        }
+      },
+      "afterEsc2": {
+        "isComposing": false,
+        "draft": "",
+        "activeCell": {
+          "row": 6,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r6",
+          "columnId": "col-a"
+        }
+      },
+      "cellValueAfter": "A6",
+      "inputAfterCancel": {
+        "isComposing": true,
+        "draft": "あ",
+        "activeCell": {
+          "row": 6,
+          "col": 0
+        },
+        "editingTarget": {
+          "rowId": "r6",
+          "columnId": "col-a"
+        }
+      },
+      "cellCommitDelta": 0
+    }
+  },
+  "dd035": {
+    "R4": {
+      "readOnlyCell": {
+        "activeCell": {
+          "row": 2,
+          "col": 1
+        },
+        "textareaReadOnly": true
+      },
+      "afterRomaji": {
+        "isComposing": false,
+        "draft": "",
+        "activeCell": {
+          "row": 2,
+          "col": 1
+        },
+        "editingTarget": null
+      },
+      "keydownReached": 4,
+      "compositionEvents": 0,
+      "committedHashUnchanged": true,
+      "cellCommitDelta": 0,
+      "displayB2": "B2",
+      "neighborEditable": {
+        "activeCell": {
+          "row": 2,
+          "col": 0
+        },
+        "textareaReadOnly": false,
+        "draft": "かき",
+        "isComposing": true
+      },
+      "pass": true
+    },
+    "M1": {
+      "openedByF2": true,
+      "highlighted0": "2026-07-31",
+      "highlighted1": "2026-08-01",
+      "committedDate": "2026-08-01",
+      "keyboardPass": true,
+      "opened2": true,
+      "afterImeDuringCalendar": {
+        "dateOpen": false,
+        "isComposing": true,
+        "draft": "あ",
+        "activeCell": {
+          "row": 3,
+          "col": 2
+        },
+        "editingTarget": {
+          "rowId": "r3",
+          "columnId": "col-c"
+        }
+      },
+      "afterCancel": {
+        "dateOpen": false,
+        "isComposing": false,
+        "draft": "",
+        "activeCell": {
+          "row": 3,
+          "col": 2
+        },
+        "editingTarget": null
+      },
+      "committedR3": "",
+      "imeClosesCalendarPass": true,
+      "cellCommitDelta": 1
+    }
+  },
+  "imeEstablish": {
+    "established": true,
+    "attempts": 3,
+    "probe": {
+      "isComposing": true,
+      "draft": "あ",
+      "activeCell": {
+        "row": 2,
+        "col": 0
+      },
+      "editingTarget": {
+        "rowId": "r2",
+        "columnId": "col-a"
+      }
+    },
+    "afterCancel": {
+      "isComposing": false,
+      "draft": "",
+      "activeCell": {
+        "row": 2,
+        "col": 0
+      },
+      "editingTarget": null
+    }
+  },
+  "order": {
+    "sequence": [],
+    "B": 0,
+    "A": 0
+  }
+}

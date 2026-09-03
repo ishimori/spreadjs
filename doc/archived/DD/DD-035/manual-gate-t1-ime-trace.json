@@ -1,0 +1,804 @@
+[
+ {
+  "t": "keydown",
+  "key": "ArrowRight",
+  "isComposing": false,
+  "ts": 3767
+ },
+ {
+  "t": "keydown",
+  "key": "ArrowLeft",
+  "isComposing": false,
+  "ts": 3989
+ },
+ {
+  "t": "keydown",
+  "key": "a",
+  "isComposing": false,
+  "ts": 4254
+ },
+ {
+  "t": "input",
+  "isComposing": false,
+  "data": "a",
+  "ts": 4256
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 4659
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 4908
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 5522
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 5522
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "あ",
+  "ts": 5524
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 5919
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": null,
+  "ts": 5926
+ },
+ {
+  "t": "compositionend",
+  "data": "",
+  "ts": 5928
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 6174
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 6621
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 6621
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｋ",
+  "ts": 6622
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 6652
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "か",
+  "ts": 6666
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 6696
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "かｋ",
+  "ts": 6701
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 6729
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "かき",
+  "ts": 6734
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 7092
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "夏季",
+  "ts": 7127
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 7820
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "夏季",
+  "ts": 7823
+ },
+ {
+  "t": "compositionend",
+  "data": "夏季",
+  "ts": 7823
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 8148
+ },
+ {
+  "t": "keydown",
+  "key": "ArrowDown",
+  "isComposing": false,
+  "ts": 8534
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 8978
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 8978
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｎ",
+  "ts": 8979
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 9023
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "に",
+  "ts": 9029
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 9069
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "にｈ",
+  "ts": 9081
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 9101
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "にほ",
+  "ts": 9108
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 9143
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "にほｎ",
+  "ts": 9147
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 9482
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "にほｎ",
+  "ts": 9485
+ },
+ {
+  "t": "compositionend",
+  "data": "にほｎ",
+  "ts": 9485
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 9820
+ },
+ {
+  "t": "keydown",
+  "key": "F2",
+  "isComposing": false,
+  "ts": 10382
+ },
+ {
+  "t": "keydown",
+  "key": "Home",
+  "isComposing": false,
+  "ts": 10713
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 10961
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 10961
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "い",
+  "ts": 10962
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 10990
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "いい",
+  "ts": 10992
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 11036
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "いいい",
+  "ts": 11038
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 11397
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "いいい",
+  "ts": 11400
+ },
+ {
+  "t": "compositionend",
+  "data": "いいい",
+  "ts": 11400
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 11726
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 12277
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 12278
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｎ",
+  "ts": 12278
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12300
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ね",
+  "ts": 12307
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12360
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ねｋ",
+  "ts": 12375
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12413
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ねこ",
+  "ts": 12431
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12767
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ねこ",
+  "ts": 12770
+ },
+ {
+  "t": "compositionend",
+  "data": "ねこ",
+  "ts": 12770
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 12797
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 12816
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 12816
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｔ",
+  "ts": 12817
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12840
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "と",
+  "ts": 12851
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12891
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とｒ",
+  "ts": 12902
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 12917
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とり",
+  "ts": 12933
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 13480
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とり",
+  "ts": 13483
+ },
+ {
+  "t": "compositionend",
+  "data": "とり",
+  "ts": 13483
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 13807
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 14343
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 14343
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｔ",
+  "ts": 14343
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 14370
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "と",
+  "ts": 14376
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 14417
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とｒ",
+  "ts": 14426
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 14449
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とり",
+  "ts": 14457
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 14788
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "鳥",
+  "ts": 14795
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 15257
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "とり",
+  "ts": 15261
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 15583
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": null,
+  "ts": 15586
+ },
+ {
+  "t": "compositionend",
+  "data": "",
+  "ts": 15586
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 15926
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 15926
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "あ",
+  "ts": 15926
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 16330
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": null,
+  "ts": 16333
+ },
+ {
+  "t": "compositionend",
+  "data": "",
+  "ts": 16333
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 16589
+ },
+ {
+  "t": "keydown",
+  "key": "k",
+  "isComposing": false,
+  "ts": 17018
+ },
+ {
+  "t": "keydown",
+  "key": "a",
+  "isComposing": false,
+  "ts": 17056
+ },
+ {
+  "t": "keydown",
+  "key": "k",
+  "isComposing": false,
+  "ts": 17087
+ },
+ {
+  "t": "keydown",
+  "key": "i",
+  "isComposing": false,
+  "ts": 17117
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 17789
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 18021
+ },
+ {
+  "t": "keydown",
+  "key": "ArrowLeft",
+  "isComposing": false,
+  "ts": 18260
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 18515
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 18516
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "ｋ",
+  "ts": 18516
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 18543
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "か",
+  "ts": 18552
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 18576
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "かｋ",
+  "ts": 18585
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 18607
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "かき",
+  "ts": 18614
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 18961
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": null,
+  "ts": 18965
+ },
+ {
+  "t": "compositionend",
+  "data": "",
+  "ts": 18965
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 19205
+ },
+ {
+  "t": "keydown",
+  "key": "F2",
+  "isComposing": false,
+  "ts": 19616
+ },
+ {
+  "t": "keydown",
+  "key": "ArrowRight",
+  "isComposing": false,
+  "ts": 20056
+ },
+ {
+  "t": "keydown",
+  "key": "Enter",
+  "isComposing": false,
+  "ts": 20299
+ },
+ {
+  "t": "keydown",
+  "key": "F2",
+  "isComposing": false,
+  "ts": 20858
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": false,
+  "ts": 21189
+ },
+ {
+  "t": "compositionstart",
+  "data": "",
+  "ts": 21190
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": "あ",
+  "ts": 21190
+ },
+ {
+  "t": "keydown",
+  "key": "Process",
+  "isComposing": true,
+  "ts": 21695
+ },
+ {
+  "t": "input",
+  "isComposing": true,
+  "data": null,
+  "ts": 21700
+ },
+ {
+  "t": "compositionend",
+  "data": "",
+  "ts": 21700
+ },
+ {
+  "t": "keydown",
+  "key": "Escape",
+  "isComposing": false,
+  "ts": 21944
+ }
+]

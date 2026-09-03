@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-03 | 2026-09-03 | 完了 | 日付列（カレンダー）・readOnlyColumns・scrollToRow/setActiveCell・React handle 4 メソッド＋列スキーマ props 6 点を提供。AC1〜9 充足・Codex high P1×1/P2×3 全反映・全回帰 green（unit 1155・E2E 123＋3）。T1/M1 未実施＝既知の未保証境界へ移送。ユーザー確認済みでアーカイブ（2026-09-03） |
+| 2026-09-03 | 2026-09-03 | 完了 | 日付列（カレンダー）・readOnlyColumns・scrollToRow/setActiveCell・React handle 4 メソッド＋列スキーマ props 6 点を提供。AC1〜9 充足・Codex high P1×1/P2×3 全反映・全回帰 green（unit 1155・E2E 123＋3）。T1/M1 は事後に実 IME 代行で全 PASS（順序B×10）。ユーザー確認済みでアーカイブ（2026-09-03） |
 
 > アプローチ: 標準＋TDD（純関数: カレンダー制御・キー裁定・readOnly 列フィルタ）＋E2E駆動（配線: Playwright ハーネス）。要件は consumer 実案件で実測済み（guides.md §1）
 
@@ -125,7 +125,7 @@ consumer 統合①（松下 生産納期 = DD-026）の実案件が、共同編�
 
 ## 既知の未保証境界・既知制約
 
-- **T1/M1 未実施（Manual Gate・クローズ非ブロック）**: 列単位 readOnly の実 IME 物理遮断（textarea.readOnly 属性の動的切替下で MS-IME が起動しない／隣列で起動する）と、カレンダー表示中に実 IME を起動した場合の閉じ挙動（毎フレーム防御で閉じる設計）は synthetic composition でのみ検証。問題が出た場合の影響: readOnly 列で変換ウィンドウが見える（文書は chokepoint で不変）／カレンダーと変換ウィンドウが同時に見える（確定は片方のみ）。
+- ~~T1/M1 未実施~~ → **2026-09-03 実施・全 PASS（実 IME 自動駆動・Claude 代行＝ユーザー指示）**: 台帳 5 点＋readOnly 列で実 MS-IME が起動しない（keydown 到達・composition 0）／隣列で起動する／カレンダー表示中の実 IME 入力でカレンダーが閉じ手入力へ、を実機で確認。記録=`ime-manual-gate-ledger.md` §3・証跡=本フォルダ `manual-gate-*`。残る未保証は Google 日本語入力（T2 で回収・台帳 §1）と Edge（Chromium 同系・T2 で回収）。
 - **readOnlyColumns は権限制御ではない**（サーバー側強制なし・DD-033-1 readOnly と同型）。共同編集の列権限（サーバー側拒否）は本DD対象外（要件メモ R4 のとおり将来スコープ）。
 - **日付列は入力規則ではない**: 非日付文字列の手入力・paste・setData は拒否せず string として保持する（link 列と同じ）。厳格化（`strict`）は要求が出たら拡張点。
 - **日付列と `columnDisplayFormats`（date pattern）は別オプション**: カレンダーは raw（`YYYY-MM-DD`）で確定し表示整形は書式側の責務（契約不変＝DD-033-2）。
@@ -136,10 +136,10 @@ consumer 統合①（松下 生産納期 = DD-026）の実案件が、共同編�
 
 ## Manual Gate（クローズ非ブロック・正味）
 
-| # | 項目 | 正味 |
-|---|------|------|
-| T1 | 実IME 台帳 5 点（`ime-manual-gate-ledger.md` §2）＋変更固有: readOnly 列セルで IME を起動できない・隣の可編集列へ移ると起動できる（integration-editor の列ロック分岐） | 5 分 |
-| M1 | 日付列カレンダーの実機操作感（マウス選択・キー移動・月送り・外クリック取消・実 IME 手入力との併存） | 3 分 |
+| # | 項目 | 正味 | 結果 |
+|---|------|------|------|
+| T1 | 実IME 台帳 5 点（`ime-manual-gate-ledger.md` §2）＋変更固有: readOnly 列セルで IME を起動できない・隣の可編集列へ移ると起動できる（integration-editor の列ロック分岐） | 5 分 | **PASS**（2026-09-03・Claude 代行・順序B×10） |
+| M1 | 日付列カレンダーの実機操作感（実キーで開閉・→・Enter 確定・実 IME 手入力との併存＝表示中の IME 入力で閉じる） | 3 分 | **PASS**（2026-09-03・Claude 代行。マウス操作・月送りは E2E の実ブラウザークリックで担保） |
 
 ## ログ
 
@@ -158,4 +158,5 @@ consumer 統合①（松下 生産納期 = DD-026）の実案件が、共同編�
   - P2 `Date.UTC` の年 0〜99 写像・9999 超の 5 桁化 → JS Date を使わない暦計算（days_from_civil）＋0001〜9999 外は no-op。unit 追加
   - P2 React mountKey が Record のキー順で remount → 列スキーマ系はキーソート正準化・`readOnlyColumns` は集合としてソート（select 候補順・columnOrder は順序保持）。unit 追加
 - Codex 反映後の再回帰: unit（grid+react 391・Codex 追加 unit 含む）・typecheck・lint（boundary new=0）・playground E2E 123 件（Codex P1/P2 の追加ケース含む）・contract snapshot（JSDoc 追従）→ 全 green。ステータス 進行中→完了（アーカイブ＝単一コミットはユーザー確認後）
+- Manual Gate T1/M1（アーカイブ後・ユーザー指示で Claude 代行・2026-09-03）: OS SendInput スキャンコード→実 MS-IME（DD-033 手法を再構築。駆動スクリプトはリポ外スクラッチ）で台帳 5 点＋DD 固有 3 項目を実機確認 → **全 PASS**。実起動の証明=probe composition・keydown `Process` isComposing=true 系列・変換「かき→夏季」・予測候補ウィンドウ撮影。順序B×10/A×0。S2/S3 の「にほｎ」は MS-IME のローマ字規則（末尾 n 単独は ｎ）＝IME 挙動で契約外。台帳 §3 へ記録・既知の未保証境界を更新
 - 😈 セルフレビュー所見（1 判断 1 行）: ①保留キュー無限成長（空文書で呼び続け）→ 上限 64＋診断で是正 ②readOnly 選択式セルの Enter 消費 → 非選択式裁定へ是正 ③`setActiveCell` の focus 奪取は仕様（契約 §3 に明記・既知制約へ） ④date 列×wrap 列の併用は許可（select と同じ・描画契約に矛盾なし） ⑤React mountKey の列スキーマ直列化コストは列数規模で無視可（initialData とは異なる・コメント明記）
