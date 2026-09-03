@@ -22,7 +22,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CHANNEL="alpha"
 OUT_DIR="$REPO_ROOT/release"
 SKIP_VERIFY=0
-EVID="$REPO_ROOT/doc/DD/DD-017"
+# （かつての EVID＝DD-017 evidence への複製先は廃止。理由は末尾「5. 証跡について」を参照）
 
 # 配布 closure（consumer-app.sh / consumer-harness.sh と一致させること）。
 CLOSURE_PKGS=(grid server-hono core types collab render selection ime server)
@@ -147,10 +147,20 @@ writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) +
 console.log(`[release]   manifest: ${packages.length} package / version ${version} / channel ${channel}`);
 NODE
 
-# ---- 5. 証跡を DD-017 evidence へ複製 ----
-mkdir -p "$EVID"
-cp "$MANIFEST" "$EVID/release-manifest.json"
-log "5. 証跡: $EVID/release-manifest.json"
+# ---- 5. 証跡について ----
+# **DD フォルダへは複製しない**（かつては DD-017 の evidence へ複製していた）。理由は 3 つ:
+#   1. DD-017 は完了・アーカイブ済みで、`doc/archived/DD/DD-017/release-manifest.json` は
+#      **CG-4（Tier 1 環境）の gate 証拠**として `doc/plan/cg-ledger.md` と DD-018 の
+#      stage1-gate-checklist.md から参照されている。build のたびに上書きすると Stage 1 の
+#      gate 証拠が壊れる（アーカイブ先へ向け直す“修正”は特に危険）。
+#   2. アクティブ側 `doc/DD/DD-017/` へ書くと、閉じた DD の孤児フォルダが毎回復活し、その未追跡
+#      ファイルが次回以降の `git status --porcelain` を汚して **自分で gitDirty=true を誘発**する。
+#   3. manifest は成果物と同じ場所にある（`$OUT_DIR/manifest.json`）のが正しい。tarball と対で
+#      consumer へ渡り、`scripts/release/verify-manifest.mjs <配布ディレクトリ>` もそこを読む。
+#      `release/` は .gitignore 済みだが、manifest が gitCommit を刻むため成果物は再現可能。
+# 特定リリースを記録に残したいときは、その判断をした DD の添付フォルダへ**手で**コピーする
+# （＝そのDDの証跡として凍結する）。build スクリプトが自動で書き込む先ではない。
+log "5. 証跡: $MANIFEST（成果物と同じ場所。DD フォルダへは複製しない）"
 
 log "OK: 配布成果物 $OUT_DIR（9 tarball＋manifest.json）生成完了。"
 log "  consumer 統合: tarball を consumer へコピー（例 mkdir vendor && cp $OUT_DIR/*.tgz vendor/）後、vendor/ で manifest.json の install を実行。"
