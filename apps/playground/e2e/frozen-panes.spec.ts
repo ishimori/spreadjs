@@ -182,3 +182,28 @@ test('AC4-2: 網掛け列に値ベース書式を重ねると、そのセルだ�
     await context.close();
   }
 });
+
+test('Codex P2: 列数を超える frozenColumnCount（全列固定）でも setData・行挿入で描画が止まらない', async ({
+  browser,
+}) => {
+  const { context, page } = await open(browser, '?frozencols=99&frozenrows=1');
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    // 全列固定（4 列 < 99）の状態で構造変更（setData → 行挿入）を起こす＝flushStructural の captureAnchor 経路。
+    await page.evaluate(() => {
+      const rows = Array.from({ length: 30 }, (_v, i) => ({ rowId: `r${i}`, cells: { 'col-a': `A${i}` } }));
+      window.__standalone?.reinject({ rows });
+    });
+    await expect.poll(async () => sa.rowCount(page)).toBe(30);
+    await page.evaluate(() => window.__gridInstance?.insertRows({ afterRowId: 'r5', count: 2 }));
+    await expect.poll(async () => sa.rowCount(page)).toBe(32);
+    // 描画ループが生きている（セル矩形が取れる・値が読める）＋ page error なし。
+    expect(await sa.cellRectAt(page, 3, 0)).not.toBeNull();
+    expect(await sa.displayCell(page, 'r7', 'col-a')).toBe('A7');
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+

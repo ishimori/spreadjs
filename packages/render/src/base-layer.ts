@@ -465,7 +465,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
    * セル単位に塗らないのは、空セルも含む列全体が対象で、かつ列数ぶんの fillRect で足りるため（描画予算）。
    * 罫線は本メソッドの後に引かれるため網掛けで消えない。
    */
-  const drawColumnBackgrounds = (frame: FrameViewport, pane: PaneRange): void => {
+  const drawColumnBackgrounds = (frame: FrameViewport, pane: PaneRange, paneBackground: string): void => {
     if (columnBackgroundFn === undefined) {
       return;
     }
@@ -482,6 +482,10 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
         continue;
       }
       const rect = transform.cellRect(pane.rows.start, col);
+      // DD-036（Codex P2）: Canvas は不正な色の代入を**無視**する（例外は投げない）＝直前に設定した色がそのまま
+      // 残る。列ごとに一度 pane 背景へ戻してから候補色を代入することで、不正色の列が「直前の列の色」で塗られる
+      // のを防ぐ（不正色は pane 背景で塗られる＝見た目は現行どおり＝「Canvas が無視して安全」の契約を守る）。
+      ctx.fillStyle = paneBackground;
       ctx.fillStyle = color;
       ctx.fillRect(rect.x, top, rect.width, height);
     }
@@ -495,10 +499,11 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.beginPath();
     ctx.rect(pane.clip.x, pane.clip.y, pane.clip.width, pane.clip.height);
     ctx.clip();
-    ctx.fillStyle = pane.pane === 'body' ? colors.cellBackground : colors.frozenBackground;
+    const paneBackground = pane.pane === 'body' ? colors.cellBackground : colors.frozenBackground;
+    ctx.fillStyle = paneBackground;
     ctx.fillRect(pane.clip.x, pane.clip.y, pane.clip.width, pane.clip.height);
     // DD-036 C2: 静的列背景は pane 背景の直後・罫線の前（固定 pane でも frozenBackground より優先して塗る）。
-    drawColumnBackgrounds(frame, pane);
+    drawColumnBackgrounds(frame, pane, paneBackground);
     drawPaneGrid(frame, pane);
     drawPaneValues(frame, pane);
     ctx.restore();

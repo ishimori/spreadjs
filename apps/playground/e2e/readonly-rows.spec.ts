@@ -245,3 +245,38 @@ test('AC7: readOnly 行でも範囲選択・コピー・行挿入削除・setDat
     await context.close();
   }
 });
+
+test('Codex P2: readOnly 行を削除して同じ index に可編集行が来たら textarea のロックが解ける', async ({
+  browser,
+}) => {
+  const { context, page } = await openReadonlyRows(browser);
+  try {
+    // r2（readOnly）をアクティブにする → 物理ロック（readOnly 属性）が付く。
+    await sa.selectCell(page, 2, 0);
+    await expect.poll(async () => (await textareaState(page)).readOnly).toBe(true);
+
+    // r2 を削除 → index 2 には r3（可編集）が来る。K3 再ベースは index 不変ゆえ editor の onChange が起きない経路。
+    await page.evaluate(() => window.__gridInstance?.deleteRows(['r2']));
+    await expect.poll(async () => sa.rowIdAt(page, 2)).toBe('r3');
+    await expect
+      .poll(async () => (await textareaState(page)).readOnly, { message: '可編集行へ入れ替わったらロックが解ける' })
+      .toBe(false);
+
+    // 実際に入力して確定できる（論理ロックも解けている）。
+    await page.keyboard.type('ok');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => sa.displayCell(page, 'r3', 'col-a')).toBe('ok');
+
+    // 逆方向: 可編集行を削除して readOnly 行が同じ index に来たらロックが掛かる。
+    await sa.selectCell(page, 4, 0); // r5（可編集）
+    await expect.poll(async () => (await textareaState(page)).readOnly).toBe(false);
+    await page.evaluate(() => window.__gridInstance?.deleteRows(['r5']));
+    await expect.poll(async () => sa.rowIdAt(page, 4)).toBe('r6'); // r6 は readOnly 行
+    await expect
+      .poll(async () => (await textareaState(page)).readOnly, { message: 'readOnly 行へ入れ替わったらロックが掛かる' })
+      .toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+

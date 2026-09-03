@@ -163,3 +163,39 @@ describe('DD-036 C1: 固定列/固定行が n>1 でもアンカー捕捉・補�
   });
 });
 
+describe('DD-036（Codex P2）: 全固定・空 Axis でもアンカー捕捉が例外にならない', () => {
+  it('frozenColCount が列数以上（全列固定）でも throw せず、最終列をアンカーにする', () => {
+    const rowAxis = makeRowAxis(100);
+    const colAxis = makeColAxis(3);
+    const anchor = captureAnchor({
+      rowAxis,
+      colAxis,
+      frozenRowCount: 1,
+      frozenColCount: 10, // 列数 3 を超える指定（mount オプションで到達しうる）
+      scrollTop: 220,
+      scrollLeft: 0,
+    });
+    expect(anchor.columnId).toBe(createColumnId('c2')); // 最終列へクランプ
+    const corrected = correctScroll({ rowAxis, colAxis, frozenRowCount: 1, frozenColCount: 10, anchor });
+    expect(corrected.scrollLeft).toBe(0); // 全列固定＝横スクロール域がない
+    expect(corrected.scrollTop).toBe(220); // 縦は従来どおり復元される
+  });
+
+  it('frozenRowCount が行数以上（全行固定）でも throw しない', () => {
+    const rowAxis = makeRowAxis(2);
+    const colAxis = makeColAxis(50);
+    const anchor = captureAnchor({
+      rowAxis,
+      colAxis,
+      frozenRowCount: 5,
+      frozenColCount: 1,
+      scrollTop: 0,
+      scrollLeft: 112,
+    });
+    expect(anchor.rowId).toBe(createRowId('r1'));
+    const corrected = correctScroll({ rowAxis, colAxis, frozenRowCount: 5, frozenColCount: 1, anchor });
+    expect(corrected.scrollTop).toBe(0);
+    expect(corrected.scrollLeft).toBe(112);
+  });
+});
+

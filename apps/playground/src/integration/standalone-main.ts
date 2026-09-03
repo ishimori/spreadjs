@@ -38,7 +38,12 @@ const COLUMN_ORDER = [
   'col-d',
   ...Array.from({ length: EXTRA_COLUMN_COUNT }, (_, i) => `col-x${i}`),
 ];
-const SEED_ROW_COUNT = 20;
+// DD-036（Codex P2）: 行 0 件の文書（列だけあるシート）を作れるようにする。既定は従来の 20 行。
+const SEED_ROW_COUNT = (() => {
+  const raw = new URLSearchParams(location.search).get('seedrows');
+  const n = raw === null ? 20 : Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : 20;
+})();
 
 // DD-027-1: 選択式入力列を URL で指定できる（E2E 用・main.ts と同形式）。
 // 形式: `?select=col-b:進行中|受注|失注`（複数列は `,`・列末尾 `!free` で allowFreeText:true）。

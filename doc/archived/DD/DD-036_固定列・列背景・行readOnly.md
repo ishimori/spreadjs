@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-03 | 2026-09-03 | 進行中 | 松下 DD-014（納入計画のSpreadJS化）からの持ち込み。要件正本は松下 `doc/DD/DD-014/sdk-requirements.md` §C。Phase 1 確定（契約は `DD-036/contract.md`） |
+| 2026-09-03 | 2026-09-03 | 完了 | 松下 DD-014（納入計画のSpreadJS化）からの持ち込み。契約=`DD-036/contract.md`・計測=`DD-036/measurement.md`。Codex high の P2×4 を全反映。Manual Gate T1/M1 は未実施＝既知の未保証境界へ移送 |
 
 > アプローチ: 標準＋TDD（純関数: 静的列背景の解決・行 readOnly 裁定）＋E2E駆動（配線: Playwright ハーネス）。要件は consumer 実案件で実測済み（guides.md §1）
 
@@ -129,7 +129,7 @@ Phase 1（2026-09-03・ユーザー指示「DD-036 を進める・完了した�
 ### 完了前チェック
 - [x] 受け入れ基準 1〜10 を 1 項目ずつ照合（AC9 は計測記録先を変更＝ログ参照。他は達成）
 - [x] Manual Gate 未実施分を「既知の未保証境界」へ移送（クローズはブロックしない）
-- [ ] Codex レビュー（ユーザー指示・high・実行中）→ findings の採否をログへ
+- [x] Codex レビュー（ユーザー指示・high）→ P2×4 を**全件採用・反映**（見送り 0）。各件に回帰テストを追加し、修正前に落ちることも確認
 - [ ] tarball 引き渡しは松下側 DD-014-2 が実施（`scripts/release/build-release.sh`）
 
 ## 既知の未保証境界・既知制約
@@ -163,4 +163,10 @@ Phase 1（2026-09-03・ユーザー指示「DD-036 を進める・完了した�
 - Phase 4（C3）: 判定は RowId ベース（`readOnlyRowSet`）＝行挿入削除で index がずれても追従する。列版と行版は `filterReadOnlyCells` で順に適用（和）。未知 rowId は初回描画後 1 回だけ判定して warn（列の fail-fast と分ける＝行は初期データ到着前に検証できない）
 - Phase 5: 計測は 382 列 × 80 行（非空 30,560）で **横スクロール p95 16.8ms（目標 33ms）・初回描画 256ms（headed）・入力確定 0.5ms** ＝全て予算内（`DD-036/measurement.md`）。**AC9 の記載を 2 点訂正**: ①「DD-004 ハーネス」は DD-016 で削除済み → 現行方式（headed Playwright spec・DD-020 AC11 の先例）で新設 ②記録先は `kpi-ledger.md` ではなく DD 添付（同台帳は憲章 §16.1 の consumer 統合 KPI 専用で、契約表に無い行の追記は §4-1/§4-5 に反する。描画性能は DD-004/DD-012-2 と同じく DD 添付が先例）
 - 全回帰: unit 1186（新規 25 含む）・typecheck・lint（boundary new=0）・playground E2E 134（新規 10）・showcase E2E 3 → 全 green。既存 spec の**先在フレーク 1 件**（`readonly-columns.spec.ts` の `rowCount` を再構築前に読む）を poll へ是正（負荷増で顕在化・同型の race を新 spec でも回避）
+- Codex レビュー（high・`--uncommitted`・ユーザー指示・依頼書=`DD-036/codex-review-request.md`・結果=`codex-review-result.md`）: 総評「要修正」・**P1 なし / P2×4 → 4 件すべて採用・反映**（見送り 0）
+  - P2 **全列固定で描画ループが例外停止**（`frozenColumnCount >= 列数` のとき `captureAnchor` が範囲外 index を `Axis.getId` → throw）→ `scroll-anchor.ts` で固定数を軸要素数へクランプ＋index を実在範囲へクランプ（`ViewportTransform` と同じ扱い）。unit 2 件＋E2E（全列固定で setData/行挿入しても描画が生きている・pageerror なし）を追加。**契約 §1「超過はクランプ」が render 層で守られていなかった**＝指摘どおり
+  - P2 **構造変更後に行ロックが再同期されない**（readOnly 行を削除して同 index に可編集行が来ると textarea が `readOnly` のまま。K3 再ベースは index 不変で editor を触らない＝onChange が起きない経路）→ `flushStructural` の末尾と初回データ描画時に `syncCellLock()` を実行。E2E で両方向（ロック解除／ロック付与）を検証
+  - P2 **行 0 件の文書で `scrollToColumn` が保留され続ける**（`firstDataDrawn` は行 0 では永遠に立たない）→ 列命令用の ready 条件 `canRunColumnCommandsNow()`（backend 配線済み・構造 dirty なし・列 Axis 非空・viewport 確定）を追加し、命令の実行判定と保留 drain の両方で使う。ハーネスへ `?seedrows=0` を追加して E2E 化
+  - P2 **不正色が直前列の色を継承する**（Canvas は不正な `fillStyle` 代入を無視＝前の色が残るため、`{a:'#ff0000', b:'not-a-color'}` で b 列まで赤くなる）→ 列ごとに pane 背景へ戻してから候補色を代入（不正色は pane 背景で塗られる＝「Canvas が無視して安全」の契約どおり）。unit を追加
+- Codex 反映後の再回帰: unit 1189（新規回帰 3 含む）・typecheck・lint（boundary new=0）・playground E2E 137（新規回帰 3 含む）・showcase E2E 3・contract snapshot → 全 green。ステータス 進行中→完了
 - 😈 セルフレビュー所見（1 判断 1 行）: ①`frozenColumnCount` 超過時の裁定は viewport のクランプに委ねる（controller 側で二重クランプしない＝真実の源を 1 つに） ②列バンドはセル単位でなく列 1 本の fillRect（空セルを含む列全体が対象・描画予算） ③未知 rowId の警告は初回描画後 1 回に限定（実行時に警告を出し続けない・後から現れた行は正しくロックされる） ④`readOnlyRows` の重複指定は集合として吸収（列版の fail-fast と分ける＝行 ID は利用側が動的に組む想定） ⑤`FormatRuleConfigError.reason` の union 拡張は DD-035 の `ColumnTypeConfigError.reason` と同型の既定路線 ⑥固定バンドを跨ぐ範囲選択・オーバーフロー流入は base-layer の既存停止条件（`pane.cols.start > frozenColCount`）がそのまま効く（n>1 でも同じ式）

@@ -6,6 +6,8 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
+| DD-038 | 貼り付け後の選択レンジ | 進行中 | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。Phase 1 確定（論点①は(a)＝不変条件により技術的に強制／論点⑦を新設）。Phase 2 実装は DD-036 の `mount-controller.ts`・`clipboard-controller.ts` 並行編集のためコミット後まで待機（DD-037 の次） |
+| DD-037 | 自由入力併存の選択式列 | 進行中 | consumer 駆動（松下 DD-012-3 の実機検証で判明）。要件正本は松下リポ `doc/DD/DD-012/sdk-requirements.md` **R8**。DD-027-1 の未達分の回収。Phase 1 確定（論点①は(a)既定挙動変更を採用）。Phase 2 実装は DD-036 の `mount-controller.ts` 並行編集のためコミット後まで待機 |
 
 ## 保留・見送り
 
@@ -16,6 +18,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-036 | 固定列・列背景・行readOnly | 松下 DD-014（納入計画のSpreadJS化）からの持ち込み。契約=`DD-036/contract.md`・計測=`DD-036/measurement.md`。Codex high の P2×4 を全反映。Manual Gate T1/M1 は未実施＝既知の未保証境界へ移送 |
 | DD-035 | 列タイプ拡張と命令API | 日付列（カレンダー）・readOnlyColumns・scrollToRow/setActiveCell・React handle 4 メソッド＋列スキーマ props 6 点を提供。AC1〜9 充足・Codex high P1×1/P2×3 全反映・全回帰 green（unit 1155・E2E 123＋3）。T1/M1 は事後に実 IME 代行で全 PASS（順序B×10）。ユーザー確認済みでアーカイブ（2026-09-03） |
 | DD-034 | DD運用軽量化第2弾 | 記録git一本化・親統合レビュー1回・完了処理1コミット・ガバナンスDD凍結・IME台帳一本化・dd-update停止を反映。効果測定はDD-033へ移管 |
 | DD-033 | 明細閲覧ビュー | readOnly・columnCaptions・columnDisplayFormats を提供。AC1〜10充足・統合レビューP2×2修正・計測回帰なし・M1/M2/T1全PASS（実IME証明） |

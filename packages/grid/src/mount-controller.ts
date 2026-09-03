@@ -399,11 +399,26 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   /**
+   * 列方向の命令（scrollToColumn）を即時実行できる状態か（DD-036・Codex P2）。
+   * 行方向と違い**初回描画（firstDataDrawn）を条件にしない**: 行が 0 件の文書では `markFirstDataDraw` が永遠に
+   * 立たず、列だけを持つ空シートで `scrollToColumn` がキューに残り続けるため。列 Axis と viewport の寸法が
+   * 揃っていれば横スクロールは成立する。
+   */
+  function canRunColumnCommandsNow(): boolean {
+    return (
+      sync !== undefined &&
+      !sync.view.hasStructuralDirty() &&
+      sync.view.colAxis.count() > 0 &&
+      viewportWidth > 0
+    );
+  }
+
+  /**
    * 命令を即時実行するか、次の構造 flush 後まで保留する（保留中の複数命令は呼び出し順に適用する）。
    * 保留は上限（PENDING_COMMANDS_MAX）で古い順に捨てる: 空文書（初回描画が起きない）や boot 失敗のまま利用側が
    * 呼び続けても無限に溜めない（最後の要求だけ意味を持つ操作なので古いものは安全に捨てられる）。
    */
-  function runOrDefer(command: () => void): void {
+  function runOrDefer(command: () => void, canRunNow: () => boolean = canRunCommandsNow): void {
     if (destroyed) {
       return;
     }
@@ -413,7 +428,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (sync !== undefined && firstDataDrawn && sync.view.hasStructuralDirty()) {
       flushStructural(sync.view);
     }
-    if (canRunCommandsNow()) {
+    if (canRunNow()) {
       command();
       return;
     }
@@ -424,9 +439,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
     pendingCommands.push(command);
   }
 
-  /** masterLoop が構造 flush（scroll anchor 補正含む）の後に呼ぶ: 保留命令を新 Axis で適用する。 */
+  /**
+   * masterLoop が構造 flush（scroll anchor 補正含む）の後に呼ぶ: 保留命令を新 Axis で適用する。
+   * DD-036（Codex P2）: 行が 0 件のままでも列命令は成立するため、行 ready・列 ready のどちらかで drain する
+   * （個々の命令は自分の前提が崩れていれば内部で no-op＋診断する）。
+   */
   function drainPendingCommands(): void {
-    if (pendingCommands.length === 0 || !canRunCommandsNow()) {
+    if (pendingCommands.length === 0 || !(canRunCommandsNow() || canRunColumnCommandsNow())) {
       return;
     }
     const commands = pendingCommands;
@@ -541,6 +560,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       metrics.mark('firstDraw');
       metrics.mark('firstOperable');
       validateReadOnlyRowsOnce(); // DD-036 C3: 未知 rowId の診断 warn（初回描画後に 1 回だけ）
+      syncCellLock(); // DD-036（Codex P2）: 初回データ描画時点の activeCell（0,0）のロックを確定させる
       if (focusRequested) {
         focusRequested = false;
         editor?.focus(); // boot 前に要求された focus を初回配置後に適用する（P2-3）
@@ -589,6 +609,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       redraw();
       markFirstDataDraw();
     }
+    // DD-036（Codex P2）: 構造変更で activeCell の**行 index が変わらないまま指す行が入れ替わる**ことがある
+    // （readOnly 行を削除して下の可編集行が同じ index に来る等）。この経路は applyRebaseState が editor を触らない
+    // ＝onChange が起きないため、ここで必ずロックを取り直す（未指定なら即 return・同値なら DOM を書かない）。
+    syncCellLock();
   }
 
   function masterLoop(): void {
@@ -2843,7 +2867,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       runOrDefer(() => performScrollToRow(rowId));
     },
     scrollToColumn(columnId: string) {
-      runOrDefer(() => performScrollToColumn(columnId));
+      // DD-036（Codex P2）: 行 0 件でも成立するよう列用の ready 条件で判定する（保留キューは行命令と共有）。
+      runOrDefer(() => performScrollToColumn(columnId), canRunColumnCommandsNow);
     },
     setActiveCell(rowId: string, columnId: string) {
       runOrDefer(() => performSetActiveCell(rowId, columnId));

@@ -161,7 +161,7 @@ test('AC9: 382 列 × 80 行（非空 約 3 万セル）で初回描画・横ス
       JSON.stringify({ measuredAt: new Date().toISOString(), ...result }, null, 2),
       'utf8',
     );
-    // eslint-disable-next-line no-console -- 計測値は再現コマンドの出力として読む（レポート転記用）
+    // 計測値は再現コマンドの出力として読む（レポート転記用）。
     console.log('[DD-036 AC9] wide-grid-perf', JSON.stringify(result));
 
     expect(result.columns).toBe(EXTRA_COLS + 4);

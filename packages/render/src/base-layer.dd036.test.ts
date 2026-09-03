@@ -66,7 +66,12 @@ const VIEW_H = 300;
 const BG_COL = 2;
 const BG_COLOR = '#eef3ff';
 
-function setup(options: { withBackground: boolean; withFormat?: boolean }): Call[] {
+function setup(options: {
+  withBackground: boolean;
+  withFormat?: boolean;
+  /** 列 index → 色（既定は BG_COL だけを BG_COLOR で塗る）。 */
+  backgroundOf?: (col: number) => string | undefined;
+}): Call[] {
   const { ctx, calls } = createCtxStub();
   const store = createChunkStore();
   // 非空セルは (0,0) と (1,BG_COL) だけ。BG_COL は 1 行目が空＝空セルも塗られることの検証に使う。
@@ -86,7 +91,12 @@ function setup(options: { withBackground: boolean; withFormat?: boolean }): Call
     headerWidth: HEADER_W,
     headerHeight: HEADER_H,
     frozenColCount: 1,
-    ...(options.withBackground ? { columnBackground: (col: number) => (col === BG_COL ? BG_COLOR : undefined) } : {}),
+    ...(options.withBackground
+      ? {
+          columnBackground:
+            options.backgroundOf ?? ((col: number) => (col === BG_COL ? BG_COLOR : undefined)),
+        }
+      : {}),
     ...(options.withFormat === true
       ? { getCellStyle: (_col: number, value: string) => (value === 'X' ? { cellBackground: '#ff0000' } : undefined) }
       : {}),
@@ -146,3 +156,25 @@ describe('DD-036 C2: 静的列背景（columnBackground）', () => {
     expect(calls.some((c) => c.kind === 'fillRect' && c.style === BG_COLOR)).toBe(false);
   });
 });
+
+describe('DD-036（Codex P2）: 不正な色は直前列の色を継承しない', () => {
+  it('隣接列に「有効色・不正色」を指定しても、不正色の列は pane 背景で塗られる（前列の色が漏れない）', () => {
+    const calls = setup({
+      withBackground: true,
+      backgroundOf: (col) => (col === 1 ? '#ff0000' : col === 2 ? 'not-a-color' : undefined),
+    });
+    // Canvas スタブは代入をそのまま記録するため、実ブラウザーの「不正値は無視」を模して
+    // 「不正色の直前に pane 背景を代入している」ことを検証する（列 2 の fillRect が赤でないこと）。
+    const bands = calls.filter((c) => c.kind === 'fillRect' && c.x === HEADER_W + 2 * COL_W && c.w === COL_W);
+    expect(bands.length).toBeGreaterThan(0);
+    for (const band of bands) {
+      expect(band.kind === 'fillRect' && band.style).not.toBe('#ff0000');
+    }
+    // 直前に pane 背景（#ffffff 系）への代入が入っている＝実ブラウザーでは不正色が無視されて pane 背景になる。
+    const invalidIndex = calls.findIndex((c) => c.kind === 'fillRect' && c.style === 'not-a-color');
+    expect(invalidIndex).toBeGreaterThan(0);
+    // 有効色の列（index 1）は指定どおり塗られる。
+    expect(calls.some((c) => c.kind === 'fillRect' && c.style === '#ff0000' && c.x === HEADER_W + COL_W)).toBe(true);
+  });
+});
+

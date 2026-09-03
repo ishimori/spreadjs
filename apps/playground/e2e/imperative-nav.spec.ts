@@ -245,3 +245,22 @@ test('AC8-2: 未知 ColumnId は診断 warn（scroll-column-unknown）のみで�
   }
 });
 
+test('Codex P2: 行 0 件の文書（列だけのシート）でも scrollToColumn が保留されず横スクロールする', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: VIEWPORT_H } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?extracols=40&seedrows=0');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    // 行が無いため ready（初回データ描画）は立たない。それでも列命令は成立する契約。
+    await expect.poll(async () => sa.rowCount(page), { timeout: 15_000 }).toBe(0);
+    await page.evaluate(() => window.__gridInstance?.scrollToColumn('col-x35'));
+    await expect
+      .poll(async () => api<number>(page, 'scrollLeft'), { message: '空文書でも scrollToColumn が効く' })
+      .toBeGreaterThan(0);
+  } finally {
+    await context.close();
+  }
+});
+
