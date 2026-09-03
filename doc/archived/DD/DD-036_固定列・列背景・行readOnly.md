@@ -138,7 +138,7 @@ Phase 1（2026-09-03・ユーザー指示「DD-036 を進める・完了した�
 - **固定行列・列背景は view-local**。設定が異なるクライアントは異なる見え方をする＝`cell-format-sharing-design.md` の共有化スコープへ送る
 - **`scrollToColumn` は最小スクロール**（可視なら動かさない）。align 指定は要求が出たら拡張点。固定列（index < frozenColumnCount）は常に可視のため無変更
 - **`readOnlyRows` は mount 時固定**。行の動的化（`setReadOnlyRows` / `setData` 同梱）は未提供＝③は行の追加削除が対象外（松下 DD-014-1 決定）で足りる。未知 rowId の判定も**初回描画後の 1 回だけ**で、以後に現れた RowId は警告されない（読み取り専用としては正しく効く）
-- **T1/M1 の実機確認（Manual Gate）は未実施**＝以下は synthetic（Playwright）でのみ保証: ①readOnly **行**セルでの実 MS-IME 起動不可 ②固定 5 列＋網掛けの実ウィンドウでの見え方・横スクロール追従・pane 境界の描画。実 IME 経路は DD-035 T1（列ロック）で PASS 済みで、行ロックは**同じ `setInputLock` 機構の判定条件違い**のため差分リスクは低い
+- ~~**T1/M1 の実機確認（Manual Gate）は未実施**~~ → **2026-09-04 に後追い実施し解消**（下記 Manual Gate 表・`ime-manual-gate-ledger.md` §3 の 2026-09-04 行）。readOnly **行**セルでの実 MS-IME 起動不可（keydown は到達・composition 0・`textarea.readOnly=true`）と、固定 5 列＋網掛けの実機での見え方・横スクロール追従・pane 境界の描画をいずれも確認した
 - **382 列を超える規模（複数年＝700 列超）・共同編集モードでの同規模**は未計測（`DD-036/measurement.md` §3）
 - **固定行数を大きくしたときの UX**（可視領域が固定バンドで埋まる）はガードしない＝利用側責務（viewport はクランプするだけ）
 
@@ -146,8 +146,8 @@ Phase 1（2026-09-03・ユーザー指示「DD-036 を進める・完了した�
 
 | # | 項目 | 正味 | 結果 |
 |---|------|------|------|
-| T1 | 実IME 台帳 5 点（`ime-manual-gate-ledger.md` §2）＋変更固有: readOnly **行**セルで IME を起動できない・上下の可編集行へ移ると起動できる（integration-editor の行ロック分岐） | 5 分 | 未実施 |
-| M1 | 固定 5 列＋非稼働日の網掛けを実機で確認（横スクロール追従・pane 境界の描画・382 列でのスクロール体感） | 3 分 | 未実施 |
+| T1 | 実IME 台帳 5 点（`ime-manual-gate-ledger.md` §2）＋変更固有: readOnly **行**セルで IME を起動できない・上下の可編集行へ移ると起動できる（integration-editor の行ロック分岐） | 5 分 | ✅ **実施済み（2026-09-04・実IME 自動駆動/代行）**。S1〜S5 全 PASS＋行ロック PASS。台帳に記録・証跡は `DD-036/manual-gate-t1-ime-observations.json` |
+| M1 | 固定 5 列＋非稼働日の網掛けを実機で確認（横スクロール追従・pane 境界の描画・382 列でのスクロール体感） | 3 分 | ✅ **実施済み（2026-09-04）**。382 列・固定 5 列・固定 1 行・列背景 3 列を実機 DPR 1/2 で確認。横スクロールで固定帯が追従し網掛けは列に固着、pane 境界も描画。スクロール rAF 実測 p50 16.7ms / p95 16.7〜17.1ms（60fps 相当）。証跡は `DD-036/manual-gate-m1-observations.json`・スクショ 2 枚 |
 
 ## ログ
 

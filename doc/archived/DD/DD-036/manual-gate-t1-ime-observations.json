@@ -1,0 +1,348 @@
+{
+  "実行日": "2026-09-03T23:12:46.873Z",
+  "方式": "実IME（自動駆動・Claude 代行）: user32 SendInput KEYEVENTF_SCANCODE → OS 入力キュー → 実 MS-IME",
+  "環境": {
+    "OS": "Windows 11 Pro 26200",
+    "browser": "Google Chrome for Testing（Playwright bundle・headed）",
+    "IME": "Microsoft IME (0411)"
+  },
+  "URL": "http://localhost:5885/poc-integration.html?server=http%3A%2F%2F127.0.0.1%3A9499&name=Gate&readonlyrows=row-3%2Crow-4&select=col-3%3A%E3%81%82%E3%81%8A%7C%E3%81%82%E3%81%8B%7C%E3%81%8D%E3%81%84%E3%82%8D!free",
+  "IME起動の証明": {
+    "isComposing": true,
+    "draft": "あ",
+    "log": [
+      {
+        "t": 19007,
+        "ev": "keydown",
+        "key": "Process",
+        "code": "KeyA",
+        "isComposing": false
+      },
+      {
+        "t": 19008,
+        "ev": "compositionstart",
+        "data": ""
+      },
+      {
+        "t": 19008,
+        "ev": "compositionupdate",
+        "data": "あ"
+      },
+      {
+        "t": 19009,
+        "ev": "input",
+        "data": "あ",
+        "value": "あ"
+      }
+    ]
+  },
+  "順序観測": {
+    "A": 0,
+    "B": 3,
+    "details": [
+      {
+        "label": "S1 変換確定 Enter",
+        "order": "B"
+      },
+      {
+        "label": "S2 無変換確定 Enter",
+        "order": "B"
+      },
+      {
+        "label": "S3 F2 再編集 Enter",
+        "order": "B"
+      }
+    ]
+  },
+  "results": [
+    {
+      "id": "IME",
+      "title": "実 IME 起動の確立（composition 観測）",
+      "pass": true,
+      "detail": {
+        "isComposing": true,
+        "draft": "あ",
+        "log": [
+          {
+            "t": 19007,
+            "ev": "keydown",
+            "key": "Process",
+            "code": "KeyA",
+            "isComposing": false
+          },
+          {
+            "t": 19008,
+            "ev": "compositionstart",
+            "data": ""
+          },
+          {
+            "t": 19008,
+            "ev": "compositionupdate",
+            "data": "あ"
+          },
+          {
+            "t": 19009,
+            "ev": "input",
+            "data": "あ",
+            "value": "あ"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S1",
+      "title": "変換確定（かき→変換→Enter→矢印移動）",
+      "pass": true,
+      "detail": {
+        "composing": {
+          "draft": "かき",
+          "isComposing": true
+        },
+        "converted": {
+          "draft": "夏季"
+        },
+        "afterEnter": {
+          "draft": "夏季",
+          "isComposing": false,
+          "editingTarget": {
+            "rowId": "row-1",
+            "columnId": "col-1"
+          }
+        },
+        "committed": {
+          "rowId": "row-1",
+          "colId": "col-1",
+          "value": "夏季"
+        },
+        "移動先で編集終了": true,
+        "activeCell": {
+          "row": 2,
+          "col": 1
+        }
+      }
+    },
+    {
+      "id": "S2",
+      "title": "無変換確定（さくら・二重確定なし）",
+      "pass": true,
+      "detail": {
+        "composing": {
+          "draft": "さくら"
+        },
+        "committed": {
+          "rowId": "row-2",
+          "colId": "col-1",
+          "value": "さくら"
+        },
+        "committedRevision 差分": 1,
+        "注": "cell-commit は standalone 専用イベント（mount-controller の onCellCommit）で共同編集ハーネスでは発火しない。二重確定は revision 差分で判定する"
+      }
+    },
+    {
+      "id": "S3",
+      "title": "F2 再編集キャレット（先頭へ追記・DD-012-3 回帰）",
+      "pass": true,
+      "detail": {
+        "editingDraft": "いいいさくら",
+        "committed": {
+          "rowId": "row-2",
+          "colId": "col-1",
+          "value": "いいいさくら"
+        },
+        "期待": "いいいさくら"
+      }
+    },
+    {
+      "id": "S4",
+      "title": "確定直後連続入力（先頭欠落 0）",
+      "pass": true,
+      "detail": {
+        "次の入力の draft": "とり",
+        "期待": "とり",
+        "isComposing": true,
+        "activeCell": {
+          "row": 7,
+          "col": 1
+        },
+        "compositionupdates": [
+          "ｎ",
+          "ね",
+          "ねｋ",
+          "ねこ",
+          "ねこ",
+          "ｔ",
+          "と",
+          "とｒ",
+          "とり"
+        ]
+      }
+    },
+    {
+      "id": "S5",
+      "title": "Esc 取消（draft 破棄・セル値不変）",
+      "pass": true,
+      "detail": {
+        "composing": {
+          "draft": "あああ"
+        },
+        "esc1": {
+          "draft": "",
+          "isComposing": false,
+          "editingTarget": {
+            "rowId": "row-2",
+            "columnId": "col-1"
+          }
+        },
+        "esc2": {
+          "draft": "",
+          "editingTarget": null
+        },
+        "値": {
+          "before": "いいいさくら",
+          "after": "いいいさくら"
+        },
+        "committedHash不変": true
+      }
+    },
+    {
+      "id": "S5b",
+      "title": "Esc 後に以降の入力が正常",
+      "pass": true,
+      "detail": {
+        "draft": "き"
+      }
+    },
+    {
+      "id": "T1-RO",
+      "title": "readOnly 行で IME が起動しない（到達はする）",
+      "pass": true,
+      "detail": {
+        "textarea.readOnly": true,
+        "keydown到達件数": 4,
+        "composition件数": 0,
+        "draft": "",
+        "editingTarget": null,
+        "committedRevision 差分": 0,
+        "committedHash不変": true
+      }
+    },
+    {
+      "id": "T1-RO2",
+      "title": "上下の可編集行では IME が起動する",
+      "pass": true,
+      "detail": {
+        "上の行": {
+          "readOnly": false,
+          "isComposing": true,
+          "draft": "かき"
+        },
+        "下の行": {
+          "readOnly": false,
+          "isComposing": true,
+          "draft": "かき"
+        }
+      }
+    },
+    {
+      "id": "DD037-T1a",
+      "title": "変換中の前方一致絞り込み（あ→2件・あお→1件）",
+      "pass": true,
+      "detail": {
+        "あ": {
+          "draft": "あ",
+          "isComposing": true,
+          "open": true,
+          "options": [
+            "あお",
+            "あか"
+          ],
+          "highlight": -1
+        },
+        "あお": {
+          "draft": "あお",
+          "isComposing": true,
+          "open": true,
+          "options": [
+            "あお"
+          ],
+          "highlight": -1
+        }
+      }
+    },
+    {
+      "id": "DD037-T1b",
+      "title": "変換中は候補リストがキーを持たない（highlight なし）",
+      "pass": true,
+      "detail": {
+        "highlight": [
+          -1,
+          -1
+        ],
+        "highlightValue": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "id": "DD037-T1c",
+      "title": "変換確定が壊れない（あお が確定）",
+      "pass": true,
+      "detail": {
+        "committed": {
+          "rowId": "row-1",
+          "colId": "col-3",
+          "value": "あお"
+        }
+      }
+    },
+    {
+      "id": "DD037-T1d",
+      "title": "候補 0 件で閉じ draft は継続",
+      "pass": true,
+      "detail": {
+        "draft": "く",
+        "open": false,
+        "options": [],
+        "isComposing": true
+      }
+    },
+    {
+      "id": "DD037-T2a",
+      "title": "変換中の候補クリックは no-op",
+      "pass": true,
+      "detail": {
+        "クリック実施": true,
+        "draft": {
+          "before": "あ",
+          "after": "あ"
+        },
+        "isComposing": {
+          "before": true,
+          "after": true
+        },
+        "committedHash不変": true
+      }
+    },
+    {
+      "id": "DD037-T2b",
+      "title": "確定後の候補クリックでその候補が入る",
+      "pass": true,
+      "detail": {
+        "pickerOpen": true,
+        "options": [
+          "あお",
+          "あか",
+          "きいろ"
+        ],
+        "committed": {
+          "rowId": "row-9",
+          "colId": "col-3",
+          "value": "きいろ"
+        }
+      }
+    }
+  ],
+  "PASS": 15,
+  "FAIL": 0
+}
