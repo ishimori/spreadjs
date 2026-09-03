@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-03 | 2026-09-03 | 検討中 | DD-038 の tarball 更新中に判明。`gitDirty` が working tree 全体を見るため、配布 closure に無関係な dirt でも true になり、再現性リスクの有無を読み分けられない |
+| 2026-09-03 | 2026-09-03 | 完了 | manifest に `closureDirty` / `closureDirtyPaths` / `dirtyNote` を追加し、配布再現性を `gitDirty` と読み分けられるようにした。既存 `gitDirty` の意味は不変（後方互換）。AC 1〜7 全て実機で照合 |
 
 > アプローチ: 標準（既存スクリプトへ判定を1つ足す小改修。新しい仕組みを作らない。guides.md §1）
 > リスク: なし（配布 manifest はフィールド追加のみで後方互換。認可・DBスキーマ・外部I/F・機密のいずれにも該当しない）
@@ -59,34 +59,34 @@ Evidence Level: standard
 
 ## 受け入れ基準
 
-（起票時点の案。Spec Gate で確定させる）
+**Spec Gate（2026-09-03）で確定**。全て実機実行で照合済み。
 
-| # | 基準（操作 → 期待結果） | 検証方法 |
-|---|------------------------|---------|
-| 1 | `doc/` 配下だけが汚れている状態で build → manifest は「配布に影響する dirt なし」を示す | 実機実行（`doc/` にダミーの未追跡ファイルを置いて build） |
-| 2 | `packages/` を編集した状態で build → 「配布に影響する dirt あり」を示す | 実機実行 |
-| 3 | `scripts/release/build-release.sh` を編集した状態で build → 「配布に影響する dirt あり」を示す（論点②(b) を採る場合） | 実機実行 |
-| 4 | 既存 `gitDirty` の意味・値は従来どおり（working tree 全体） | 上記1で `gitDirty: true` のままであることを確認 |
-| 5 | `node scripts/release/verify-manifest.mjs release` が従来どおり OK | 実機実行 |
-| 6 | 過去の manifest（`doc/archived/DD/DD-017/release-manifest.json`）を読んでも壊れない（フィールド欠如を許容） | 論点④(b) を採る場合のみ・unit or 実行確認 |
-| 7 | クリーンな working tree で build → 両方の判定が false | 実機実行 |
+| # | 基準（操作 → 期待結果） | 結果 | 証跡 |
+|---|------------------------|------|------|
+| 1 | `doc/` 配下だけが汚れている状態で build → `closureDirty: false`（配布に影響する dirt なし） | ✅ | worktree に `doc/DD/DD-999_probe.md` を置いて build → `gitDirty=true / closureDirty=false`・`paths: []`。ログに「汚れているのは配布 closure の外です」の note |
+| 2 | `packages/` を編集した状態で build → `closureDirty: true` | ✅ | `packages/grid/src/__ac2-probe.tmp` を置いて build → `closureDirty=true`・`paths` に当該ファイル |
+| 3 | `scripts/release/build-release.sh` を編集した状態で build → `closureDirty: true` | ✅ | 本DDの実装中の未コミット状態で build → `closureDirty=true`・`paths` に `scripts/release/*` 2件。ログに「この成果物は再現できません」＋パス列挙 |
+| 4 | 既存 `gitDirty` の意味・値は従来どおり（working tree 全体） | ✅ | AC1 で `gitDirty: true` のまま（`doc/` の dirt を従来どおり拾う） |
+| 5 | `verify-manifest.mjs` が従来どおり OK（exit 0） | ✅ | AC3 の manifest に対し同一性検査 OK＋closureDirty の WARN を出しつつ **exit=0** |
+| 6 | 過去の manifest（`closureDirty` を持たない）を読んでも壊れない | ✅ | DD-017 当時の形（3フィールドを削除）を再現して verify → OK・exit=0・追加の出力なし |
+| 7 | クリーンな working tree で build → 両方 false | ✅ | `git worktree` で HEAD の clean tree を作って build → `gitDirty=false / closureDirty=false`・警告も note も出ない |
 
 ## タスク一覧
 
 ### Phase 1: 仕様確認（Human Spec Gate）
-- [ ] 👀 論点 1〜5 を確定（特に①既存 `gitDirty` の扱いと②パス定義）
-- [ ] 🔬 機械検証: `bash scripts/dd-health.sh --dd DD-040 --new` → ⚠️ なし / `bash scripts/doc-check.sh` → OK
+- [x] 👀 論点 1〜5 を確定（ユーザー指示「全部推奨で良い」。明示の推奨が無かった③④も決定事項で確定）
+- [x] 🔬 機械検証: `bash scripts/dd-health.sh --dd DD-040 --new` → ⚠️ なし / `bash scripts/doc-check.sh` → OK
 
 ### Phase 2: 実装（Spec Gate 後）
-- [ ] `scripts/release/build-release.sh`: 配布影響パスに限定した dirty 判定を追加し、manifest とログへ反映（既存 `gitDirty` は据え置き）
-- [ ] 論点④の結論次第で `scripts/release/verify-manifest.mjs` を追補
-- [ ] 🔬 機械検証: AC1〜3・7 を実機実行で確認（各状態を作って build → manifest を確認）／`node scripts/release/verify-manifest.mjs release` → OK
+- [x] `scripts/release/build-release.sh`: `CLOSURE_PATHSPEC` に限定した dirty 判定を追加し、manifest（`closureDirty` / `closureDirtyPaths` / `dirtyNote`）とログへ反映（既存 `gitDirty` は据え置き）
+- [x] `scripts/release/verify-manifest.mjs`: `closureDirty=true` で WARN・該当パス列挙（exit code は変えない）／`gitDirty` のみなら note ／フィールド欠如は無言（論点④(b)）
+- [x] 🔬 機械検証: AC1〜7 を実機実行で確認（AC1・AC7 は `git worktree` で clean tree を作って検証）／`verify-manifest` → OK・exit 0
 
 ### 完了前チェック
-- [ ] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
-- [ ] `CHANGELOG.md` への記載要否を判断（配布 manifest のスキーマ追加＝consumer が読むファイルのため）
-- [ ] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。所見はログへ）
-- [ ] 🔬 全回帰1回（`npm test` / `npm run typecheck` / `npm run lint` → 全パス）
+- [x] 受け入れ基準 1〜7 を1項目ずつ照合（全て ✅・上表に証跡）
+- [x] `CHANGELOG.md` への記載要否を判断 → **記載しない**（CHANGELOG は「`@nanairo-sheet/*` package の変更履歴」で、本DDは package の API・挙動を一切変えない。manifest 側は自己記述の `dirtyNote` を持たせて読み方をその場で説明できるようにした）
+- [x] 😈 セルフレビュー1巡（所見2件を反映。ログ参照）
+- [x] 🔬 全回帰1回（`npm test` 1216件 / `npm run typecheck` 0 error / `npm run lint`（boundary new=0）→ 全パス）
 
 ## ログ
 
@@ -94,3 +94,10 @@ Evidence Level: standard
 - 起票。DD-038 の tarball 更新中に判明した。生成した manifest が `gitDirty: true` になり、原因を追うと別セッションの未追跡 DD ファイル 1 個だけで、配布物の再現性には影響していなかった
 - 親子DDにはしない。DD-038（貼り付け後の選択レンジ）とはテーマが無関係で、DD-038 は AC 全充足でクローズ・アーカイブ済み＝分割対象の親ではない。系譜としては DD-017（配布・release automation）／DD-018（Stage 1 ゲート）だが、どちらも完了・ゲート判定済みのため閉じたDDに子をぶら下げず独立番号とした
 - **同一の症状に見えた別問題は DD-038 の作業中に是正済み**（`2a07b0d`）。`build-release.sh` が証跡を `doc/DD/DD-017/`（アーカイブ済みDDの active パス）へ複製し、孤児フォルダの未追跡ファイルで自ら `gitDirty=true` を誘発していた。複製先をアーカイブ先へ向け直す案は**採らなかった** — `doc/archived/DD/DD-017/release-manifest.json` は CG-4 の gate 証拠として `doc/plan/cg-ledger.md` と DD-018 の `stage1-gate-checklist.md` から参照されており、build のたびに上書きすると Stage 1 のゲート証拠が壊れるため
+- Human Spec Gate 実施（ユーザー指示で全論点を推奨案）。実装は 2 ファイル・約 40 行。既存 `gitDirty` は 1 文字も変えていない
+- **AC1・AC7 は `git worktree` で検証した**。本体の working tree は別セッションが `packages/render/` を編集中で clean にできず、かつ他セッションのファイルには触れられないため、HEAD の隔離コピーを作って「clean tree」「`doc/` のみ dirty」の 2 状態を再現した。検証後 worktree は削除済み
+- **😈 セルフレビューで 2 件を反映**:
+  - **監視漏れの偽陰性**: `git status --porcelain -- <存在しないパス>` は**エラーにならず exit 0 で空を返す**（実測）。つまり将来 `tsconfig.base.json` 等がリネーム・移動されると、**警告なく監視対象から外れて `closureDirty` が常に false になる**。`CLOSURE_PATHSPEC` の各エントリの存在を build 時に確認し、無ければ WARN を出すようにした（成果物は作る。判定材料が減ったことを伝えるのが目的）
+  - **一覧の打ち切りが黙っている**: 21 件以上汚れていると先頭 20 件だけが載り「これで全部」と誤読させる。`…他 N 件（一覧は上限20件）` を末尾に足した（判定の正は boolean 側で、一覧はあくまで手掛かり）
+- **知見昇格（アーカイブ時）**: `doc/engineering-patterns.md` #16「許可リストで監視対象を列挙する仕組みは、対象が消えたことを検知できない（存在確認をセットで置く）」を追加した。同スクリプト内の `CLOSURE_PKGS`（対象が消えたら tarball 名の完全一致で必ず落ちる＝安全側）との対比を含め、「消えたら落ちるか、消えたら黙るか」で許可リストを分類する形にした。仕様書同期は該当なし（`doc/spec/` を持たない SDK リポジトリ）
+- **`release/` の再生成は本DDでは行わない**。現在の成果物は `8329c0a`・`gitDirty: false` で健全（`verify-manifest` OK）だが、いま再ビルドすると別セッションの `packages/render/` 編集を拾って `closureDirty: true` になり、かえって引き渡しに適さなくなる。新フィールド付きの manifest は、配布パスが clean な次回ビルドから載る

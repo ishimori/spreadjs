@@ -60,11 +60,25 @@ fi
 # 決めるファイル**も含める。`packages/` だけに絞ると「release スクリプトを書き換えたまま pack した」を
 # 見逃す。ここを増減させたら DD-040 の決定事項も更新すること。
 CLOSURE_PATHSPEC=(packages scripts/release package.json package-lock.json tsconfig.base.json)
+
+# 監視対象の存在確認。`git status --porcelain -- <存在しないパス>` は**エラーにならず exit 0 で空を返す**ため、
+# リネーム・移動すると警告なく監視対象から外れる（＝汚れていても closureDirty=false になる偽陰性）。
+# ここで気付けるようにする（成果物は作る。判定材料が減ったことを伝えるのが目的）。
+for _p in "${CLOSURE_PATHSPEC[@]}"; do
+  [ -e "$REPO_ROOT/$_p" ] || log "WARN: CLOSURE_PATHSPEC の '$_p' が存在しません。移動・改名したなら本スクリプトと DD-040 の論点②を更新してください（このままだと監視漏れになります）。"
+done
+
 CLOSURE_STATUS="$(cd "$REPO_ROOT" && git status --porcelain -- "${CLOSURE_PATHSPEC[@]}" 2>/dev/null)"
 if [ -n "$CLOSURE_STATUS" ]; then
   CLOSURE_DIRTY="true"
   # manifest へ載せる要約（porcelain の状態プレフィックス3文字を落としてパスだけにする・上限20件）。
+  # 打ち切った場合は残数を明示する（「20件で全部」と誤読させない。判定の正は boolean 側）。
+  _total="$(printf '%s\n' "$CLOSURE_STATUS" | wc -l | tr -d ' ')"
   CLOSURE_DIRTY_PATHS="$(printf '%s\n' "$CLOSURE_STATUS" | cut -c4- | head -20)"
+  if [ "$_total" -gt 20 ]; then
+    CLOSURE_DIRTY_PATHS="$CLOSURE_DIRTY_PATHS
+…他 $((_total - 20)) 件（一覧は上限20件）"
+  fi
 else
   CLOSURE_DIRTY="false"
   CLOSURE_DIRTY_PATHS=""
