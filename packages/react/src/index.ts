@@ -23,6 +23,9 @@ import {
 import {
   mount,
   type GridCellCommitChange,
+  type GridColumnDisplayFormat,
+  type GridColumnFormatRule,
+  type GridColumnType,
   type GridConnectionState,
   type GridDiagnosticHook,
   type GridErrorCode,
@@ -54,6 +57,19 @@ export interface NanairoSheetViewCommonProps {
   readonly wrapColumns?: readonly string[];
   /** ドキュメント ID（識別系）。 */
   readonly documentId?: string;
+  // --- 列スキーマ系（DD-035・grid の同名 mount オプションへ 1:1 写像。mount 固定＝変更で remount・値で直列化） ---
+  /** 列タイプ（grid columnTypes・DD-027-1/2＋DD-035 date）。選択式／リンク／日付カレンダー。 */
+  readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
+  /** セル書式ルール（grid columnFormats・DD-027-3）。値→背景色・文字色・バッジ。 */
+  readonly columnFormats?: Readonly<Record<string, readonly GridColumnFormatRule[]>>;
+  /** 列見出しキャプション（grid columnCaptions・DD-033-2）。 */
+  readonly columnCaptions?: Readonly<Record<string, string>>;
+  /** 数値/日付の表示書式（grid columnDisplayFormats・DD-033-2）。 */
+  readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
+  /** 表示専用モード（grid readOnly・DD-033-1）。 */
+  readonly readOnly?: boolean;
+  /** 読み取り専用列（grid readOnlyColumns・DD-035 R4）。 */
+  readonly readOnlyColumns?: readonly string[];
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -110,6 +126,15 @@ export interface NanairoSheetViewHandle {
   focus(): void;
   /** 現在の接続状態（未 mount 時は 'stopped'）。 */
   connectionState(): GridConnectionState;
+  // --- DD-035 R7/R6: 行操作・スクロール・アクティブセルの命令 API（GridInstance 直結・未 mount 時は warn して無視） ---
+  /** 行挿入（grid GridInstance.insertRows 直結・DD-021-1）。共同編集モードでは通常の submit 経路に乗る。 */
+  insertRows(options: { readonly afterRowId: string | null; readonly count?: number }): void;
+  /** 行削除（grid GridInstance.deleteRows 直結・DD-021-1）。 */
+  deleteRows(rowIds: readonly string[]): void;
+  /** 指定行を可視域へ（grid GridInstance.scrollToRow 直結・DD-035 R6）。setData/insertRows 直後の新 RowId でも成立。 */
+  scrollToRow(rowId: string): void;
+  /** アクティブセルを移して可視化＋focus（grid GridInstance.setActiveCell 直結・DD-035 R6）。 */
+  setActiveCell(rowId: string, columnId: string): void;
 }
 
 /** callback 群だけを保持する内部型（最新参照を subscribe から呼ぶ・stale closure 回避）。 */
@@ -133,6 +158,23 @@ function nowMs(): number {
   return Date.now();
 }
 
+/**
+ * 列スキーマ系 props の正準直列化（Codex P2）: Record のキー順に依存しない（`{a,b}` と `{b,a}` を同一視）よう
+ * オブジェクトはキーをソートして直列化する。配列は順序を保つ（select の候補順・columnOrder は意味を持つ）。
+ * `readOnlyColumns` は集合として扱うため呼び出し側でソート済みのコピーを渡す。
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 /** 識別系 props（mount 固定）を安定文字列へ直列化する。配列は値で直列化＝毎 render 新規リテラルを吸収（契約 §4）。 */
 function mountKeyOf(props: NanairoSheetViewProps): string {
   const isStandalone = props.mode === 'standalone';
@@ -144,6 +186,15 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     documentId: props.documentId ?? null,
     displayName: isStandalone ? null : (props.displayName ?? null),
     clientId: isStandalone ? null : (props.clientId ?? null),
+    // DD-035: 列スキーマ系は mount 固定（grid 側が mount 時に registry 化・fail-fast する）＝値で直列化して remount 判定。
+    // 列数規模（数十列）の小さな設定オブジェクトのため毎 render の直列化コストは無視できる（initialData とは異なる）。
+    // Record 系はキー順非依存で正準化（Codex P2）。readOnlyColumns は集合＝ソート。wrapColumns は従来どおり順序保持。
+    columnTypes: props.columnTypes === undefined ? null : canonicalJson(props.columnTypes),
+    columnFormats: props.columnFormats === undefined ? null : canonicalJson(props.columnFormats),
+    columnCaptions: props.columnCaptions === undefined ? null : canonicalJson(props.columnCaptions),
+    columnDisplayFormats: props.columnDisplayFormats === undefined ? null : canonicalJson(props.columnDisplayFormats),
+    readOnly: props.readOnly ?? null,
+    readOnlyColumns: props.readOnlyColumns === undefined ? null : [...props.readOnlyColumns].sort(),
   });
 }
 
@@ -182,6 +233,13 @@ function toMountOptions(
     columnWidths: props.initialColumnWidths,
     rowHeights: props.initialRowHeights,
     wrapColumns: props.wrapColumns,
+    // DD-035: 列スキーマ系（grid 同名オプションへ 1:1）。undefined はそのまま渡す（grid 側で未指定＝現行挙動）。
+    columnTypes: props.columnTypes,
+    columnFormats: props.columnFormats,
+    columnCaptions: props.columnCaptions,
+    columnDisplayFormats: props.columnDisplayFormats,
+    readOnly: props.readOnly,
+    readOnlyColumns: props.readOnlyColumns,
     onEvent,
     onDiagnostic,
   };
@@ -265,6 +323,39 @@ function NanairoSheetViewImpl(
       },
       connectionState(): GridConnectionState {
         return instanceRef.current?.connectionState() ?? 'stopped';
+      },
+      // DD-035 R7/R6: GridInstance 直結。未 mount は setData/focus と同じく warn して無視（契約 §3）。
+      insertRows(options): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'insertRows を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.insertRows(options);
+      },
+      deleteRows(rowIds): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'deleteRows を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.deleteRows(rowIds);
+      },
+      scrollToRow(rowId): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'scrollToRow を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.scrollToRow(rowId);
+      },
+      setActiveCell(rowId, columnId): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'setActiveCell を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.setActiveCell(rowId, columnId);
       },
     }),
     [],

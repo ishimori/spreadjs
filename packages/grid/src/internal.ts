@@ -73,6 +73,12 @@ export interface GridDebugApi {
   selectHighlightedIndex(): number;
   /** DD-027-1: 選択式ドロップダウンのハイライト値（未 open は null）。 */
   selectHighlightedValue(): string | null;
+  /** DD-035 R2: 日付カレンダーが開いているか。 */
+  dateOpen(): boolean;
+  /** DD-035 R2: 日付カレンダーのハイライト日付（未 open は null）。 */
+  dateHighlightedValue(): string | null;
+  /** DD-035 R2: 日付カレンダーの表示月（未配線は null）。 */
+  dateViewMonth(): { year: number; month: number } | null;
   /** DD-020-3: 現在 Undo 可能か（スタック非空・pending 0・非 in-flight）。 */
   canUndo(): boolean;
   /** DD-020-3: 現在 Redo 可能か。 */
@@ -86,6 +92,10 @@ export interface GridDebugApi {
   colIdAt(index: number): string | undefined;
   rowIndexOf(rowId: string): number;
   cellRectAt(row: number, col: number): GridDebugCellRect | null;
+  /** DD-035 R6: scroller の実 scrollTop（scrollToRow の可視化検証用）。 */
+  scrollTop(): number;
+  /** DD-035 R6: scroller の実 scrollLeft（scrollToRow が横スクロールを動かさない検証用）。 */
+  scrollLeft(): number;
   /** 列記号ヘッダーの矩形（DD-012-4 E2E: 境界ドラッグ開始点の算出用）。 */
   columnHeaderRectAt(col: number): GridDebugCellRect | null;
   /** 行番号ヘッダーの矩形（DD-012-4 E2E）。 */

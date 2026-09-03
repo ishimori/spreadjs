@@ -102,6 +102,13 @@ interface ReactStandaloneHandle {
   connectionState(): string;
   clearSaved(): void;
   resetCommits(): void;
+  // DD-035 R7/R6: ref handle の命令 API を公開契約のまま E2E へ橋渡しする（GridInstance は出さない）。
+  insertRows(options: { readonly afterRowId: string | null; readonly count?: number }): void;
+  deleteRows(rowIds: readonly string[]): void;
+  scrollToRow(rowId: string): void;
+  setActiveCell(rowId: string, columnId: string): void;
+  /** 直近の row-structure-change（insert の新 RowId を E2E が拾うため）。 */
+  lastRowStructureChange(): unknown;
 }
 
 let root: Root | null = null;
@@ -165,6 +172,28 @@ const handle: ReactStandaloneHandle = {
     commitCount = 0;
     lastCommit = null;
     events.length = 0;
+  },
+  // DD-035 R7/R6: ref handle 直結（未 mount 時は Facade が warn して無視する契約）。
+  insertRows(options): void {
+    viewRef?.current?.insertRows(options);
+  },
+  deleteRows(rowIds): void {
+    viewRef?.current?.deleteRows(rowIds);
+  },
+  scrollToRow(rowId): void {
+    viewRef?.current?.scrollToRow(rowId);
+  },
+  setActiveCell(rowId, columnId): void {
+    viewRef?.current?.setActiveCell(rowId, columnId);
+  },
+  lastRowStructureChange(): unknown {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const e = events[i]!;
+      if (e.type === 'row-structure-change') {
+        return e.change;
+      }
+    }
+    return null;
   },
 };
 

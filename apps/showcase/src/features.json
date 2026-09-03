@@ -72,8 +72,8 @@
       "id": "react",
       "title": "React 組み込み（<NanairoSheetView>）",
       "status": "available",
-      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData。StrictMode・再mountでリークしません（react は peer 依存）。",
-      "source": "DD-025",
+      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列は grid と同名の props で指定できます。StrictMode・再mountでリークしません（react は peer 依存）。",
+      "source": "DD-025・DD-035",
       "meta": "peer: react ^19 ／ unit＋実ブラウザーE2E（StrictMode・leak）検証済み"
     },
     {
@@ -147,18 +147,18 @@
       "id": "row-ops",
       "title": "行の挿入・削除",
       "status": "available",
-      "summary": "共同編集中でも整合が崩れない行操作。複数人が同時に行を挿入・削除してもデータは正しく収束し（同時挿入は両方保持）、削除された行を編集中でも入力中の文字は失われません。挿入・削除後もカーソル・選択範囲は同じ行を指し続けます。API（insertRows/deleteRows）とショートカット（Ctrl+Shift+「+」/Ctrl+「-」）の両方で操作できます。",
-      "source": "DD-021・DD-021-1・DD-021-2・DD-021-3（K3/K4/P2-1 回収）",
+      "summary": "共同編集中でも整合が崩れない行操作。複数人が同時に行を挿入・削除してもデータは正しく収束し（同時挿入は両方保持）、削除された行を編集中でも入力中の文字は失われません。挿入・削除後もカーソル・選択範囲は同じ行を指し続けます。API（insertRows/deleteRows・React handle からも発行可）とショートカット（Ctrl+Shift+「+」/Ctrl+「-」）の両方で操作でき、追加した行へは scrollToRow/setActiveCell で視点を移せます（ボタン起点の「行を追加」用）。",
+      "source": "DD-021・DD-021-1・DD-021-2・DD-021-3（K3/K4/P2-1 回収）・DD-035",
       "meta": "5万行文書で行挿入1,000連発 合計128ms（目標2s）実測／収束・reconnect・randomized 検証済み",
       "demo": "./demo.html?scenario=row-ops"
     },
     {
       "id": "column-types",
-      "title": "列タイプ（選択式・リンク・書式）",
+      "title": "列タイプ（選択式・リンク・日付・書式・読み取り専用列）",
       "status": "available",
-      "summary": "列単位で編集方式・クリック挙動・表示装飾を変えられます。選択式入力列（候補ドロップダウン・commit 前検証）、ハイパーリンク列（クリックで link-open 通知・SDK は画面遷移しない）、値に応じた背景色・バッジ書式（利用側が値→書式ルールを与える view-local 描画）、列境界ダブルクリックの幅自動調整（auto-fit）。設定は宣言的な mount オプションのみで、Cell type plugin のプロトタイプを兼ねます。",
-      "source": "DD-027・DD-027-1・DD-027-2・DD-027-3",
-      "meta": "選択式/リンク/書式/auto-fit ／ unit＋実ブラウザーE2E 検証済み",
+      "summary": "列単位で編集方式・クリック挙動・表示装飾を変えられます。選択式入力列（候補ドロップダウン・commit 前検証）、ハイパーリンク列（クリックで link-open 通知・SDK は画面遷移しない）、日付列（カレンダーのポップオーバーから LocalDate を選択・手入力と併存・開き方を列で指定）、読み取り専用列（readOnlyColumns＝編集開始を抑止し、範囲貼り付け・範囲クリアはその列だけスキップして他列へ適用）、値に応じた背景色・バッジ書式（利用側が値→書式ルールを与える view-local 描画）、列境界ダブルクリックの幅自動調整（auto-fit）。設定は宣言的な mount オプション（React では同名 props）のみで、Cell type plugin のプロトタイプを兼ねます。",
+      "source": "DD-027・DD-027-1・DD-027-2・DD-027-3・DD-035",
+      "meta": "選択式/リンク/日付カレンダー/書式/auto-fit/読み取り専用列 ／ unit＋実ブラウザーE2E 検証済み（日付カレンダー・読み取り専用列の実IME併存は実機未確認）",
       "demo": "./demo.html?scenario=column-types"
     },
     {

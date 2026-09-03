@@ -19,6 +19,33 @@
 
 ### Added
 
+- **grid 日付列 `columnTypes` の `{ type: 'date', openOn? }`（Experimental・DD-035 R2）**: カレンダーのポップオーバーから
+  LocalDate（`YYYY-MM-DD`・ADR-0012）を選んで確定する列タイプ（松下 生産納期 consumer 駆動）。
+  - **手入力と併存**: 印字文字キーは従来どおり常駐 textarea の手入力を開始し `2026/7/31` → `2026-07-31` に正準化する
+    （型は編集 UI の選択であって入力規則ではない＝非日付文字列の手入力は拒否しない）。
+  - **開き方** `openOn:'dblclick'`（既定）=ダブルクリック/F2/Enter/Alt+↓/セル右端の 📅 アイコン、`'icon'`=📅/Alt+↓ のみ。
+    表示中は ←→↑↓（日）・PageUp/Down（月）・Enter 確定・Esc/Tab 取消・「今日」「クリア」（blank）。
+  - 確定は既存 chokepoint（`submitSetCells`）へ流す＝Undo・cell-commit・OCC（開いた時点で beforeRevision 凍結）が既存経路で成立。
+    editor-state-machine・ime-editing-session は無改変（カレンダーは listbox と同方式の別 DOM・focus は textarea のまま）。
+  - `readOnly`／`readOnlyColumns` の列では開かない。`openOn` 不正値は `column-types-invalid` で fail-fast。
+- **grid 読み取り専用列 `readOnlyColumns`（Experimental・DD-035 R4）**: ColumnId 配列で指定した列のセルを編集不可にする
+  （列タイプと直交・両モード共通・mount 時固定）。
+  - **抑止（入口）**: 編集開始（印字キー・F2・ダブルクリック・IME）／Delete・Backspace／選択式ドロップダウン／日付カレンダー。
+    アクティブセルが指定列にある間、常駐 textarea は `readOnly` 属性（実 IME 物理遮断）＋編集 DOM イベントの dispatch 抑止。
+  - **範囲操作**: 貼り付け・範囲クリア・cut のクリアは指定列のセルだけ**スキップ**して他列へ適用（TSV 列位置不変・全件スキップは
+    no-op・診断 `readonly-column-skipped`）。**保証層**: 指定列への変更を含む SetCells は submit 直前で op 全体を破棄
+    （診断 `readonly-column-blocked`）。
+  - 維持: 範囲選択・コピー・スクロール・リサイズ・link-open・行挿入削除・setData・リモート受信反映。**権限制御ではない**
+    （サーバー側強制なし）。未知列・重複は `column-types-invalid` で fail-fast。新規公開 error/conflict code なし。
+- **grid 命令 API `scrollToRow(rowId)` / `setActiveCell(rowId, columnId)`（Experimental・DD-035 R6）**: 指定行の可視化
+  （最小スクロール・横不変）とアクティブセル移動（クリック同経路＝編集中は確定して移動・ポップアップを閉じ・textarea へ focus）。
+  `setData`／`insertRows` の**直後**でも同期で成立する（行 Axis 未再構築ならその場で再構築してから適用・初回描画前のみ保留）。未知 ID は診断 warn
+  （`scroll-row-unknown`／`active-cell-unknown`）のみで no-op。
+- **react `NanairoSheetViewHandle` の命令 API 4 点＋列スキーマ props 6 点（Experimental・DD-035 R7）**: handle へ
+  `insertRows`／`deleteRows`／`scrollToRow`／`setActiveCell`（GridInstance 直結・未 mount は `handle-before-mount` warn）を追加。
+  props へ `columnTypes`／`columnFormats`／`columnCaptions`／`columnDisplayFormats`／`readOnly`／`readOnlyColumns`
+  （grid 同名オプションへ 1:1 写像・識別系＝値変更で自動 remount）を追加した（DD-027/033 の列スキーマ系が React Facade から
+  到達不能だったギャップの解消）。
 - **grid 表示専用モード `readOnly`（Experimental・DD-033-1）**: mount オプション1点（両モード共通・mount 時固定）で
   文書を一切変更できない閲覧専用グリッドを提供する（明細閲覧ビュー DD-033 の第1子）。
   - **2層抑止**: 入口（編集開始〔キー入力・F2・ダブルクリック・IME〕・paste/cut・Delete/Backspace クリア・

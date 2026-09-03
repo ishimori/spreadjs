@@ -6,7 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-035 | 列タイプ拡張と命令API | N/A |  |
 
 ## 保留・見送り
 
@@ -17,6 +16,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-035 | 列タイプ拡張と命令API | 日付列（カレンダー）・readOnlyColumns・scrollToRow/setActiveCell・React handle 4 メソッド＋列スキーマ props 6 点を提供。AC1〜9 充足・Codex high P1×1/P2×3 全反映・全回帰 green（unit 1155・E2E 123＋3）。T1/M1 未実施＝既知の未保証境界へ移送。ユーザー確認済みでアーカイブ（2026-09-03） |
 | DD-034 | DD運用軽量化第2弾 | 記録git一本化・親統合レビュー1回・完了処理1コミット・ガバナンスDD凍結・IME台帳一本化・dd-update停止を反映。効果測定はDD-033へ移管 |
 | DD-033 | 明細閲覧ビュー | readOnly・columnCaptions・columnDisplayFormats を提供。AC1〜10充足・統合レビューP2×2修正・計測回帰なし・M1/M2/T1全PASS（実IME証明） |
 | DD-033-1 | 表示専用モード | readOnly mount オプション＝2層抑止（入口＋chokepoint）。AC1〜7充足・全回帰green(1077件)・IME系3ファイル無改変。レビュー/M1/T1は親Phase 3集約 |

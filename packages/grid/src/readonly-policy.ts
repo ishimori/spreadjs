@@ -9,6 +9,7 @@
 // composition 中（DOM/内部いずれか）と非 Navigation 位相では必ず pass する（IME・編集中のキー処理は状態機械へ
 // 委ねる＝editor-state-machine 無改変・I-3）。readOnly ではこれらの位相へ到達しないのが設計だが、防御的に不消費とする。
 
+import type { SetCellsChange } from '@nanairo-sheet/core';
 import type { EditPhase } from '@nanairo-sheet/ime';
 
 /** readOnly keydown 裁定へ渡す素の値（DOM 非依存・integration-editor の KeydownInterceptInput と同項目）。 */
@@ -40,4 +41,44 @@ export function shouldSuppressReadonlyKey(input: ReadonlyPolicyInput): boolean {
     return false;
   }
   return EDIT_ENTRY_KEYS.has(input.key);
+}
+
+// ---- DD-035 R4: 列単位 readOnly（readOnlyColumns）の SetCells フィルタ（純関数・DOM 非依存） ----
+
+/** readOnly 列フィルタの結果。`kept` が空なら呼び出し側は no-op（submit しない）。 */
+export interface ReadOnlyColumnPartition {
+  /** readOnly 列以外への変更（順序維持）。 */
+  readonly kept: readonly SetCellsChange[];
+  /** スキップした readOnly 列への変更件数。 */
+  readonly skipped: number;
+}
+
+/**
+ * SetCells の changes から readOnly 列（`isReadOnlyColumn(columnId)===true`）への変更を除く（DD-035 R4・論点4）。
+ * 範囲貼り付け・範囲クリア・cut のクリアが共有する: 「readOnly 列のセルだけスキップし他列へ適用・TSV の列位置は
+ * ずらさない・全セルがスキップなら no-op」。上限/はみ出し検査は矩形全体で**先に**行われている前提（本関数は事後フィルタ）。
+ * columnId は内部 ColumnId（branded string）だが判定は文字列化して行う（registry は文字列キー）。
+ */
+export function partitionReadOnlyColumnChanges(
+  changes: readonly SetCellsChange[],
+  isReadOnlyColumn: (columnId: string) => boolean,
+): ReadOnlyColumnPartition {
+  const kept: SetCellsChange[] = [];
+  let skipped = 0;
+  for (const change of changes) {
+    if (isReadOnlyColumn(String(change.columnId))) {
+      skipped += 1;
+    } else {
+      kept.push(change);
+    }
+  }
+  return { kept, skipped };
+}
+
+/** SetCells が readOnly 列への変更を 1 件でも含むか（chokepoint の保証層＝含めば op 全体を破棄する）。 */
+export function touchesReadOnlyColumn(
+  changes: readonly SetCellsChange[],
+  isReadOnlyColumn: (columnId: string) => boolean,
+): boolean {
+  return changes.some((change) => isReadOnlyColumn(String(change.columnId)));
 }

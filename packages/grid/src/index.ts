@@ -20,7 +20,7 @@ import type { GridDiagnosticHook } from './diagnostics';
 
 // 列タイプ体系（DD-027-1・Experimental 0.x）。公開型は grid 自身（column-types.ts）で定義する（内部 package 型
 // ではない＝R7 に反さない）。registry 本体は Internal で、consumer 向けの登録 API は公開しない（決定⑤）。
-export type { GridColumnType, GridSelectColumnType, GridLinkColumnType } from './column-types';
+export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType } from './column-types';
 import type { GridColumnType } from './column-types';
 
 // セル書式モデル（DD-027-3・Experimental 0.x）。利用側供給の「値→書式マッピング」による view-local 描画。
@@ -182,8 +182,13 @@ export interface GridCommonMountOptions {
    * - **リンク**: 値は string 1本。クリックで `link-open` イベントが発火する（**SDK は navigate しない**が既定）。
    *   `defaultOpen:true` のときだけ絶対 http/https URL を `window.open(_,'_blank','noopener,noreferrer')` で開く
    *   （javascript:/data:/相対/非URL は open せず診断 warn・link-open は常に発火）。リンク列は wrapColumns と併用不可。
-   * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用）は mount 時に `error`（phase=config・
-   *   code=`column-types-invalid`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
+   * - **日付**（DD-035 R2）: `{ type: 'date', openOn? }`。カレンダーのポップオーバーから LocalDate（`YYYY-MM-DD`・ADR-0012）を
+   *   選んで確定する（Undo・cell-commit・OCC は既存の確定経路）。**手入力と併存**（印字文字キーは従来どおり textarea 手入力を開始し
+   *   `2026/7/31` → `2026-07-31` に正準化）。`openOn:'dblclick'`（既定）=ダブルクリック/F2/Enter/Alt+↓/📅 アイコン、
+   *   `'icon'`=📅 アイコン/Alt+↓ のみ。表示書式は `columnDisplayFormats` の date pattern を併用する。型は編集 UI の選択であって
+   *   入力規則ではない（非日付文字列の手入力は拒否しない）。readOnly／`readOnlyColumns` の列では開かない。
+   * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の `openOn` 不正値）は mount 時に `error`
+   *   （phase=config・code=`column-types-invalid`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
    */
   readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
   /**
@@ -242,6 +247,20 @@ export interface GridCommonMountOptions {
    *   （code=`readonly-invalid`）を出して編集可能側へ倒す（構成不整合が無いため mount fail-fast はしない）。
    */
   readonly readOnly?: boolean;
+  /**
+   * 読み取り専用列（ColumnId 文字列の配列・Experimental 0.x・DD-035 R4）。両モード共通・mount 時固定（wrapColumns と同運用）。
+   * 列タイプ（select/link/date）と**直交**する属性で、指定列のセルに対して:
+   * - **抑止（入口）**: 編集開始（印字キー・F2・ダブルクリック・IME）／Delete・Backspace クリア／選択式ドロップダウン／日付
+   *   カレンダー を開かない。アクティブセルが指定列にある間、常駐 textarea は `readOnly` 属性になる（実 IME を物理遮断）。
+   * - **範囲操作**: 範囲貼り付け・範囲クリア（Delete）・cut のクリアは指定列のセルだけ**スキップ**して他列へ適用する
+   *   （TSV の列位置はずらさない・全セルがスキップなら no-op・診断 info `readonly-column-skipped`）。
+   * - **保証層（chokepoint）**: 指定列への変更を含む SetCells は submit 直前で op 全体を破棄する（診断 warn
+   *   `readonly-column-blocked`）＝入口をすり抜ける経路でも指定列への文書 Operation 送信ゼロ。
+   * - **維持**: 範囲選択・コピー・スクロール・リサイズ・link-open・行挿入削除・setData・リモート受信反映・サーバー起点操作。
+   * - **注意**: 権限制御ではない（サーバー側強制なし＝readOnly と同じ）。共同編集の列権限は将来スコープ。
+   * - 不正設定（未知列・重複）は mount 時に `error`（phase=config・code=`column-types-invalid`）で fail-fast する。
+   */
+  readonly readOnlyColumns?: readonly string[];
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**
@@ -320,6 +339,23 @@ export interface GridInstance {
    * 最近傍生存行（下優先→上）へ activeCell を縮退する。実在対象が皆無なら実行前拒否（`rejected`/診断・文書無変更）。
    */
   deleteRows(rowIds: readonly string[]): void;
+  /**
+   * 指定行を可視域へ入れる（Experimental 0.x・DD-035 R6・両モード）。行が body viewport の外にあれば最小スクロールで
+   * 可視化し（Excel の scroll-follow と同じ）、既に可視なら何もしない（横スクロールは動かさない）。`setData` 再注入・
+   * `insertRows` の**直後**に新 RowId で呼んでも同期で成立する（行 Axis 未再構築なら、その場で再構築してから適用する）。
+   * boot 未完了・初回描画前だけは保留して初回描画後に適用する（保留中はキー入力を遮断）。
+   * 未知 RowId（tombstone・未注入）は診断 warn（code=`scroll-row-unknown`）のみで no-op
+   * （文書 Operation ではないため `rejected` は出さない・同期 throw しない）。
+   */
+  scrollToRow(rowId: string): void;
+  /**
+   * アクティブセルを指定セルへ移して可視化する（Experimental 0.x・DD-035 R6・両モード）。セルクリックと同じ経路を通る:
+   * 明示レンジは解除、編集中なら確定して移動、IME 変換中は変換確定後に移動（pendingNavigation）、開いている選択式/日付
+   * ポップアップは閉じ、**常駐 textarea へフォーカスする**（「行を追加」ボタン → 追加行へ入力開始、の用途）。
+   * `scrollToRow` と同じく構造変更直後でも同期で成立する（呼び出しから戻った時点で activeCell が移っている）。未知 RowId/ColumnId は診断 warn
+   * （code=`active-cell-unknown`）のみで no-op。readOnly でも動く（閲覧系）。
+   */
+  setActiveCell(rowId: string, columnId: string): void;
   /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */
   destroy(): void;
 }

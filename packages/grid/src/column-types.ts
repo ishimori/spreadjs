@@ -48,10 +48,26 @@ export interface GridLinkColumnType {
 }
 
 /**
- * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）とハイパーリンク（DD-027-2）。書式（DD-027-3）は別チャネル
- * （描画）で扱う想定のため本 union には加えない見込み。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ * 日付列（カレンダーのポップオーバーで LocalDate を選べる・DD-035 R2）。値は ADR-0012 の LocalDate 正準値 `YYYY-MM-DD`
+ * （`kind:'date'`）。**手入力と併存**する: 印字文字キーは従来どおり常駐 textarea の手入力を開始し（`2026/7/31` → 正準化）、
+ * カレンダーは `openOn` の操作で開く。型は「編集 UI の選択」であって入力規則ではない＝日付列でも非日付文字列の手入力は
+ * 拒否しない（link 列と同じ・拡張点: `strict` は要求が出たら検討）。表示書式は `columnDisplayFormats`（date pattern）を併用する。
  */
-export type GridColumnType = GridSelectColumnType | GridLinkColumnType;
+export interface GridDateColumnType {
+  readonly type: 'date';
+  /**
+   * カレンダーを開く操作（既定 `'dblclick'`）。
+   * - `'dblclick'`: ダブルクリック／F2／Enter（修飾なし）／Alt+↓／セル右端の 📅 アイコン（select 列と同じキー体系・発見性優先）。
+   * - `'icon'`: 📅 アイコン／Alt+↓ のみ。ダブルクリック・F2・Enter は従来どおり textarea 編集（既存値の部分修正が多い列向け）。
+   */
+  readonly openOn?: 'dblclick' | 'icon';
+}
+
+/**
+ * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）。書式（DD-027-3）は
+ * 別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ */
+export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType;
 
 /**
  * 絶対 http/https URL か（defaultOpen の open 可否・DD-027-2 決定・純関数＝TDD 対象）。`new URL(value)` がパースでき
@@ -83,7 +99,10 @@ export class ColumnTypeConfigError extends Error {
       | 'empty-options'
       | 'duplicate-options'
       | 'option-not-round-trip'
-      | 'wrap-link-conflict',
+      | 'wrap-link-conflict'
+      | 'readonly-unknown-column'
+      | 'readonly-duplicate-column'
+      | 'date-open-on-invalid',
     /** 対象列 ID（診断用）。 */
     readonly columnId: string,
     message: string,
@@ -126,6 +145,16 @@ export interface ColumnTypeRegistry {
   hasAnySelectColumn(): boolean;
   /** ハイパーリンク列が 1 つでもあるか（hover cursor の cheap path 縮退判定・DD-027-2）。 */
   hasAnyLinkColumn(): boolean;
+  /** 日付列か（DD-035 R2・カレンダーの開閉判定）。 */
+  isDateColumn(columnId: string): boolean;
+  /** 日付列の型（日付列でなければ undefined）。openOn の参照に使う（DD-035 R2）。 */
+  getDateType(columnId: string): GridDateColumnType | undefined;
+  /** 日付列が 1 つでもあるか（カレンダー UI の配線要否判定・DD-035 R2）。 */
+  hasAnyDateColumn(): boolean;
+  /** 読み取り専用列か（DD-035 R4・readOnlyColumns。列タイプと直交する属性）。 */
+  isReadOnlyColumn(columnId: string): boolean;
+  /** 読み取り専用列が 1 つでもあるか（列ロックの配線要否判定・無ければ現行経路を一切変えない）。 */
+  hasAnyReadOnlyColumn(): boolean;
 }
 
 /**
@@ -140,10 +169,34 @@ export function createColumnTypeRegistry(
   columnTypes: Readonly<Record<string, GridColumnType>> | undefined,
   columnOrder: readonly string[],
   wrapColumns?: Iterable<string>,
+  readOnlyColumns?: readonly string[],
 ): ColumnTypeRegistry {
   const types = new Map<string, GridColumnType>();
   const columnSet = new Set(columnOrder.map((c) => String(c)));
   const wrapSet = new Set<string>(wrapColumns === undefined ? [] : [...wrapColumns].map((c) => String(c)));
+
+  // DD-035 R4: 読み取り専用列（列タイプと直交する属性）。未知列・重複は fail-fast（columnTypes と同じ厳格さ・同じ公開 code）。
+  const readOnlySet = new Set<string>();
+  if (readOnlyColumns !== undefined) {
+    for (const raw of readOnlyColumns) {
+      const columnId = String(raw);
+      if (!columnSet.has(columnId)) {
+        throw new ColumnTypeConfigError(
+          'readonly-unknown-column',
+          columnId,
+          `readOnlyColumns: 未知の列 "${columnId}"（columnOrder に存在しない）`,
+        );
+      }
+      if (readOnlySet.has(columnId)) {
+        throw new ColumnTypeConfigError(
+          'readonly-duplicate-column',
+          columnId,
+          `readOnlyColumns: 列 "${columnId}" が重複指定されている`,
+        );
+      }
+      readOnlySet.add(columnId);
+    }
+  }
 
   if (columnTypes !== undefined) {
     for (const [columnId, type] of Object.entries(columnTypes)) {
@@ -154,13 +207,25 @@ export function createColumnTypeRegistry(
           `columnTypes: 未知の列 "${columnId}"（columnOrder に存在しない）`,
         );
       }
-      // 対応 type は 'select'（DD-027-1）・'link'（DD-027-2）。将来 type が増えたらここへ分岐を足す。
-      if (type.type !== 'select' && type.type !== 'link') {
+      // 対応 type は 'select'（DD-027-1）・'link'（DD-027-2）・'date'（DD-035）。将来 type が増えたらここへ分岐を足す。
+      if (type.type !== 'select' && type.type !== 'link' && type.type !== 'date') {
         throw new ColumnTypeConfigError(
           'unsupported-type',
           columnId,
           `columnTypes: 列 "${columnId}" の未対応 type "${(type as { type: string }).type}"`,
         );
+      }
+      if (type.type === 'date') {
+        // DD-035 R2: openOn は 2 値のみ（未指定=既定 'dblclick'）。JS 経路の不正値は fail-fast（サイレントに既定へ倒さない）。
+        if (type.openOn !== undefined && type.openOn !== 'dblclick' && type.openOn !== 'icon') {
+          throw new ColumnTypeConfigError(
+            'date-open-on-invalid',
+            columnId,
+            `columnTypes: 日付列 "${columnId}" の openOn "${String(type.openOn)}" は 'dblclick' | 'icon' のいずれかが必要`,
+          );
+        }
+        types.set(columnId, type);
+        continue;
       }
       if (type.type === 'link') {
         // DD-027-2: リンク列は wrap（折り返し・自動行高）と描画契約が両立しない（単行 fitText・下線 vs 複数行）。
@@ -219,13 +284,21 @@ export function createColumnTypeRegistry(
     return type !== undefined && type.type === 'link' ? type : undefined;
   };
 
+  const dateOf = (columnId: string): GridDateColumnType | undefined => {
+    const type = types.get(columnId);
+    return type !== undefined && type.type === 'date' ? type : undefined;
+  };
+
   let anySelect = false;
   let anyLink = false;
+  let anyDate = false;
   for (const type of types.values()) {
     if (type.type === 'select') {
       anySelect = true;
     } else if (type.type === 'link') {
       anyLink = true;
+    } else if (type.type === 'date') {
+      anyDate = true;
     }
   }
 
@@ -251,5 +324,10 @@ export function createColumnTypeRegistry(
     },
     hasAnySelectColumn: () => anySelect,
     hasAnyLinkColumn: () => anyLink,
+    isDateColumn: (columnId) => dateOf(columnId) !== undefined,
+    getDateType: (columnId) => dateOf(columnId),
+    hasAnyDateColumn: () => anyDate,
+    isReadOnlyColumn: (columnId) => readOnlySet.has(columnId),
+    hasAnyReadOnlyColumn: () => readOnlySet.size > 0,
   };
 }

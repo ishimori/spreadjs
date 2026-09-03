@@ -99,7 +99,29 @@ function parseLinkColumns(
 }
 // DD-033-1: 表示専用モードを URL で指定できる（E2E 用・?select= 等と同流儀）。例: `?readonly=1`。
 const readOnly = params.get('readonly') === '1';
-const columnTypes = parseLinkColumns(linkParam, parseColumnTypes(selectParam));
+// DD-035 R4: 読み取り専用列を URL で指定できる（E2E 用）。形式: `?readonlycols=col-2,col-3`。
+const readOnlyColumns = (params.get('readonlycols') ?? '').split(',').filter((c) => c !== '');
+// DD-035 R2: 日付列を URL で指定できる（E2E 用）。形式: `?date=col-2,col-3!icon`（列末尾 `!icon` で openOn:'icon'）。
+function parseDateColumns(
+  raw: string | null,
+  base: Record<string, GridColumnType> | undefined,
+): Record<string, GridColumnType> | undefined {
+  const merged: Record<string, GridColumnType> = { ...(base ?? {}) };
+  if (raw !== null && raw !== '') {
+    for (const spec of raw.split(',')) {
+      let columnId = spec;
+      const icon = columnId.endsWith('!icon');
+      if (icon) {
+        columnId = columnId.slice(0, -'!icon'.length);
+      }
+      if (columnId !== '') {
+        merged[columnId] = icon ? { type: 'date', openOn: 'icon' } : { type: 'date' };
+      }
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+const columnTypes = parseDateColumns(params.get('date'), parseLinkColumns(linkParam, parseColumnTypes(selectParam)));
 
 // DD-027-3: セル書式ルールを URL で指定できる（E2E/計測用・?select= と同方式）。
 // 形式: `?format=<列>:<ルール>;<ルール>,<列>:...`
@@ -325,6 +347,7 @@ const instance = mount(
     ...(columnCaptions !== undefined ? { columnCaptions } : {}),
     ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
     onEvent: renderStatus,
   },
 );

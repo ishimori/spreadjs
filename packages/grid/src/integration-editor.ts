@@ -84,10 +84,22 @@ export interface IntegrationEditorConfig {
    * keydown は従来どおり dispatch し、readOnly の編集キー抑止は mount-controller の interceptKeydown（readonly-policy）が担う。
    */
   readonly readOnly?: boolean;
+  /**
+   * 列単位 readOnly（DD-035 R4）の**論理**ロック判定。true を返す間、composition 系・beforeinput・input・dblclick の DOM
+   * イベントを状態機械へ dispatch しない（readOnly=true と同じ分岐を動的条件で共有＝synthetic 経路の論理遮断）。
+   * 物理遮断（textarea.readOnly 属性）は `setInputLock` が担う。未指定なら常に false＝現行経路は完全無変更。
+   */
+  readonly isInputLocked?: () => boolean;
 }
 
 export interface IntegrationEditor {
   readonly session: ImeEditingSession;
+  /**
+   * 列単位 readOnly（DD-035 R4）の**物理**ロック: 常駐 textarea の `readOnly` 属性を同期する（実 IME/実キーボードの入力を
+   * ブラウザ側で発生させない）。composition 中は属性を触らない（I-3: 変換中の textarea を変えない）。mount 時 readOnly=true
+   * のときは常に readOnly のまま（解除しない）。同値なら DOM を書かない（毎フレーム呼んでも無コスト）。
+   */
+  setInputLock(locked: boolean): void;
   /** scroller の pointerdown（main が hitTest 済み。null=ヘッダー/範囲外）。 */
   pointerdownCell(cell: CellPosition | null): void;
   /** scroller の dblclick（既存値編集開始）。 */
@@ -104,6 +116,10 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   const { signal } = abort;
   // DD-033-1: 表示専用モード。編集を起こす DOM イベントを状態機械へ渡さない（synthetic 論理遮断）。false/未指定は無変更。
   const readOnly = config.readOnly === true;
+  // DD-035 R4: 列単位ロック（アクティブセルが readOnlyColumns の列にある間）。readOnly と同じ分岐を動的条件で共有する。
+  // isInputLocked 未指定なら常に false＝DD-033-1 以前の経路と完全一致。
+  const inputBlocked = (): boolean => readOnly || config.isInputLocked?.() === true;
+  let columnLocked = false;
 
   // --- 常駐 textarea（1 個・破棄しない） ---
   const textarea = document.createElement('textarea');
@@ -240,25 +256,25 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   };
 
   on('compositionstart', () => {
-    if (readOnly) {
-      return; // DD-033-1: synthetic composition も状態機械へ渡さない（編集 UI を開かせない）
+    if (inputBlocked()) {
+      return; // DD-033-1/DD-035: synthetic composition も状態機械へ渡さない（編集 UI を開かせない）
     }
     dispatch({ type: 'compositionstart' });
   });
   on('compositionupdate', (event) => {
-    if (readOnly) {
+    if (inputBlocked()) {
       return;
     }
     dispatch({ type: 'compositionupdate', data: event.data });
   });
   on('compositionend', (event) => {
-    if (readOnly) {
+    if (inputBlocked()) {
       return;
     }
     dispatch({ type: 'compositionend', data: event.data });
   });
   on('beforeinput', (event) => {
-    if (readOnly) {
+    if (inputBlocked()) {
       return;
     }
     if (event instanceof InputEvent) {
@@ -266,8 +282,8 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     }
   });
   on('input', (event) => {
-    if (readOnly) {
-      return; // DD-033-1: synthetic input（印字）も dispatch しない＝BeginEdit を論理遮断
+    if (inputBlocked()) {
+      return; // DD-033-1/DD-035: synthetic input（印字）も dispatch しない＝BeginEdit を論理遮断
     }
     if (event instanceof InputEvent) {
       dispatch({
@@ -344,8 +360,8 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   });
   // 常駐 textarea 自身のダブルクリック（active セルの既存値編集）。
   on('dblclick', () => {
-    if (readOnly) {
-      return; // DD-033-1: textarea 上の dblclick でも編集を開始しない
+    if (inputBlocked()) {
+      return; // DD-033-1/DD-035: textarea 上の dblclick でも編集を開始しない
     }
     dispatch({ type: 'doubleClick', cell: session.getActiveCell() });
   });
@@ -377,6 +393,13 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     },
     focus: () => {
       textarea.focus({ preventScroll: true });
+    },
+    setInputLock: (locked) => {
+      if (readOnly || locked === columnLocked || session.isComposing()) {
+        return; // mount 時 readOnly は恒久ロック／同値は無操作／composition 中は textarea を触らない（I-3）
+      }
+      columnLocked = locked;
+      textarea.readOnly = locked;
     },
     destroy: () => {
       abort.abort();

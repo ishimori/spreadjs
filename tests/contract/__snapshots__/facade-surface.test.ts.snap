@@ -30,7 +30,7 @@ export type { GridErrorCode, GridConflictCode } from './error-codes';
 export type { GridDiagnostic, GridDiagnosticLevel, GridDiagnosticHook } from './diagnostics';
 import type { GridConflictCode, GridErrorCode } from './error-codes';
 import type { GridDiagnosticHook } from './diagnostics';
-export type { GridColumnType, GridSelectColumnType, GridLinkColumnType } from './column-types';
+export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType } from './column-types';
 import type { GridColumnType } from './column-types';
 export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
 import type { GridColumnFormatRule } from './format-rules';
@@ -197,8 +197,13 @@ export interface GridCommonMountOptions {
      * - **リンク**: 値は string 1本。クリックで \`link-open\` イベントが発火する（**SDK は navigate しない**が既定）。
      *   \`defaultOpen:true\` のときだけ絶対 http/https URL を \`window.open(_,'_blank','noopener,noreferrer')\` で開く
      *   （javascript:/data:/相対/非URL は open せず診断 warn・link-open は常に発火）。リンク列は wrapColumns と併用不可。
-     * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用）は mount 時に \`error\`（phase=config・
-     *   code=\`column-types-invalid\`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
+     * - **日付**（DD-035 R2）: \`{ type: 'date', openOn? }\`。カレンダーのポップオーバーから LocalDate（\`YYYY-MM-DD\`・ADR-0012）を
+     *   選んで確定する（Undo・cell-commit・OCC は既存の確定経路）。**手入力と併存**（印字文字キーは従来どおり textarea 手入力を開始し
+     *   \`2026/7/31\` → \`2026-07-31\` に正準化）。\`openOn:'dblclick'\`（既定）=ダブルクリック/F2/Enter/Alt+↓/📅 アイコン、
+     *   \`'icon'\`=📅 アイコン/Alt+↓ のみ。表示書式は \`columnDisplayFormats\` の date pattern を併用する。型は編集 UI の選択であって
+     *   入力規則ではない（非日付文字列の手入力は拒否しない）。readOnly／\`readOnlyColumns\` の列では開かない。
+     * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の \`openOn\` 不正値）は mount 時に \`error\`
+     *   （phase=config・code=\`column-types-invalid\`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
      */
     readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
     /**
@@ -257,6 +262,20 @@ export interface GridCommonMountOptions {
      *   （code=\`readonly-invalid\`）を出して編集可能側へ倒す（構成不整合が無いため mount fail-fast はしない）。
      */
     readonly readOnly?: boolean;
+    /**
+     * 読み取り専用列（ColumnId 文字列の配列・Experimental 0.x・DD-035 R4）。両モード共通・mount 時固定（wrapColumns と同運用）。
+     * 列タイプ（select/link/date）と**直交**する属性で、指定列のセルに対して:
+     * - **抑止（入口）**: 編集開始（印字キー・F2・ダブルクリック・IME）／Delete・Backspace クリア／選択式ドロップダウン／日付
+     *   カレンダー を開かない。アクティブセルが指定列にある間、常駐 textarea は \`readOnly\` 属性になる（実 IME を物理遮断）。
+     * - **範囲操作**: 範囲貼り付け・範囲クリア（Delete）・cut のクリアは指定列のセルだけ**スキップ**して他列へ適用する
+     *   （TSV の列位置はずらさない・全セルがスキップなら no-op・診断 info \`readonly-column-skipped\`）。
+     * - **保証層（chokepoint）**: 指定列への変更を含む SetCells は submit 直前で op 全体を破棄する（診断 warn
+     *   \`readonly-column-blocked\`）＝入口をすり抜ける経路でも指定列への文書 Operation 送信ゼロ。
+     * - **維持**: 範囲選択・コピー・スクロール・リサイズ・link-open・行挿入削除・setData・リモート受信反映・サーバー起点操作。
+     * - **注意**: 権限制御ではない（サーバー側強制なし＝readOnly と同じ）。共同編集の列権限は将来スコープ。
+     * - 不正設定（未知列・重複）は mount 時に \`error\`（phase=config・code=\`column-types-invalid\`）で fail-fast する。
+     */
+    readonly readOnlyColumns?: readonly string[];
     /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
     readonly onEvent?: GridEventListener;
     /**
@@ -334,6 +353,23 @@ export interface GridInstance {
      * 最近傍生存行（下優先→上）へ activeCell を縮退する。実在対象が皆無なら実行前拒否（\`rejected\`/診断・文書無変更）。
      */
     deleteRows(rowIds: readonly string[]): void;
+    /**
+     * 指定行を可視域へ入れる（Experimental 0.x・DD-035 R6・両モード）。行が body viewport の外にあれば最小スクロールで
+     * 可視化し（Excel の scroll-follow と同じ）、既に可視なら何もしない（横スクロールは動かさない）。\`setData\` 再注入・
+     * \`insertRows\` の**直後**に新 RowId で呼んでも同期で成立する（行 Axis 未再構築なら、その場で再構築してから適用する）。
+     * boot 未完了・初回描画前だけは保留して初回描画後に適用する（保留中はキー入力を遮断）。
+     * 未知 RowId（tombstone・未注入）は診断 warn（code=\`scroll-row-unknown\`）のみで no-op
+     * （文書 Operation ではないため \`rejected\` は出さない・同期 throw しない）。
+     */
+    scrollToRow(rowId: string): void;
+    /**
+     * アクティブセルを指定セルへ移して可視化する（Experimental 0.x・DD-035 R6・両モード）。セルクリックと同じ経路を通る:
+     * 明示レンジは解除、編集中なら確定して移動、IME 変換中は変換確定後に移動（pendingNavigation）、開いている選択式/日付
+     * ポップアップは閉じ、**常駐 textarea へフォーカスする**（「行を追加」ボタン → 追加行へ入力開始、の用途）。
+     * \`scrollToRow\` と同じく構造変更直後でも同期で成立する（呼び出しから戻った時点で activeCell が移っている）。未知 RowId/ColumnId は診断 warn
+     * （code=\`active-cell-unknown\`）のみで no-op。readOnly でも動く（閲覧系）。
+     */
+    setActiveCell(rowId: string, columnId: string): void;
     /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */
     destroy(): void;
 }
@@ -374,10 +410,25 @@ export interface GridLinkColumnType {
     readonly defaultOpen?: boolean;
 }
 /**
- * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）とハイパーリンク（DD-027-2）。書式（DD-027-3）は別チャネル
- * （描画）で扱う想定のため本 union には加えない見込み。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ * 日付列（カレンダーのポップオーバーで LocalDate を選べる・DD-035 R2）。値は ADR-0012 の LocalDate 正準値 \`YYYY-MM-DD\`
+ * （\`kind:'date'\`）。**手入力と併存**する: 印字文字キーは従来どおり常駐 textarea の手入力を開始し（\`2026/7/31\` → 正準化）、
+ * カレンダーは \`openOn\` の操作で開く。型は「編集 UI の選択」であって入力規則ではない＝日付列でも非日付文字列の手入力は
+ * 拒否しない（link 列と同じ・拡張点: \`strict\` は要求が出たら検討）。表示書式は \`columnDisplayFormats\`（date pattern）を併用する。
  */
-export type GridColumnType = GridSelectColumnType | GridLinkColumnType;
+export interface GridDateColumnType {
+    readonly type: 'date';
+    /**
+     * カレンダーを開く操作（既定 \`'dblclick'\`）。
+     * - \`'dblclick'\`: ダブルクリック／F2／Enter（修飾なし）／Alt+↓／セル右端の 📅 アイコン（select 列と同じキー体系・発見性優先）。
+     * - \`'icon'\`: 📅 アイコン／Alt+↓ のみ。ダブルクリック・F2・Enter は従来どおり textarea 編集（既存値の部分修正が多い列向け）。
+     */
+    readonly openOn?: 'dblclick' | 'icon';
+}
+/**
+ * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）。書式（DD-027-3）は
+ * 別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ */
+export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType;
 /**
  * 絶対 http/https URL か（defaultOpen の open 可否・DD-027-2 決定・純関数＝TDD 対象）。\`new URL(value)\` がパースでき
  * protocol が http:/https: のときだけ true。相対 URL・非 URL 文字列・\`javascript:\`/\`data:\`/\`file:\` 等は false
@@ -392,12 +443,12 @@ export declare function isAbsoluteHttpUrl(value: string): boolean;
  */
 export declare class ColumnTypeConfigError extends Error {
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict';
+    readonly reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid';
     /** 対象列 ID（診断用）。 */
     readonly columnId: string;
     constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict',
+    reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid',
     /** 対象列 ID（診断用）。 */
     columnId: string, message: string);
 }
@@ -433,6 +484,16 @@ export interface ColumnTypeRegistry {
     hasAnySelectColumn(): boolean;
     /** ハイパーリンク列が 1 つでもあるか（hover cursor の cheap path 縮退判定・DD-027-2）。 */
     hasAnyLinkColumn(): boolean;
+    /** 日付列か（DD-035 R2・カレンダーの開閉判定）。 */
+    isDateColumn(columnId: string): boolean;
+    /** 日付列の型（日付列でなければ undefined）。openOn の参照に使う（DD-035 R2）。 */
+    getDateType(columnId: string): GridDateColumnType | undefined;
+    /** 日付列が 1 つでもあるか（カレンダー UI の配線要否判定・DD-035 R2）。 */
+    hasAnyDateColumn(): boolean;
+    /** 読み取り専用列か（DD-035 R4・readOnlyColumns。列タイプと直交する属性）。 */
+    isReadOnlyColumn(columnId: string): boolean;
+    /** 読み取り専用列が 1 つでもあるか（列ロックの配線要否判定・無ければ現行経路を一切変えない）。 */
+    hasAnyReadOnlyColumn(): boolean;
 }
 /**
  * columnTypes（mount オプション）と columnOrder から Internal registry を生成する（fail-fast・AC8）。
@@ -442,7 +503,7 @@ export interface ColumnTypeRegistry {
  * @param wrapColumns 折り返し（wrap）列（ColumnId 文字列）。リンク列と併用は描画契約が両立しないため fail-fast
  *   （DD-027-2 検討内容・wrap-link-conflict）。未指定なら併用検査をしない（DD-027-1 の呼び出しと後方互換）。
  */
-export declare function createColumnTypeRegistry(columnTypes: Readonly<Record<string, GridColumnType>> | undefined, columnOrder: readonly string[], wrapColumns?: Iterable<string>): ColumnTypeRegistry;
+export declare function createColumnTypeRegistry(columnTypes: Readonly<Record<string, GridColumnType>> | undefined, columnOrder: readonly string[], wrapColumns?: Iterable<string>, readOnlyColumns?: readonly string[]): ColumnTypeRegistry;
 
 // ==== packages/grid/src/diagnostics.ts ====
 /** 診断エントリの重大度。 */
@@ -628,7 +689,7 @@ export declare function compileFormatRules(columnFormats: Readonly<Record<string
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridCellCommitChange, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridStandaloneData } from '@nanairo-sheet/grid';
+import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridStandaloneData } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -647,6 +708,18 @@ export interface NanairoSheetViewCommonProps {
     readonly wrapColumns?: readonly string[];
     /** ドキュメント ID（識別系）。 */
     readonly documentId?: string;
+    /** 列タイプ（grid columnTypes・DD-027-1/2＋DD-035 date）。選択式／リンク／日付カレンダー。 */
+    readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
+    /** セル書式ルール（grid columnFormats・DD-027-3）。値→背景色・文字色・バッジ。 */
+    readonly columnFormats?: Readonly<Record<string, readonly GridColumnFormatRule[]>>;
+    /** 列見出しキャプション（grid columnCaptions・DD-033-2）。 */
+    readonly columnCaptions?: Readonly<Record<string, string>>;
+    /** 数値/日付の表示書式（grid columnDisplayFormats・DD-033-2）。 */
+    readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
+    /** 表示専用モード（grid readOnly・DD-033-1）。 */
+    readonly readOnly?: boolean;
+    /** 読み取り専用列（grid readOnlyColumns・DD-035 R4）。 */
+    readonly readOnlyColumns?: readonly string[];
     /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
     readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
     /** レイアウト確定通知（GridEvent 'layout' の写像）。 */
@@ -692,6 +765,17 @@ export interface NanairoSheetViewHandle {
     focus(): void;
     /** 現在の接続状態（未 mount 時は 'stopped'）。 */
     connectionState(): GridConnectionState;
+    /** 行挿入（grid GridInstance.insertRows 直結・DD-021-1）。共同編集モードでは通常の submit 経路に乗る。 */
+    insertRows(options: {
+        readonly afterRowId: string | null;
+        readonly count?: number;
+    }): void;
+    /** 行削除（grid GridInstance.deleteRows 直結・DD-021-1）。 */
+    deleteRows(rowIds: readonly string[]): void;
+    /** 指定行を可視域へ（grid GridInstance.scrollToRow 直結・DD-035 R6）。setData/insertRows 直後の新 RowId でも成立。 */
+    scrollToRow(rowId: string): void;
+    /** アクティブセルを移して可視化＋focus（grid GridInstance.setActiveCell 直結・DD-035 R6）。 */
+    setActiveCell(rowId: string, columnId: string): void;
 }
 /**
  * Nanairo Sheet を React から使うコンポーネント（憲章 §11.2）。lifecycle と props/event 変換のみを担当し、

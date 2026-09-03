@@ -191,6 +191,29 @@ const columnCaptions = parseColumnCaptions(searchParams.get('caption'));
 const columnDisplayFormats = parseColumnDisplayFormats(searchParams.get('display'));
 // DD-033-1: 表示専用モードを URL で指定できる（E2E 用・?select= 等と同流儀）。例: `?readonly=1`。
 const readOnly = searchParams.get('readonly') === '1';
+// DD-035 R4: 読み取り専用列を URL で指定できる（E2E 用）。形式: `?readonlycols=col-b,col-c`。
+const readOnlyColumns = (searchParams.get('readonlycols') ?? '').split(',').filter((c) => c !== '');
+// DD-035 R2: 日付列を URL で指定できる（E2E 用）。形式: `?date=col-b,col-c!icon`（列末尾 `!icon` で openOn:'icon'）。
+function parseDateColumns(
+  raw: string | null,
+  base: Record<string, GridColumnType> | undefined,
+): Record<string, GridColumnType> | undefined {
+  const merged: Record<string, GridColumnType> = { ...(base ?? {}) };
+  if (raw !== null && raw !== '') {
+    for (const spec of raw.split(',')) {
+      let columnId = spec;
+      const icon = columnId.endsWith('!icon');
+      if (icon) {
+        columnId = columnId.slice(0, -'!icon'.length);
+      }
+      if (columnId !== '') {
+        merged[columnId] = icon ? { type: 'date', openOn: 'icon' } : { type: 'date' };
+      }
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTypes);
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
 const SAVE_KEY = 'nsheet:standalone:cells';
@@ -284,11 +307,12 @@ const handle: StandaloneHandle = {
         mode: 'standalone',
         columnOrder: COLUMN_ORDER,
         initialData: buildInitialData(),
-        ...(columnTypes !== undefined ? { columnTypes } : {}),
+        ...(columnTypesWithDate !== undefined ? { columnTypes: columnTypesWithDate } : {}),
         ...(columnFormats !== undefined ? { columnFormats } : {}),
         ...(columnCaptions !== undefined ? { columnCaptions } : {}),
         ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
         onEvent,
         onDiagnostic: (entry) => {
           diagnostics.push(entry);

@@ -127,6 +127,12 @@ declare global {
       connectionState(): string;
       clearSaved(): void;
       resetCommits(): void;
+      // DD-035 R7/R6: ref handle の命令 API（react-main.ts のブリッジ）。
+      insertRows(options: { readonly afterRowId: string | null; readonly count?: number }): void;
+      deleteRows(rowIds: readonly string[]): void;
+      scrollToRow(rowId: string): void;
+      setActiveCell(rowId: string, columnId: string): void;
+      lastRowStructureChange(): unknown;
     };
   }
 }
