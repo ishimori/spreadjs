@@ -221,3 +221,48 @@ test('PS-5: 貼付アンカー自身が readOnly 行でも、書けたセルが�
     await context.close();
   }
 });
+
+test('PS-6: cell-commit リスナーから setActiveCell を呼ぶと、貼り付け後の選択より consumer の指定が勝つ（Codex P2）', async ({
+  browser,
+}) => {
+  // 単独モードは submitLocalOperation の内側から cell-commit を同期発火する。その購読者が公開 API を
+  // 呼んだとき、SDK が後から選択を上書きしてはいけない（選択遷移を submit の前に完了させている根拠）。
+  const { context, page } = await openGrid(browser);
+  try {
+    // 最初の cell-commit で 1 度だけ (r0, col-d) へアクティブセルを移す consumer を仕込む。
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __gridInstance?: {
+          subscribe(l: (e: unknown) => void): () => void;
+          setActiveCell(rowId: string, columnId: string): void;
+        };
+        __consumerMoved?: boolean;
+      };
+      w.__consumerMoved = false;
+      w.__gridInstance?.subscribe((e) => {
+        const ev = e as { type: string };
+        if (ev.type === 'cell-commit' && w.__consumerMoved === false) {
+          w.__consumerMoved = true;
+          w.__gridInstance?.setActiveCell('r0', 'col-d');
+        }
+      });
+    });
+
+    await sa.selectCell(page, 8, 0);
+    expect(await dispatchSyntheticPaste(page, 'c1\nc2')).toBe(true);
+
+    // 値は通常どおり書かれる。
+    await expect.poll(async () => sa.displayCell(page, 'r8', 'col-a'), { message: '貼り付けは成立' }).toBe('c1');
+    expect(await sa.displayCell(page, 'r9', 'col-a')).toBe('c2');
+    expect(
+      await page.evaluate(() => (window as unknown as { __consumerMoved?: boolean }).__consumerMoved),
+      'consumer の cell-commit リスナーが実行された',
+    ).toBe(true);
+
+    // consumer の setActiveCell が勝つ（SDK が貼付矩形で上書きしない）。setActiveCell は明示レンジも解除する。
+    expect(await sa.activeCell(page), 'consumer の指定した activeCell が残る').toEqual({ row: 0, col: 3 });
+    expect(await selectionRange(page), 'setActiveCell の仕様どおり明示レンジは解除されている').toBeNull();
+  } finally {
+    await context.close();
+  }
+});

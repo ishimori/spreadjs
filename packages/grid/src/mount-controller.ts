@@ -1978,8 +1978,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     };
 
     /**
-     * DD-038: 貼り付け後に貼付矩形を選択レンジにする（Excel 準拠）。**書き込みが成立した submit 経路からのみ**呼ぶ
+     * DD-038: 貼り付け後に貼付矩形を選択レンジにする（Excel 準拠）。**書き込みが起きる submit 経路からのみ**呼ぶ
      * （拒否・noop・readOnly 全件スキップは文書無変更ゆえ選択も動かさない＝決定④⑦）。
+     * 呼ぶのは submitSetCells の**前**（呼び出し側のコメント参照＝同期イベントからの再入で consumer の
+     * setActiveCell / setData を上書きしないため）。
      *
      * **呼ぶ順序が本質**: 先に activeCell を矩形の左上へ移し、その後で extendTo する。selection-controller の
      * 不変条件は「明示レンジは anchor === activeCell（値一致）の間だけ存在する」で、onChange の syncWithEditor が
@@ -2053,8 +2055,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
           if (op === null) {
             return true; // DD-038 決定⑦: 文書無変更 → 選択も activeCell も動かさない（拒否・noop と同じ扱い）
           }
+          // DD-038（Codex P2）: 選択遷移は submit の**前**に完了させる。単独モードは submitLocalOperation の
+          // 内側から cell-commit を同期発火し（standalone-session）、共同編集も pending 通知で同様に再入しうる。
+          // その購読者が公開 API（setActiveCell / setData）を呼んだ場合、submit の後に選択を動かすと consumer の
+          // 変更を上書きしてしまう（setData なら更新前 Axis の矩形を選ぶ）。先に選んでおけば「最後に書いた側が勝つ」。
+          selectPastedRect(outcome.rect); // 貼付範囲を選択レンジにする（Excel 準拠・書き込みが起きる経路でのみ）
           submitSetCells(op);
-          selectPastedRect(outcome.rect); // DD-038: 貼付範囲を選択レンジにする（Excel 準拠・書き込み成功時のみ）
           backend.view.markCellDirty();
           return true;
         }
