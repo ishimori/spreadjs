@@ -58,7 +58,7 @@ import {
   serializeSelectionToTsv,
   shouldInterceptClipboard,
 } from './clipboard-controller';
-import type { ClipboardDocumentPort } from './clipboard-controller';
+import type { ClipboardDocumentPort, PasteRect } from './clipboard-controller';
 import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from './resize-interaction';
 import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
@@ -1978,9 +1978,45 @@ export function createGridController(target: GridMountTarget, options: GridMount
     };
 
     /**
+     * DD-038: 貼り付け後に貼付矩形を選択レンジにする（Excel 準拠）。**書き込みが成立した submit 経路からのみ**呼ぶ
+     * （拒否・noop・readOnly 全件スキップは文書無変更ゆえ選択も動かさない＝決定④⑦）。
+     *
+     * **呼ぶ順序が本質**: 先に activeCell を矩形の左上へ移し、その後で extendTo する。selection-controller の
+     * 不変条件は「明示レンジは anchor === activeCell（値一致）の間だけ存在する」で、onChange の syncWithEditor が
+     * 破れを検出してレンジを解除する（DD-020-1 AC4）。そして**貼付アンカー（矩形の左上）は activeCell と一致するとは
+     * 限らない**: 右下から左上へドラッグ選択した場合、選択 anchor = activeCell = 右下・矩形の左上は別セルになる
+     * （rangeFromAnchorFocus が正規化するのは矩形であって anchor ではない）。左上へ寄せずに extendTo すると
+     * anchor ≠ activeCell となり、貼った直後は見えていても次の editor イベントで選択が消える。
+     * pointerdownCell が同期的に onChange を起こして既存レンジを解除するため、extendTo は必ずその後に呼ぶ。
+     *
+     * ポップアップを閉じるのは「activeCell を動かす時は開いているポップアップを閉じる」既存規約に合わせるため
+     * （クリック経路・setActiveCell と同じ。開いていなければ no-op）。
+     */
+    const selectPastedRect = (rect: PasteRect): void => {
+      if (editor === undefined) {
+        return;
+      }
+      const topLeft = { row: rect.anchorRow, col: rect.anchorCol };
+      const bottomRight = {
+        row: rect.anchorRow + rect.targetRows - 1,
+        col: rect.anchorCol + rect.targetCols - 1,
+      };
+      const active = editor.session.getActiveCell();
+      if (active.row !== topLeft.row || active.col !== topLeft.col) {
+        closeSelectDropdown?.();
+        closeDatePicker?.();
+        editor.pointerdownCell(topLeft); // onChange → syncWithEditor が既存レンジを解除する（この後に張り直す）
+      }
+      // 1×1 の貼り付けは setRange が単一選択へ正規化する（明示レンジを作らない＝見た目不変・AC3）。
+      // out-of-bounds を通過した矩形なので表示 Axis 内が保証され、境界クランプは不要。
+      selectionCtrl.extendTo(topLeft, bottomRight);
+    };
+
+    /**
      * paste: text/plain → parse → 敷き詰め/はみ出し全体拒否/上限/型変換 → 原子 SetCells（buildPaste）。
      * Navigation では**必ず消費**（true 返却＝preventDefault）する。消費しないと browser 既定が textarea へ
      * ペーストテキストを流し込み Navigation の input が編集を開始してしまう（グリッド paste 意図と乖離）。
+     * 成功時は貼付範囲を選択レンジにする（selectPastedRect・DD-038）。
      */
     const performPaste = (text: string): boolean => {
       if (readOnly) {
@@ -2012,12 +2048,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
           );
           return true;
         case 'submit': {
-          // DD-035 R4: readOnly 列のセルはスキップして他列へ貼り付ける（TSV 列位置不変・全件スキップなら消費のみ）。
+          // DD-035 R4 / DD-036 C3: readOnly 列・行のセルはスキップして他へ貼り付ける（TSV 位置不変・全件スキップなら消費のみ）。
           const op = filterReadOnlyCells(outcome.operation, '貼り付け');
           if (op === null) {
-            return true;
+            return true; // DD-038 決定⑦: 文書無変更 → 選択も activeCell も動かさない（拒否・noop と同じ扱い）
           }
           submitSetCells(op);
+          selectPastedRect(outcome.rect); // DD-038: 貼付範囲を選択レンジにする（Excel 準拠・書き込み成功時のみ）
           backend.view.markCellDirty();
           return true;
         }

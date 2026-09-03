@@ -294,3 +294,247 @@ test('CL-7: composition 中の paste はグリッド paste を発火しない（
     await context.close();
   }
 });
+
+// ---- DD-038: 貼り付け後の選択レンジ（CL-8〜CL-12） --------------------------------------------
+//
+// 貼り付けた直後に貼付範囲を選択レンジにする（Excel 準拠）。**activeCell が矩形の左上へ移ること**が
+// 挙動の中核: selection-controller の不変条件「明示レンジは anchor === activeCell の間だけ存在する」を
+// 満たさないと、貼った直後は見えていても次の editor イベントで選択が消えるため（DD-038 決定①）。
+
+/** 他クライアント側から行を挿入する（DD-021-3 の再ベースを起こす。row-rebase.spec.ts と同じ経路）。 */
+async function insertRowAfter(page: Page, afterRowId: string): Promise<void> {
+  await page.evaluate((id: string) => {
+    const inst = (window as unknown as { __gridInstance?: { insertRows(o: unknown): void } }).__gridInstance;
+    if (inst === undefined) {
+      throw new Error('__gridInstance が無い');
+    }
+    inst.insertRows({ afterRowId: id });
+  }, afterRowId);
+}
+
+test('CL-8: 3行×2列 paste → 貼付範囲が選択レンジになり activeCell は左上（AC1）／直後の Delete が貼付範囲だけを消す（AC2）', async ({
+  browser,
+}) => {
+  const { context, page } = await openClient(browser, 'clip-paste-select');
+  await grantClipboard(context);
+  try {
+    // ソース 3×2（(5,1)〜(7,2)）を committed 済みにして copy。
+    for (const [row, col, v] of [
+      [5, 1, 'p1'], [5, 2, 'q1'],
+      [6, 1, 'p2'], [6, 2, 'q2'],
+      [7, 1, 'p3'], [7, 2, 'q3'],
+    ] as const) {
+      await commitValue(page, row, col, v);
+    }
+    await dragSelect(page, { row: 5, col: 1 }, { row: 7, col: 2 });
+    await page.keyboard.press('Control+c');
+    await expect
+      .poll(async () => (await readClipboard(page)).replace(/\r\n/g, '\n'), { message: 'copy TSV（3行×2列）' })
+      .toBe('p1\tq1\np2\tq2\np3\tq3');
+
+    // 貼り付け先 (15,1) を単一選択（明示レンジ無し）→ paste。
+    await selectCell(page, 15, 1);
+    expect(await selectionRange(page), '貼る前は明示レンジ無し').toBeNull();
+    await page.keyboard.press('Control+v');
+
+    const dstRow = await rowIdAt(page, 15);
+    const col1 = await colIdAt(page, 1);
+    await expect.poll(async () => committedCell(page, dstRow!, col1!), { message: 'paste が反映' }).toBe('p1');
+
+    // AC1: 貼付範囲 3×2 が選択レンジ（半開区間）になり、activeCell は矩形の左上（不変条件 anchor===activeCell）。
+    await expect
+      .poll(async () => selectionRange(page), { message: '貼付範囲が選択レンジへ' })
+      .toEqual({ rowStart: 15, rowEnd: 18, colStart: 1, colEnd: 3 });
+    expect((await snapshot(page)).activeCell, 'activeCell は貼付矩形の左上').toEqual({ row: 15, col: 1 });
+
+    // AC2: そのまま Delete → 貼り付けた 6 セルだけが消える（選択が後続操作に効く）。
+    await page.keyboard.press('Delete');
+    for (const [row, col] of [[15, 1], [15, 2], [16, 1], [16, 2], [17, 1], [17, 2]] as const) {
+      const r = await rowIdAt(page, row);
+      const c = await colIdAt(page, col);
+      await expect
+        .poll(async () => committedCell(page, r!, c!), { message: `Delete で (${row},${col}) がクリア` })
+        .toBe('');
+    }
+    // コピー元（範囲外）は無傷＝消えたのは貼付範囲だけ。
+    const srcRow = await rowIdAt(page, 5);
+    expect(await committedCell(page, srcRow!, col1!), 'コピー元 (5,1) は無傷').toBe('p1');
+  } finally {
+    await context.close();
+  }
+});
+
+test('CL-9: 右下→左上へドラッグ選択して敷き詰め paste → 選択は貼付前の範囲のまま・activeCell が左上へ移る（AC4・AC5）', async ({
+  browser,
+}) => {
+  const { context, page } = await openClient(browser, 'clip-paste-anchor');
+  await grantClipboard(context);
+  try {
+    await commitValue(page, 3, 1, 'fill');
+    await selectCell(page, 3, 1);
+    await page.keyboard.press('Control+c');
+    await expect.poll(async () => readClipboard(page), { message: '1×1 TSV' }).toBe('fill');
+
+    // **右下 (12,2) から左上 (10,1) へ**ドラッグ: 選択 anchor = activeCell = 右下、矩形の左上は別セル。
+    // これが決定①で (b) が不成立になるケース。貼付アンカーは矩形の左上 (10,1)。
+    await dragSelect(page, { row: 12, col: 2 }, { row: 10, col: 1 });
+    expect(await selectionRange(page), '貼る前の選択矩形').toEqual({
+      rowStart: 10, rowEnd: 13, colStart: 1, colEnd: 3,
+    });
+    expect((await snapshot(page)).activeCell, '貼る前の activeCell は右下（ドラッグ開始点）').toEqual({
+      row: 12, col: 2,
+    });
+
+    await page.keyboard.press('Control+v'); // 1×1 → 選択範囲 3×2 へ敷き詰め
+
+    for (const [row, col] of [[10, 1], [10, 2], [11, 1], [11, 2], [12, 1], [12, 2]] as const) {
+      const r = await rowIdAt(page, row);
+      const c = await colIdAt(page, col);
+      await expect
+        .poll(async () => committedCell(page, r!, c!), { message: `敷き詰め (${row},${col})` })
+        .toBe('fill');
+    }
+    // AC5: 選択は貼り付け前の範囲のまま（貼付矩形と一致）。
+    expect(await selectionRange(page), '選択は貼付前の範囲のまま').toEqual({
+      rowStart: 10, rowEnd: 13, colStart: 1, colEnd: 3,
+    });
+    // AC4: activeCell が矩形の左上へ移っている＝不変条件が成立している（(b) なら右下のまま）。
+    expect((await snapshot(page)).activeCell, 'activeCell が貼付矩形の左上へ移る').toEqual({ row: 10, col: 1 });
+
+    // 選択が「生きている」ことの実証: Delete が貼付範囲だけに効く。
+    await page.keyboard.press('Delete');
+    for (const [row, col] of [[10, 1], [12, 2]] as const) {
+      const r = await rowIdAt(page, row);
+      const c = await colIdAt(page, col);
+      await expect
+        .poll(async () => committedCell(page, r!, c!), { message: `Delete で (${row},${col}) がクリア` })
+        .toBe('');
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test('CL-10: 1×1 を単一セルへ paste → 明示レンジは形成されず activeCell も動かない（AC3）', async ({ browser }) => {
+  const { context, page } = await openClient(browser, 'clip-paste-1x1');
+  await grantClipboard(context);
+  try {
+    await commitValue(page, 4, 1, 'solo');
+    await selectCell(page, 4, 1);
+    await page.keyboard.press('Control+c');
+    await expect.poll(async () => readClipboard(page), { message: '1×1 TSV' }).toBe('solo');
+
+    await selectCell(page, 9, 3);
+    await page.keyboard.press('Control+v');
+
+    const dstRow = await rowIdAt(page, 9);
+    const col3 = await colIdAt(page, 3);
+    await expect.poll(async () => committedCell(page, dstRow!, col3!), { message: 'paste 反映' }).toBe('solo');
+    // 1×1 は setRange が単一選択へ正規化する＝明示レンジを作らない（見た目の変化なし）。
+    expect(await selectionRange(page), '1×1 では明示レンジを作らない').toBeNull();
+    expect((await snapshot(page)).activeCell, 'activeCell は貼り付け先のまま').toEqual({ row: 9, col: 3 });
+  } finally {
+    await context.close();
+  }
+});
+
+test('CL-11: noop・上限超過・はみ出しの各拒否経路で選択も activeCell も変わらない（AC6）', async ({
+  browser,
+}) => {
+  const { context, page } = await openClient(browser, 'clip-paste-reject');
+  try {
+    // 拒否経路は合成 ClipboardEvent で投げる（実クリップボード・スクロールに依存させない＝決定的）。
+    // 明示レンジを作ってから拒否・noop の paste を投げ、選択が保存されることを見る。
+    await dragSelect(page, { row: 5, col: 1 }, { row: 6, col: 2 });
+    const range0 = { rowStart: 5, rowEnd: 7, colStart: 1, colEnd: 3 };
+    expect(await selectionRange(page)).toEqual(range0);
+    const before = await snapshot(page);
+
+    // ① 空 paste → parseClipboardText('')=[] → noop（消費のみ・文書無変更）。
+    expect(await dispatchSyntheticPaste(page, ''), '空 paste もグリッドが消費する').toBe(true);
+    expect(await selectionRange(page), 'noop で選択は不変').toEqual(range0);
+    let after = await snapshot(page);
+    expect(after.activeCell, 'noop で activeCell は不変').toEqual(before.activeCell);
+    expect(after.committedRevision, 'noop で文書は無変更').toBe(before.committedRevision);
+    expect(after.pendingCount, 'noop は submit しない').toBe(0);
+
+    // ② 上限超過（1 行 × 100,001 セル > SETCELLS_MAX_CELLS）→ 実行前拒否。選択・activeCell とも不変。
+    const tooLarge = Array.from({ length: 100_001 }, () => 'x').join('\t');
+    expect(await dispatchSyntheticPaste(page, tooLarge), '上限超過もグリッドが消費する').toBe(true);
+    expect(await selectionRange(page), '上限超過で選択は不変').toEqual(range0);
+    after = await snapshot(page);
+    expect(after.activeCell, '上限超過で activeCell は不変').toEqual(before.activeCell);
+    expect(after.committedRevision, '上限超過で文書は無変更').toBe(before.committedRevision);
+    expect(after.pendingCount, '上限超過は submit しない').toBe(0);
+
+    // はみ出し（out-of-bounds）での選択不変は、行数・列数が小さく端の到達にスクロールが要らない
+    // standalone ハーネス側（paste-selection.spec.ts）で検証する。ここは巨大 Axis ゆえ端の選択が
+    // ensureActiveCellVisible と競合して不安定になるため扱わない（拒否そのものは CL-3 が担保）。
+  } finally {
+    await context.close();
+  }
+});
+
+test('CL-12: 他クライアントの paste では自分の選択も activeCell も動かない（AC11）', async ({ browser }) => {
+  // 2 コンテキストでは OS フォーカスを持てる方が 1 つだけで navigator.clipboard.readText() が解決しないため、
+  // ここは実クリップボードを使わず合成 ClipboardEvent で貼る（検証対象は選択の非干渉であってクリップボード経路ではない）。
+  const a = await openClient(browser, 'clip-paste-remote-A');
+  const b = await openClient(browser, 'clip-paste-remote-B');
+  try {
+    await dragSelect(a.page, { row: 5, col: 1 }, { row: 6, col: 2 });
+    const aRange = { rowStart: 5, rowEnd: 7, colStart: 1, colEnd: 3 };
+    expect(await selectionRange(a.page), 'A が明示レンジを持つ').toEqual(aRange);
+    const aActive = (await snapshot(a.page)).activeCell;
+
+    // B が 2×1 を貼り付ける（A の選択範囲とは無関係な位置）。行は初期スクロール位置で可視な範囲から選ぶ
+    // （選択は実クリックで行うため、画面外の行を指定するとクリックが別の行へ落ちる）。
+    await selectCell(b.page, 25, 1);
+    expect(await dispatchSyntheticPaste(b.page, 'bsrc1\nbsrc2'), 'B の paste が成立').toBe(true);
+    const bRow = await rowIdAt(b.page, 25);
+    const col1 = await colIdAt(b.page, 1);
+    await expect
+      .poll(async () => selectionRange(b.page), { message: 'B 自身には貼付範囲の選択が付く' })
+      .toEqual({ rowStart: 25, rowEnd: 27, colStart: 1, colEnd: 2 });
+
+    // A が B の貼り付けを受信してもなお、A の選択・activeCell は不変（リモート適用は performPaste を通らない）。
+    await expect
+      .poll(async () => committedCell(a.page, bRow!, col1!), { message: 'A が B の paste を受信' })
+      .toBe('bsrc1');
+    expect(await selectionRange(a.page), 'B の paste で A の選択は動かない').toEqual(aRange);
+    expect((await snapshot(a.page)).activeCell, 'B の paste で A の activeCell は動かない').toEqual(aActive);
+  } finally {
+    await a.context.close();
+    await b.context.close();
+  }
+});
+
+test('CL-13: 貼り付け後にリモートで行が挿入されると選択レンジが再ベースされる（AC10・DD-021-3 が従来どおり）', async ({
+  browser,
+}) => {
+  const a = await openClient(browser, 'clip-paste-rebase-A');
+  const b = await openClient(browser, 'clip-paste-rebase-B');
+  try {
+    // A が (20,1) へ 2×1 を貼る → 貼付範囲が選択レンジになる。
+    await selectCell(a.page, 20, 1);
+    expect(await dispatchSyntheticPaste(a.page, 'r1\nr2'), 'A の paste が成立').toBe(true);
+    await expect
+      .poll(async () => selectionRange(a.page), { message: 'A の貼付範囲が選択レンジへ' })
+      .toEqual({ rowStart: 20, rowEnd: 22, colStart: 1, colEnd: 2 });
+    expect((await snapshot(a.page)).activeCell, 'activeCell は矩形の左上').toEqual({ row: 20, col: 1 });
+
+    // B が A の貼付範囲より上へ 1 行挿入 → A の表示 index が 1 つ下へずれる。
+    const anchorRow = await rowIdAt(b.page, 18);
+    await insertRowAfter(b.page, anchorRow!);
+
+    await expect
+      .poll(async () => selectionRange(a.page), { timeout: 15_000, message: '選択レンジが 1 行下へ再ベース' })
+      .toEqual({ rowStart: 21, rowEnd: 23, colStart: 1, colEnd: 2 });
+    expect((await snapshot(a.page)).activeCell, 'activeCell も追随（不変条件 anchor===activeCell を維持）').toEqual({
+      row: 21,
+      col: 1,
+    });
+  } finally {
+    await a.context.close();
+    await b.context.close();
+  }
+});

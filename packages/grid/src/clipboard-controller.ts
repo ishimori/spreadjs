@@ -18,6 +18,8 @@
 //      validateSetCells がセル単位で照合し、1 セルでも stale なら全件 reject する（AC5）。
 //   5. 列数不整合（jagged）の欠けセル（行が短い）は**変更対象に含めない**（skip・空文字上書きしない＝決定(d)）。
 //      present な空セル（parseCellInput('')=blank）は blank 上書きする（欠けとは区別）。
+//   6. 貼り付け矩形（rect）を submit と一緒に返す（DD-038）。呼び出し側が貼り付け後の選択レンジに使う。
+//      **書いたセルの集合ではなく矩形**なので、5 の欠けセルも readOnly スキップ（呼び出し側で後段）も含む。
 
 import { SETCELLS_MAX_CELLS, parseCellInput } from '@nanairo-sheet/core';
 import type { SetCellsChange, SetCellsOperation } from '@nanairo-sheet/core';
@@ -65,9 +67,28 @@ export function serializeSelectionToTsv(port: ClipboardDocumentPort, range: Cell
   return serializeMatrix(matrix);
 }
 
+/**
+ * 貼り付け先の矩形（DD-038）。左上アンカー（選択の左上）＋敷き詰め・jagged 解決後のサイズ。
+ * **書き込みの有無とは独立**で「どこへ貼ろうとしたか」を表す: readOnly でスキップされた行・列も、
+ * jagged で欠けたセルも矩形に含む（DD-038 決定②③）。呼び出し側が貼り付け後の選択レンジに使う。
+ * `out-of-bounds` を通過した後の値なので、常に表示 Axis 内に収まる（クランプ不要）。
+ */
+export interface PasteRect {
+  readonly anchorRow: number;
+  readonly anchorCol: number;
+  readonly targetRows: number;
+  readonly targetCols: number;
+}
+
 export type PasteOutcome =
   /** 1 つの原子的 SetCells として submit する（changes=型変換済み・beforeRevision 付き）。 */
-  | { readonly kind: 'submit'; readonly operation: SetCellsOperation; readonly cellCount: number }
+  | {
+      readonly kind: 'submit';
+      readonly operation: SetCellsOperation;
+      readonly cellCount: number;
+      /** 貼り付け矩形（DD-038）。貼り付け後の選択レンジの根拠。 */
+      readonly rect: PasteRect;
+    }
   /** 貼り付け矩形のセル数が上限超過 → 実行前拒否（走査もしない）。呼び出し側が公開コードで通知する。 */
   | { readonly kind: 'too-large'; readonly cellCount: number; readonly limit: number }
   /** 貼り付け矩形が表示 Axis の端を越える → 全体拒否（切り捨て・部分適用しない）。 */
@@ -162,5 +183,7 @@ export function buildPaste(
     kind: 'submit',
     operation: { type: 'setCells', conflictPolicy: 'reject-overlap', changes },
     cellCount,
+    // DD-038: 実際に書いたセルではなく**貼り付け矩形**を返す（readOnly スキップ・jagged の欠けを含む）。
+    rect: { anchorRow, anchorCol, targetRows, targetCols },
   };
 }

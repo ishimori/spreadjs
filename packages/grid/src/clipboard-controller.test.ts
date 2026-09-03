@@ -244,6 +244,70 @@ describe('buildPaste: アンカー貼り付け・敷き詰め・はみ出し・�
   });
 });
 
+// ---- 貼り付け矩形（DD-038・貼り付け後の選択レンジの根拠） --------------------------------------
+//
+// rect は「書いたセルの集合」ではなく「どこへ貼ろうとしたか」の矩形（DD-038 決定②③）。jagged の欠けセルも
+// 含み、readOnly スキップ（mount-controller の後段）にも影響されない。呼び出し側はこれを選択レンジにする。
+
+describe('buildPaste: 貼り付け矩形 rect（DD-038）', () => {
+  it('R-1: 単一セル選択 (2,2) → 2×2 matrix の rect は左上アンカー(2,2)・2×2', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    const outcome = buildPaste(clipPortOf(doc), [
+      ['x', 'y'],
+      ['z', 'w'],
+    ], range(2, 3, 2, 3));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    expect(outcome.rect).toEqual({ anchorRow: 2, anchorCol: 2, targetRows: 2, targetCols: 2 });
+  });
+
+  it('R-2: 敷き詰め（1×1 matrix ×選択(1,1)〜(3,3)）→ rect は選択範囲そのもの（3×3・AC5）', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    const outcome = buildPaste(clipPortOf(doc), [['v']], range(1, 4, 1, 4));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    expect(outcome.rect).toEqual({ anchorRow: 1, anchorCol: 1, targetRows: 3, targetCols: 3 });
+  });
+
+  it('R-3: 1×1 貼り付けの rect は 1×1（呼び出し側で単一選択へ正規化される・AC3）', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    const outcome = buildPaste(clipPortOf(doc), [['v']], range(0, 1, 0, 1));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    expect(outcome.rect).toEqual({ anchorRow: 0, anchorCol: 0, targetRows: 1, targetCols: 1 });
+  });
+
+  it('R-4: jagged（2行目が短い）でも rect は bounding box＝最大列数（欠けセルは書かないが矩形には含む・AC9）', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    const outcome = buildPaste(clipPortOf(doc), [['a', 'b'], ['c']], range(3, 4, 1, 2));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    // 書かれるのは 3 セル（(3,1)(3,2)(4,1)）だが、矩形は 2×2。
+    expect(outcome.operation.changes).toHaveLength(3);
+    expect(outcome.rect).toEqual({ anchorRow: 3, anchorCol: 1, targetRows: 2, targetCols: 2 });
+  });
+
+  it('R-5: 右下から左上へドラッグした選択でも rect のアンカーは矩形の左上（activeCell 側ではない）', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    // range は正規化済み（rowStart<rowEnd）で渡る。左上 (1,1)・activeCell は呼び出し側では (3,3) でありうる。
+    const outcome = buildPaste(clipPortOf(doc), [['v']], range(1, 4, 1, 4));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    expect(outcome.rect.anchorRow).toBe(1);
+    expect(outcome.rect.anchorCol).toBe(1);
+  });
+
+  it('R-6: rect は表示 Axis 内に収まる（out-of-bounds が先に全体拒否するため・クランプ不要の根拠）', () => {
+    const doc = buildDoc([INSERT_ROWS]); // rowCount=8 / colCount=5
+    const outcome = buildPaste(clipPortOf(doc), [['a', 'b'], ['c', 'd']], range(6, 7, 3, 4));
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    const { anchorRow, anchorCol, targetRows, targetCols } = outcome.rect;
+    expect(anchorRow + targetRows).toBeLessThanOrEqual(8);
+    expect(anchorCol + targetCols).toBeLessThanOrEqual(5);
+  });
+});
+
 // ---- 原子性・OCC（AC5・生成物がサーバー検証と整合すること） ------------------------------------
 
 describe('buildPaste: 原子性と OCC（生成 SetCells がサーバー検証と整合）', () => {
