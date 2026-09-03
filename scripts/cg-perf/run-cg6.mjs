@@ -5,8 +5,11 @@
 // window.__cg6Run() を実行 → report を doc/DD/DD-016-2/cg6-report.json へ保存 → judge-perf-report で判定する。
 //
 // 前提: dev サーバー起動中（vite :5885 / server-hono :8787 相当。既定は run 引数で上書き可）。
-//   使い方: node scripts/cg-perf/run-cg6.mjs [viteBase] [serverUrl] [durationMs]
+//   使い方: node scripts/cg-perf/run-cg6.mjs [viteBase] [serverUrl] [durationMs] [extraQuery] [outPath]
 //   例:     node scripts/cg-perf/run-cg6.mjs http://localhost:5885 http://127.0.0.1:9499 96000
+//   extraQuery: poc-integration.html へ追加する URL クエリ（URL エンコード済みで渡す。DD-027-3/DD-033 の
+//               「オプション有効時」before/after 計測用。例: 'readonly=1&format=col-2:...'）
+//   outPath:    レポート JSON の保存先（リポジトリ相対。既定=doc/DD/DD-016-2/cg6-report.json）
 
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -20,9 +23,14 @@ const REPO = path.resolve(HERE, '..', '..');
 const viteBase = process.argv[2] ?? 'http://localhost:5885';
 const serverUrl = process.argv[3] ?? 'http://127.0.0.1:9499';
 const durationMs = Number(process.argv[4] ?? 96000);
-const OUT = path.join(REPO, 'doc', 'DD', 'DD-016-2', 'cg6-report.json');
+const extraQuery = process.argv[5] ?? '';
+const OUT =
+  process.argv[6] !== undefined
+    ? path.resolve(REPO, process.argv[6])
+    : path.join(REPO, 'doc', 'DD', 'DD-016-2', 'cg6-report.json');
+fs.mkdirSync(path.dirname(OUT), { recursive: true });
 
-const url = `${viteBase}/poc-integration.html?server=${encodeURIComponent(serverUrl)}&perf=1&name=CG6`;
+const url = `${viteBase}/poc-integration.html?server=${encodeURIComponent(serverUrl)}&perf=1&name=CG6${extraQuery !== '' ? `&${extraQuery}` : ''}`;
 
 const browser = await chromium.launch({
   headless: false, // 実 Chrome の描画経路で計測（headed）

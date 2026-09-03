@@ -65,6 +65,14 @@ export interface GridDebugApi {
   selectionRange(): GridDebugCellRange | null;
   /** ドラッグ中のライブ矩形（DD-020-1。null=非ドラッグ）。 */
   dragRange(): GridDebugCellRange | null;
+  /** DD-027-1: 選択式ドロップダウンが開いているか。 */
+  selectOpen(): boolean;
+  /** DD-027-1: 選択式ドロップダウンの候補一覧（未 open は空）。 */
+  selectOptions(): string[];
+  /** DD-027-1: 選択式ドロップダウンのハイライト index（未 open は -1）。 */
+  selectHighlightedIndex(): number;
+  /** DD-027-1: 選択式ドロップダウンのハイライト値（未 open は null）。 */
+  selectHighlightedValue(): string | null;
   /** DD-020-3: 現在 Undo 可能か（スタック非空・pending 0・非 in-flight）。 */
   canUndo(): boolean;
   /** DD-020-3: 現在 Redo 可能か。 */
@@ -90,6 +98,10 @@ export interface GridDebugApi {
   /** committed セルの CellScalar kind（'blank'|'string'|'number'|'date'）。DD-020-2 paste の型保持検証用。 */
   committedCellKind(rowId: string, columnId: string): string;
   displayCell(rowId: string, columnId: string): string;
+  /** DD-033-2: base-layer が描く display テキスト（表示書式適用後）。canvas 文字を読めないための E2E 観測用。 */
+  cellRenderText(rowId: string, columnId: string): string;
+  /** DD-033-2: 列ヘッダーに描く見出し（キャプション or 列記号）。canvas ヘッダー文字の E2E 観測用。 */
+  columnHeaderText(col: number): string;
   submitInsertRowsAfter(afterRowId: string | null, newRowId: string): void;
   submitDeleteRow(rowId: string): void;
   simulateDrop(): void;

@@ -24,7 +24,7 @@ import {
 } from './standalone-helpers';
 
 function evidencePath(fileName: string): string {
-  return fileURLToPath(new URL(`../../../doc/DD/DD-021-3/${fileName}`, import.meta.url));
+  return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-021-3/${fileName}`, import.meta.url));
 }
 
 async function apiInsertRows(page: Page, afterRowId: string | null, count?: number): Promise<void> {

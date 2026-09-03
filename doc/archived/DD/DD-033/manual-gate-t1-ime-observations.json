@@ -1,0 +1,309 @@
+{
+  "meta": {
+    "chromium": "149.0.7827.55",
+    "url": "http://localhost:5885/standalone.html",
+    "startedAt": "2026-07-23T00:47:40.148Z",
+    "os": "Microsoft Windows 11 Pro 10.0.26100 build 26100",
+    "ime": "Microsoft IME (ja-JP 0411:{03B5835F-F03C-411B-9CE2-AA23E1171E36}{A76C93D9-5523-4E90-AAFA-4DB112F9AC76})",
+    "method": "OS SendInput KEYEVENTF_SCANCODE (実IME 自動駆動・Claude 代行) — engineering-patterns §7 / DD-020/021 先例",
+    "finishedAt": "2026-07-23T00:48:03.048Z"
+  },
+  "imeEstablish": {
+    "established": true,
+    "attempts": 2,
+    "probe": {
+      "isComposing": true,
+      "draft": "あ"
+    }
+  },
+  "scenarios": {
+    "S1": {
+      "draftAfterRomaji": {
+        "ok": true,
+        "draft": "かき"
+      },
+      "afterSpace": {
+        "isComposing": true,
+        "draft": "書き"
+      },
+      "afterSecondSpace": {
+        "isComposing": true,
+        "draft": "下記"
+      },
+      "afterImeConfirmEnter": {
+        "isComposing": false,
+        "draft": "下記"
+      },
+      "committedValue": "下記",
+      "committedEqualsConverted": true,
+      "activeCellAfterArrow": {
+        "row": 3,
+        "col": 1
+      },
+      "stillEditingAfterMove": null,
+      "cellCommitDelta": 1
+    },
+    "S2": {
+      "draftAfterRomaji": {
+        "ok": true,
+        "draft": "にほん"
+      },
+      "afterImeConfirmEnter": {
+        "isComposing": false,
+        "draft": "にほん"
+      },
+      "committedValue": "にほん",
+      "cellCommitDelta": 1
+    },
+    "S3": {
+      "draftOnF2": "にほん",
+      "draftAfterHeadInsert": {
+        "ok": true,
+        "draft": "いいいにほん"
+      },
+      "committedValue": "いいいにほん",
+      "expected": "いいいにほん",
+      "pass": true,
+      "cellCommitDelta": 1
+    },
+    "S4": {
+      "firstDraft": {
+        "ok": true,
+        "draft": "ねこ"
+      },
+      "secondDraftImmediately": {
+        "ok": true,
+        "draft": "とり"
+      },
+      "secondSnap": {
+        "isComposing": true,
+        "draft": "とり"
+      },
+      "committedFirst": "ねこ",
+      "committedSecond": "とり",
+      "noHeadLoss": true,
+      "cellCommitDelta": 2
+    },
+    "S5": {
+      "cellValueBefore": "",
+      "draftBeforeConvert": {
+        "ok": true,
+        "draft": "とり"
+      },
+      "converting": {
+        "isComposing": true,
+        "draft": "鳥"
+      },
+      "afterEsc1": {
+        "isComposing": true,
+        "draft": "とり"
+      },
+      "afterEsc2": {
+        "isComposing": false,
+        "draft": ""
+      },
+      "afterEsc3": {
+        "isComposing": false,
+        "draft": "",
+        "editingTarget": null
+      },
+      "cellValueAfterEsc": "",
+      "cellUnchanged": true,
+      "escCommitDelta": null,
+      "subsequentInputDraft": {
+        "ok": true,
+        "draft": "さくら"
+      },
+      "subsequentCommitted": "さくら",
+      "cellCommitDeltaTotal": 1
+    }
+  },
+  "readonly": {
+    "inputReachedPage": true,
+    "keydownCount": 4,
+    "compositionEventCount": 0,
+    "isComposing": false,
+    "draft": "",
+    "editingTarget": null,
+    "textareaReadOnlyAttr": true,
+    "editingVisual": false,
+    "cellCommitDelta": 0,
+    "diagnostics": [
+      "readonly-mode",
+      "standalone-boot"
+    ]
+  },
+  "orderObservations": [
+    {
+      "scenario": "S1",
+      "compositionendData": "下記",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "5346.8 keydown Process/229/ic=true",
+        "5375.4 compositionupdate data=下記",
+        "5375.9 input data=下記",
+        "5376.1 keyup Process/229/ic=true",
+        "5380.1 keyup  /32/ic=true",
+        "6268.4 keydown Process/229/ic=true",
+        "6272.1 compositionupdate data=下記",
+        "6272.3 input data=下記",
+        "6272.4 compositionend data=下記",
+        "6289.3 keyup Process/229/ic=false",
+        "6863 keydown Enter/13/ic=false",
+        "6889.7 keyup Enter/13/ic=false",
+        "7458 keydown ArrowDown/40/ic=false",
+        "7469.4 keyup ArrowDown/40/ic=false"
+      ]
+    },
+    {
+      "scenario": "S2",
+      "compositionendData": "にほん",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "8456.9 keydown Process/229/ic=true",
+        "8463.5 compositionupdate data=にほん",
+        "8464.6 input data=にほん",
+        "8487.6 keyup Process/229/ic=true",
+        "8488.8 keyup n/78/ic=true",
+        "8808.3 keydown Process/229/ic=true",
+        "8813.3 compositionupdate data=にほん",
+        "8814.1 input data=にほん",
+        "8814.2 compositionend data=にほん",
+        "8829.6 keyup Process/229/ic=false",
+        "9310.1 keydown Enter/13/ic=false",
+        "9328 keyup Enter/13/ic=false"
+      ]
+    },
+    {
+      "scenario": "S3",
+      "compositionendData": "いいい",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "11174 keydown Process/229/ic=true",
+        "11177 compositionupdate data=いいい",
+        "11177.3 input data=いいい",
+        "11201.3 keyup Process/229/ic=true",
+        "11202.2 keyup i/73/ic=true",
+        "11514.3 keydown Process/229/ic=true",
+        "11517.3 compositionupdate data=いいい",
+        "11517.5 input data=いいい",
+        "11517.5 compositionend data=いいい",
+        "11542.2 keyup Process/229/ic=false",
+        "12001.3 keydown Enter/13/ic=false",
+        "12022.9 keyup Enter/13/ic=false"
+      ]
+    },
+    {
+      "scenario": "S4",
+      "compositionendData": "ねこ",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "12995.5 keydown Process/229/ic=true",
+        "13002.2 compositionupdate data=ねこ",
+        "13003.2 input data=ねこ",
+        "13021.5 keyup Process/229/ic=true",
+        "13024.1 keyup o/79/ic=true",
+        "13334.3 keydown Process/229/ic=true",
+        "13340 compositionupdate data=ねこ",
+        "13340.2 input data=ねこ",
+        "13340.3 compositionend data=ねこ",
+        "13363.1 keyup Process/229/ic=false",
+        "13416.2 keydown Enter/13/ic=false",
+        "13449.5 keyup Enter/13/ic=false",
+        "13523.5 keydown Process/229/ic=false",
+        "13524 compositionstart data="
+      ]
+    },
+    {
+      "scenario": "S4",
+      "compositionendData": "とり",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "13773.3 keydown Process/229/ic=true",
+        "13779.3 compositionupdate data=とり",
+        "13780.6 input data=とり",
+        "13804.4 keyup Process/229/ic=true",
+        "13810 keyup i/73/ic=true",
+        "14181 keydown Process/229/ic=true",
+        "14184.1 compositionupdate data=とり",
+        "14184.4 input data=とり",
+        "14184.4 compositionend data=とり",
+        "14208.3 keyup Process/229/ic=false",
+        "14265.7 keydown Enter/13/ic=false",
+        "14296 keyup Enter/13/ic=false"
+      ]
+    },
+    {
+      "scenario": "S5",
+      "compositionendData": "",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "16368.5 keydown Process/229/ic=true",
+        "16384.8 compositionupdate data=とり",
+        "16385.4 input data=とり",
+        "16395.8 keyup Process/229/ic=true",
+        "16409 keyup Escape/27/ic=true",
+        "16765.7 keydown Process/229/ic=true",
+        "16772.4 compositionupdate data=",
+        "16773 input",
+        "16773.1 compositionend data=",
+        "16793.6 keyup Process/229/ic=false",
+        "16794.6 keyup Escape/27/ic=false",
+        "17158.8 keydown Escape/27/ic=false",
+        "17178.3 keyup Escape/27/ic=false",
+        "17742 keydown Process/229/ic=false"
+      ]
+    },
+    {
+      "scenario": "S5",
+      "compositionendData": "さくら",
+      "order": "B(key=Process/229・compositionend 先行)",
+      "keydownEnterIsComposingTrueBefore": false,
+      "keydownProcess229Before": true,
+      "window": [
+        "18162.8 keydown Process/229/ic=true",
+        "18166.4 compositionupdate data=さくら",
+        "18167.2 input data=さくら",
+        "18179.7 keyup Process/229/ic=true",
+        "18181.7 keyup a/65/ic=true",
+        "18517.8 keydown Process/229/ic=true",
+        "18526 compositionupdate data=さくら",
+        "18526.7 input data=さくら",
+        "18526.8 compositionend data=さくら",
+        "18548 keyup Process/229/ic=false",
+        "18608.2 keydown Enter/13/ic=false",
+        "18635.7 keyup Enter/13/ic=false"
+      ]
+    }
+  ],
+  "notes": [
+    "FG weak: ERR FG no-window",
+    "FG weak: ERR FG no-window",
+    "FG weak: ERR FG no-window"
+  ],
+  "imeOffRestore": {
+    "established": true,
+    "attempts": 1,
+    "probe": {
+      "isComposing": false,
+      "draft": "a"
+    }
+  },
+  "screenshotNote": {
+    "file": "manual-gate-t1-ime-5point.png",
+    "session": "本 JSON の S1〜S5 実行とは別の追加セッション（同日・同環境・同手法）で S1 相当（かき→Space→Space）を再実行し、実 MS-IME 候補ウィンドウ（書き/下記/夏季/柿…・下記 選択中）表示中を OS レベルでキャプチャ。確定値 下記 を観測済み",
+    "reason": "初回実行時は SHOT が窓ハンドル未取得で失敗（FG の窓タイトル反映ラグ）。キー入力の到達は全シナリオでページ側レコーダーにより確認済み"
+  }
+}

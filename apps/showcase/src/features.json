@@ -153,6 +153,24 @@
       "demo": "./demo.html?scenario=row-ops"
     },
     {
+      "id": "column-types",
+      "title": "列タイプ（選択式・リンク・書式）",
+      "status": "available",
+      "summary": "列単位で編集方式・クリック挙動・表示装飾を変えられます。選択式入力列（候補ドロップダウン・commit 前検証）、ハイパーリンク列（クリックで link-open 通知・SDK は画面遷移しない）、値に応じた背景色・バッジ書式（利用側が値→書式ルールを与える view-local 描画）、列境界ダブルクリックの幅自動調整（auto-fit）。設定は宣言的な mount オプションのみで、Cell type plugin のプロトタイプを兼ねます。",
+      "source": "DD-027・DD-027-1・DD-027-2・DD-027-3",
+      "meta": "選択式/リンク/書式/auto-fit ／ unit＋実ブラウザーE2E 検証済み",
+      "demo": "./demo.html?scenario=column-types"
+    },
+    {
+      "id": "detail-view",
+      "title": "明細閲覧ビュー（表示専用・列見出し・表示書式）",
+      "status": "available",
+      "summary": "BI・帳票の明細レコードを「データと列スキーマを渡すだけで業務の表として読める」構成。表示専用モード（readOnly＝編集・貼り付け・行操作をすべて抑止し受信専用化。権限制御ではなく表示制御）、業務名の列見出し（columnCaptions＝A/B/C… を業務名で置換描画）、数値/日付の表示書式（columnDisplayFormats＝3桁区切り・小数桁・通貨記号・日付パターン）を、値の装飾（columnFormats）と併用できます。書式・見出しは view-local な描画整形で、コピー TSV・cell-commit の値は生の値（raw）のまま変わりません。",
+      "source": "DD-033・DD-033-1・DD-033-2",
+      "meta": "readOnly / columnCaptions / columnDisplayFormats ／ unit＋実ブラウザーE2E 検証済み",
+      "demo": "./demo.html?scenario=detail-view"
+    },
+    {
       "id": "formula",
       "title": "数式",
       "status": "planned",

@@ -87,4 +87,25 @@
 - **正しいやり方**: 「送る/受ける」の判定は **revision ではなく内容（文書が非空か）と受信状態（未 bootstrap か）** で行う。server は fresh join に対し非空なら bootstrap@0 を送り、client は committed 0 かつ未 bootstrap のときだけ受理する（重複は無視）。空文書@0 の挙動は不変にして後方互換テストを残す。外部供給した状態は oplog だけでは再構築できないため、**listen 前に snapshot@0 を durable 化**する。
 - **元DD**: DD-026-1（`packages/server/src/room.ts`・`packages/collab/src/session.ts`。`restoreFrom` にも同じ潜在問題があった＝seed 済み snapshot しか使っていなかったため未露見）
 
+## 9. 実 IME・実 Excel の Manual Gate は OS レベル自動化で代行できる（「実物が動いた」証明とセットで）
+
+- **症状**: 実 IME（Microsoft IME）の Manual Gate は「Playwright/CDP は OS IME を通せない」ため人手に残り続ける（synthetic composition は実 IME ではない＝台帳の区別必須）。実 Excel round-trip も同様。
+- **原因**: CDP のキー入力・`WScript SendKeys`（Unicode 直接挿入）は OS 入力キュー→IME 変換パイプラインをバイパスする。
+- **正しいやり方**: user32 `SendInput` を **`KEYEVENTF_SCANCODE`**（拡張キーは `+EXTENDEDKEY`）で送ると OS 入力キュー→**実 IME** を通る。ローマ字スキャンコードを送り、**ページ側の `isComposing`/draft/変換候補の観測で「実 IME の composition が実際に起きた」ことを証明してから**判定する（証明できなければ実機扱いにしない）。IME ON は Zenkaku/Hankaku（scan 0x29）トグル＋composition 検知のリトライで確立。前面化に Alt 空打ちを使うと Chrome のメニューバーへフォーカスが移る副作用がある（SetForegroundWindow 後は ESC＋ページ実クリックでフォーカスを戻し、到達観測してから送信する。DD-033 T1 代行の実例）。観測した順序A/B が既存実機知見と一致することも実起動の裏付けになる。**実機固有挙動に注意**: MS-IME は変換中の Ctrl 押下で変換を**自己確定**する（synthetic の期待をそのまま assert すると偽陰性になる）。実 Excel は COM 自動化（`Range.Copy`/`Paste`）で「実 Excel が書く実ペイロード」を使えるが、**クリップボードの stale 内容による偽合格**（コピー元アプリのデータがそのまま貼り戻る循環）を防ぐため、被験システムの出力にしか現れない証拠（例: グリッドの正準化日付 `2026-07-17` vs Excel の `2026/7/17`）で真正性を検査する。代行した事実と方式は DD・台帳に「実IME（自動駆動・代行）」と明記し、人手目視と混同させない。
+- **元DD**: DD-020 Manual Gate M1〜M3・DD-021 M1〜M2＋ime-manual-gate-ledger 5点（2026-07-17・ユーザー指示による Claude 代行）
+
+## 10. 共有 collab 文書を変更する E2E は「使ったら元に戻す（net-zero）」— さもないと後続 spec を決定的に汚染する
+
+- **症状**: 個別 spec は単独 green なのに、`npm run test:e2e`（全スイート連結）だと後続の多数 spec が `openClient` の行数ゲート（`rowCount >= 50000`）で `Received: 49999` で落ちる／リンク列 spec の「クリック→link-open」が発火しないなど、**先行 spec に依存した決定的失敗**が出る（単独再実行では passing なので「flake」と誤認しやすい）。
+- **原因**: playground/showcase の E2E は 1 つの **server-hono の共有 collab 文書**（50,000 行シード）へ全 spec がぶら下がる。ある spec が `deleteRows`（行数が 50000→49999 に減ったまま）や `seed（cell 値を残置）` して**元に戻さない**と、その変更が文書に残り、後続 spec の前提（初期状態）を崩す。行数ゲートだけでなく「あるセルが空である前提」も崩れる（例: 先行 spec が (8,4) に値を残す → 後続のリンク列 spec が (8,4) を選択した瞬間に link-open が誘発され、synthetic 環境の二度押しガードで本命クリックが抑止される）。webServer は reuse されるため、汚染は同一 run 内の後続へ波及する。
+- **正しいやり方**: 共有文書を構造変更（insert/delete 行）または特定セルを seed する spec は、**その spec 内で net-zero に戻す**。行削除したら `insertRows` で本数を戻し、seed したセルは `finally` で `clearCell` する（`expect.poll` で復元を確認してから context.close）。構造を大量に変える spec はさらに `zz-` prefix でスイート最後に隔離する（DD-021 教訓#3）。**「単独 green・連結で赤」を見たら flake と決めつけず、先行 spec の共有文書残置を疑う**（最初に落ちる spec ではなく、汚染した spec を特定する）。
+- **元DD**: DD-027（親 Phase 4 統合検証で発覚。DD-027-1 の行削除テストを `insertRows` 復元・DD-027-3 の書式 seed セルを `clearCell` 後始末して 98/98 green 化。DD-021 教訓#3 の再確認）
+
+## 11. 同一作業ツリーで並行セッションが動いている間は `git commit` を必ずパス指定で行う（共有 index 経由で他者の WIP を巻き込む）
+
+- **症状**: 自分は `git add <自ファイル>` しかしていないのに、コミットに他セッションの WIP が大量混入する（例: 2ファイルのつもりが 49 ファイル・5,201 行）。コミットメッセージと内容が食い違い、並行作業者の成果が誤ったメッセージの下に入る。
+- **原因**: `git commit`（パス指定なし）は**その時点の index 全体**をコミットする。index は作業ツリーで唯一の共有資源のため、2つのコミットの間に並行セッションが `git add` すると、自分のステージ内容に他者分が合成される。自分の add 操作が正しくても防げない。
+- **正しいやり方**: 並行セッションの存在が疑われる間は `git commit -- <パス...>` で**コミット対象を明示**する（named-path commit は index の他エントリを無視する）。誤混入に気づいたら未 push なら `git reset --soft HEAD~1` → パス指定で再コミット（他者のステージ状態は保存される）。コミット直後の `--stat` でファイル数が想定と一致するかを毎回確認する。
+- **元DD**: DD-020 起票時のスクショ誤混入（869dc21 で追跡除外）→ DD-034 で再発（reset --soft＋パス指定コミットで是正・本パターンへ昇格）
+
 <!-- 以降、パターンを追記していく。番号は通し番号 -->

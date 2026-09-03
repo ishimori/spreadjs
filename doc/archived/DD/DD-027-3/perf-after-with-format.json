@@ -1,0 +1,72 @@
+{
+  "label": "after(書式あり)",
+  "url": "http://localhost:5885/poc-integration.html?server=http%3A%2F%2F127.0.0.1%3A9499&perf=1&name=CG6-fmt&format=col-0%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-1%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-2%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-3%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-4%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-5%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-6%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-7%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-8%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-9%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-10%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-11%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-12%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-13%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-14%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-15%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-16%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-17%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-18%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-19%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6%2Ccol-20%3A%E6%89%BF%E8%AA%8D%E6%B8%88%E3%81%BF%3Dbadge%2Bbc%2334a853%2Bfg%23ffffff%3B%E4%BF%9D%E7%95%99%E4%B8%AD%3Dbg%23fde293%3B%E5%AF%BE%E5%BF%9C%E4%B8%AD%3Dbg%23d2e3fc%3B%E5%AE%8C%E4%BA%86%3Dbadge%2Bbc%231a73e8%2Bfg%23ffffff%3B%E6%9C%AA%E7%9D%80%E6%89%8B%3Dbg%23fce8e6",
+  "env": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "dpr": 1.0000000149011612,
+    "preciseMemory": true
+  },
+  "visibleCellCount": 1817,
+  "frame": {
+    "count": 2502,
+    "p50": 17.5,
+    "p95": 18.3,
+    "worst": 302.4
+  },
+  "stoppedRedrawMs": [
+    16.7,
+    11.45,
+    15.25,
+    12.05,
+    18.05,
+    13.75
+  ],
+  "selectionLatencyMs": [
+    2.7,
+    4.8,
+    6.4,
+    4.9,
+    11.9,
+    4.1,
+    4.6,
+    5.7
+  ],
+  "memory": {
+    "sampleCount": 6,
+    "trend": {
+      "slopeBytesPerSec": -854773,
+      "growthRatio": 0.5121
+    },
+    "samples": [
+      {
+        "t": 742,
+        "usedBytes": 55058805
+      },
+      {
+        "t": 10888,
+        "usedBytes": 71289606
+      },
+      {
+        "t": 21017,
+        "usedBytes": 37566224
+      },
+      {
+        "t": 31151,
+        "usedBytes": 28922497
+      },
+      {
+        "t": 41317,
+        "usedBytes": 28043251
+      },
+      {
+        "t": 45380,
+        "usedBytes": 28197221
+      }
+    ]
+  },
+  "meta": {
+    "durationMs": 45381,
+    "scrollFrames": 2502,
+    "note": "DD-016-2 CG-6: Facade 統合経路の精密メモリ＋frame 計測。--enable-precise-memory-info 付き実 Chrome 前提。"
+  }
+}

@@ -170,6 +170,28 @@ export async function dragRange(page: Page): Promise<CellRangeView | null> {
   return callApi<CellRangeView | null>(page, 'dragRange', []);
 }
 
+// ---- DD-027-1 選択式入力列 E2E ヘルパー ----------------------------------------------------
+/** 選択式ドロップダウンが開いているか。 */
+export async function selectOpen(page: Page): Promise<boolean> {
+  return callApi<boolean>(page, 'selectOpen', []);
+}
+/** 選択式ドロップダウンの候補一覧。 */
+export async function selectOptions(page: Page): Promise<string[]> {
+  return callApi<string[]>(page, 'selectOptions', []);
+}
+/** 選択式ドロップダウンのハイライト index（未 open は -1）。 */
+export async function selectHighlightedIndex(page: Page): Promise<number> {
+  return callApi<number>(page, 'selectHighlightedIndex', []);
+}
+/** 選択式ドロップダウンのハイライト値（未 open は null）。 */
+export async function selectHighlightedValue(page: Page): Promise<string | null> {
+  return callApi<string | null>(page, 'selectHighlightedValue', []);
+}
+/** #int-status のテキスト（rejected 通知 code=value-not-allowed の観測に使う）。 */
+export async function statusText(page: Page): Promise<string> {
+  return page.evaluate(() => document.getElementById('int-status')?.textContent ?? '');
+}
+
 /** DD-020-3: Undo スタック深さ。 */
 export async function undoDepth(page: Page): Promise<number> {
   return callApi<number>(page, 'undoDepth', []);
@@ -347,6 +369,18 @@ export async function committedCell(page: Page, rowId: string, columnId: string)
 /** DD-020-2: committed セルの CellScalar kind（paste の型保持検証用）。 */
 export async function committedCellKind(page: Page, rowId: string, columnId: string): Promise<string> {
   return callApi<string>(page, 'committedCellKind', [rowId, columnId]);
+}
+/** view.cellDisplay（raw 表示文字列＝契約面）。表示書式を通さない生の表示値。 */
+export async function displayCell(page: Page, rowId: string, columnId: string): Promise<string> {
+  return callApi<string>(page, 'displayCell', [rowId, columnId]);
+}
+/** DD-033-2: base-layer が描く display テキスト（表示書式適用後）。canvas 文字を読めないための観測用。 */
+export async function cellRenderText(page: Page, rowId: string, columnId: string): Promise<string> {
+  return callApi<string>(page, 'cellRenderText', [rowId, columnId]);
+}
+/** DD-033-2: 列ヘッダーに描く見出し（キャプション or 列記号）。 */
+export async function columnHeaderText(page: Page, col: number): Promise<string> {
+  return callApi<string>(page, 'columnHeaderText', [col]);
 }
 
 // ---- DD-020-2 clipboard E2E ヘルパー ----------------------------------------------------------

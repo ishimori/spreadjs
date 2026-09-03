@@ -72,6 +72,18 @@ export interface IntegrationEditorConfig {
   readonly onClipboardPaste?: (text: string) => boolean;
   /** K4（DD-021-2）: commit 時に対象行が削除済みで draft を退避したときの通知（公開 rejected への写像用）。 */
   readonly onDivert?: (draft: DivertedDraft) => void;
+  /**
+   * 常駐 textarea が blur したときの通知（DD-027-1・Fable 5 P3-9）。grid コンテナ外クリック等で focus が外れたら
+   * mount-controller が選択式ドロップダウンを閉じる。IME 状態機械への blur dispatch は従来どおり（本 hook は追加通知）。
+   */
+  readonly onBlur?: () => void;
+  /**
+   * 表示専用モード（DD-033-1）。true のとき常駐 textarea に `readOnly` 属性を付け（実 IME/実キーボード入力を物理遮断）、
+   * composition 系・beforeinput・input・dblclick の DOM イベントを状態機械へ dispatch しない（synthetic も論理遮断）。
+   * これにより「実機でも synthetic でも編集 UI が開かない」を成立させる。false/未指定時は完全無変更（分岐追加のみ）。
+   * keydown は従来どおり dispatch し、readOnly の編集キー抑止は mount-controller の interceptKeydown（readonly-policy）が担う。
+   */
+  readonly readOnly?: boolean;
 }
 
 export interface IntegrationEditor {
@@ -90,6 +102,8 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   const { host } = config;
   const abort = new AbortController();
   const { signal } = abort;
+  // DD-033-1: 表示専用モード。編集を起こす DOM イベントを状態機械へ渡さない（synthetic 論理遮断）。false/未指定は無変更。
+  const readOnly = config.readOnly === true;
 
   // --- 常駐 textarea（1 個・破棄しない） ---
   const textarea = document.createElement('textarea');
@@ -113,6 +127,10 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   textarea.style.boxSizing = 'border-box';
   textarea.style.zIndex = EDITOR_Z;
   textarea.style.pointerEvents = 'none';
+  // DD-033-1: readOnly 属性で実 IME/実キーボードの入力（composition・input）を物理的に発生させない（選択/コピーは可）。
+  if (readOnly) {
+    textarea.readOnly = true;
+  }
   host.appendChild(textarea);
 
   // --- 競合 badge（textarea より上・#9） ---
@@ -222,20 +240,35 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   };
 
   on('compositionstart', () => {
+    if (readOnly) {
+      return; // DD-033-1: synthetic composition も状態機械へ渡さない（編集 UI を開かせない）
+    }
     dispatch({ type: 'compositionstart' });
   });
   on('compositionupdate', (event) => {
+    if (readOnly) {
+      return;
+    }
     dispatch({ type: 'compositionupdate', data: event.data });
   });
   on('compositionend', (event) => {
+    if (readOnly) {
+      return;
+    }
     dispatch({ type: 'compositionend', data: event.data });
   });
   on('beforeinput', (event) => {
+    if (readOnly) {
+      return;
+    }
     if (event instanceof InputEvent) {
       dispatch({ type: 'beforeinput', inputType: event.inputType, data: event.data });
     }
   });
   on('input', (event) => {
+    if (readOnly) {
+      return; // DD-033-1: synthetic input（印字）も dispatch しない＝BeginEdit を論理遮断
+    }
     if (event instanceof InputEvent) {
       dispatch({
         type: 'input',
@@ -306,10 +339,14 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     dispatch({ type: 'focus' });
   });
   on('blur', () => {
-    dispatch({ type: 'blur' });
+    dispatch({ type: 'blur' }); // IME 状態機械への通知（従来どおり・無改変）
+    config.onBlur?.(); // DD-027-1: focus 外れでドロップダウンを閉じる（追加通知のみ）
   });
   // 常駐 textarea 自身のダブルクリック（active セルの既存値編集）。
   on('dblclick', () => {
+    if (readOnly) {
+      return; // DD-033-1: textarea 上の dblclick でも編集を開始しない
+    }
     dispatch({ type: 'doubleClick', cell: session.getActiveCell() });
   });
 

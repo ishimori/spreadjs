@@ -11,8 +11,11 @@
 
 import type { GeneratedCell } from './data-gen';
 
-/** 範囲クエリで 1 セルごとに呼ばれる訪問関数。 */
-export type RangeVisitor = (row: number, col: number, value: string) => void;
+/**
+ * 範囲クエリで 1 セルごとに呼ばれる訪問関数。`false` を返すと走査を即中断する（それ以外の戻り値＝void/undefined は
+ * 継続＝後方互換）。中断は auto-fit の予算保護（DD-027-3・Fable P2）等の早期打ち切りに使う。
+ */
+export type RangeVisitor = (row: number, col: number, value: string) => void | boolean;
 
 export interface ChunkStore {
   get(row: number, col: number): string;
@@ -186,8 +189,11 @@ export function createChunkStore(config: { chunkRows?: number } = {}): ChunkStor
             if (col >= colEnd) {
               break;
             }
-            visit(row, col, slot.values[i] ?? '');
+            const stop = visit(row, col, slot.values[i] ?? '');
             visited += 1;
+            if (stop === false) {
+              return visited; // 訪問関数が中断を要求（DD-027-3・予算保護）
+            }
           }
         }
       }

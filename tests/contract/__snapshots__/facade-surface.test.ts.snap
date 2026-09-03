@@ -30,6 +30,12 @@ export type { GridErrorCode, GridConflictCode } from './error-codes';
 export type { GridDiagnostic, GridDiagnosticLevel, GridDiagnosticHook } from './diagnostics';
 import type { GridConflictCode, GridErrorCode } from './error-codes';
 import type { GridDiagnosticHook } from './diagnostics';
+export type { GridColumnType, GridSelectColumnType, GridLinkColumnType } from './column-types';
+import type { GridColumnType } from './column-types';
+export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
+import type { GridColumnFormatRule } from './format-rules';
+export type { GridColumnDisplayFormat, GridNumberDisplayFormat, GridDateDisplayFormat, } from './display-format';
+import type { GridColumnDisplayFormat } from './display-format';
 /**
  * 接続状態（consumer 表示用）。内部 collab の ConnectionState を写像した公開型（型は再exportしない）。
  * \`'standalone'\` は単独グリッドモード（DD-024・共同編集サーバー非接続）で常に返る値。\`'offline'\` は
@@ -110,6 +116,20 @@ export type GridEvent = {
  | {
     readonly type: 'row-structure-change';
     readonly change: GridRowStructureChange;
+}
+/**
+ * ハイパーリンク列（DD-027-2・親③）のクリック通知（Experimental 0.x・両モード共通）。リンク列の非空セルを
+ * クリック（押下→同一セルで離す・detail=1）すると発火する。**SDK は navigate しない**（利用側が rowId/columnId/value
+ * を受けて SPA 内遷移や詳細表示を実装する＝責務境界）。activeCell 移動は従来どおり並行して起こる（選択を奪わない）。
+ * ドラッグ選択・Shift+クリック・キーボード/タッチ・編集/変換中クリックでは発火しない。列の \`defaultOpen:true\` 時は
+ * 本イベントに加えて SDK が絶対 http/https URL を \`window.open(value,'_blank','noopener,noreferrer')\` で開く
+ * （不正 URL は open せず診断 warn・本イベントは常に発火）。rowId/columnId/value は文字列（内部型は露出しない・R7）。
+ */
+ | {
+    readonly type: 'link-open';
+    readonly rowId: string;
+    readonly columnId: string;
+    readonly value: string;
 };
 /**
  * 行構造変更の内容（DD-021-1）。insert は挿入アンカー（\`afterRowId\`・null=先頭）と新規 RowId 列（表示順・
@@ -168,6 +188,75 @@ export interface GridCommonMountOptions {
      * mount 時に固定（実行時切替は Stage 2）。キーは ColumnId 文字列。
      */
     readonly wrapColumns?: readonly string[];
+    /**
+     * 列タイプ（ColumnId 文字列→列タイプ・Experimental 0.x・DD-027-1/2）。両モード共通・mount 時固定（wrapColumns と
+     * 同運用）。選択式入力列（\`{ type: 'select', options, allowFreeText? }\`）とハイパーリンク列（\`{ type: 'link', defaultOpen? }\`）。
+     * - **選択式**: 検証は editor 経路（IME/textarea 確定・ドロップダウン）の commit 直前だけ。\`allowFreeText:false\`（既定）の
+     *   選択式列は候補外の値を確定できない（未 submit＋\`rejected\`（code=\`value-not-allowed\`）通知＋診断・文書無変更）。
+     *   paste / setData / リモート由来の非候補値は検証されず保持・表示される（拒否しない＝データ非破壊・収束優先）。
+     * - **リンク**: 値は string 1本。クリックで \`link-open\` イベントが発火する（**SDK は navigate しない**が既定）。
+     *   \`defaultOpen:true\` のときだけ絶対 http/https URL を \`window.open(_,'_blank','noopener,noreferrer')\` で開く
+     *   （javascript:/data:/相対/非URL は open せず診断 warn・link-open は常に発火）。リンク列は wrapColumns と併用不可。
+     * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用）は mount 時に \`error\`（phase=config・
+     *   code=\`column-types-invalid\`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
+     */
+    readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
+    /**
+     * セル書式ルール（ColumnId 文字列→書式ルール配列・Experimental 0.x・DD-027-3）。両モード共通・mount 時固定
+     * （columnTypes と同運用）。利用側供給の「値→書式（背景色・文字色・バッジ）」マッピングによる **view-local 描画**。
+     * - **値ベース**: 書式はセルの**表示文字列の完全一致**（v1）で解決され、**非空セルのみ**に付く（空セル・非一致値・
+     *   未指定列は現行描画と完全一致）。文書状態（値・hash・snapshot・protocol）は一切変更しない。同じ値なら同じ見た目に
+     *   なるため、全クライアントが同じ \`columnFormats\` を持てば実質同一表示になる（**設定一致は利用側責務**・設定不一致
+     *   クライアントは異なる装飾を見る＝共有化の設計方針は doc/plan/cell-format-sharing-design.md）。
+     * - **ルール**: \`{ match: string | string[], style: { cellBackground?, textColor?, badge?, badgeColor? } }\`。
+     *   \`badge:true\` は値を丸角チップで描く（右隣へオーバーフローしない）。範囲/正規表現/callback・静的列色は v1 対象外。
+     * - 不正設定（未知列・空ルール配列・同一列内の match 重複）は mount 時に \`error\`（phase=\`config\`・
+     *   code=\`column-types-invalid\`）で fail-fast する（columnTypes と同経路）。
+     */
+    readonly columnFormats?: Readonly<Record<string, readonly GridColumnFormatRule[]>>;
+    /**
+     * 列見出しキャプション（ColumnId 文字列→表示名・Experimental 0.x・DD-033-2）。両モード共通・mount 時固定
+     * （columnTypes/columnFormats と同運用）。指定列はヘッダーの A/B/C… を業務名で置換描画し、自ヘッダーセル幅を
+     * 超える長い名は省略記号でクリップされる（隣接ヘッダーへ重ならない）。未指定列・行番号ヘッダーは従来どおり。
+     * - **view-local**（描画のみ）: 文書状態・列 ID・cell-commit・コピー TSV は一切変更しない。全クライアントの設定一致は
+     *   利用側責務（設定不一致クライアントは異なる見出しを見る）。2段ヘッダーは v1 対象外。
+     * - 不正設定（未知列・空/空白キャプション）は mount 時に \`error\`（phase=\`config\`・code=\`column-display-invalid\`）で
+     *   fail-fast する（columnDisplayFormats と同経路）。
+     */
+    readonly columnCaptions?: Readonly<Record<string, string>>;
+    /**
+     * 数値/日付の表示書式（ColumnId 文字列→書式・Experimental 0.x・DD-033-2）。両モード共通・mount 時固定
+     * （columnTypes/columnFormats と同運用）。**Canvas 描画テキストのみ**を整形する自前ミニ書式。
+     * - **契約不変（raw 維持）**: cell-commit/setData round-trip・コピー TSV・columnFormats（DD-027-3）の完全一致・
+     *   編集ドラフトは従来の表示文字列（raw）のまま。数値の右寄せ判定・columnFormats の match はすべて raw で行う
+     *   （判定は raw・描画は display）。全クライアントの設定一致は利用側責務。
+     * - **number** \`{ type:'number', grouping?, decimals?, percent?, prefix?, suffix? }\`: raw が数値形のときだけ整形し
+     *   非数値 raw は素通し。文字列十進・half-up 丸め（decimals 未指定=丸めなし）・grouping=カンマ固定・percent は丸め前に
+     *   2桁右シフト・出力順 \`prefix + 本体 + ('%') + suffix\`。
+     * - **date** \`{ type:'date', pattern }\`: 受理形 \`YYYY-MM-DD\` と \`YYYY-MM-DD[T|空白]HH:mm(:ss)\` のみ整形
+     *   （フィールド直取り・タイムゾーン非経由）。トークン \`YYYY/MM/DD/HH/mm/ss\` を置換しトークン以外はリテラル素通し。
+     *   非受理形・時刻欠落 raw への時刻トークンは raw 素通し（00 を埋めない）。
+     * - **併用制約**: wrapColumns 同一列・link 列との併用は mount 時 fail-fast（構造不整合/クリック乖離）。select 列は許可
+     *   （候補・検証・ドロップダウン表示は raw のまま）。Excel 書式文字列互換・Intl ロケール書式は v1 対象外（拡張点メモ）。
+     * - 不正設定（未知列・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap/link 併用）は mount 時に
+     *   \`error\`（phase=\`config\`・code=\`column-display-invalid\`）で fail-fast する。
+     */
+    readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
+    /**
+     * 表示専用モード（Experimental 0.x・DD-033-1）。\`true\` で「文書を一切変更できない閲覧専用グリッド」になる。
+     * 両モード共通・mount 時固定（columnTypes/columnFormats と同運用・実行時切替は対象外）。
+     * - **抑止（文書変更系）**: 編集開始（印字キー・F2・ダブルクリック・IME）／paste・cut／Delete・Backspace クリア／
+     *   行挿入削除（ショートカット・公開 API \`insertRows\`/\`deleteRows\`）／Undo・Redo／選択式列のドロップダウン。
+     *   抑止した経路では \`onDiagnostic\` に info（code=\`readonly-blocked\`）を出す（既定＝hook 未指定なら無コスト）。
+     * - **維持（閲覧系）**: 範囲選択・コピー（TSV は従来と同一）・スクロール・列幅/行高リサイズ・列境界 dblclick の
+     *   auto-fit・link-open。\`setData\`（プログラム的な表示データ差し替え）も許可する。
+     * - **共同編集モード**: リモート更新は画面へ反映し、自クライアントからの文書 Operation 送信はゼロ（受信専用）。
+     *   presence（閲覧位置）は従来どおり送信する（文書 Operation ではない）。全クライアントの設定一致は利用側責務。
+     * - **注意**: readOnly は表示制御であって**権限制御ではない**（サーバー側強制なし＝改ざん防止は利用側責務）。
+     * - 値は boolean 単値。\`true\` の厳密一致でのみ表示専用になり、\`undefined\` 以外の非 boolean は診断 warn
+     *   （code=\`readonly-invalid\`）を出して編集可能側へ倒す（構成不整合が無いため mount fail-fast はしない）。
+     */
+    readonly readOnly?: boolean;
     /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
     readonly onEvent?: GridEventListener;
     /**
@@ -256,6 +345,105 @@ export declare const GRID_API_VERSION: "0.1.0-experimental";
  */
 export declare function mount(target: GridMountTarget, options: GridMountOptions): GridInstance;
 
+// ==== packages/grid/src/column-types.ts ====
+/** 選択式入力列（ドロップダウン制約・DD-027-1）。値は表示文字列で round-trip する（決定⑥）。 */
+export interface GridSelectColumnType {
+    readonly type: 'select';
+    /** 静的候補リスト（1 件以上・重複不可＝mount 時 fail-fast）。表示順＝ドロップダウンの並び。 */
+    readonly options: readonly string[];
+    /**
+     * 自由入力の許可（既定 false）。false のとき editor 経路（IME/textarea 確定・ドロップダウン）で候補外の値は
+     * commit されない（\`value-not-allowed\` 通知＋文書無変更）。true なら候補外も従来どおり確定できる（AC5）。
+     * いずれの場合も paste/setData/リモート由来の非候補値は保持される（validator を通らないため・決定②）。
+     */
+    readonly allowFreeText?: boolean;
+}
+/**
+ * ハイパーリンク列（クリックで \`link-open\` イベント通知・DD-027-2）。値は string 1本（表示テキスト＝URL または任意
+ * テキスト・親③）。クリック（押下→同一セルで離す）で \`link-open{rowId,columnId,value}\` が発火し activeCell も移動する
+ * （選択を奪わない）。**SDK は navigate しない**のが既定。描画はリンク色＋下線・自セル内クリップ（オーバーフローしない）。
+ * ドラッグ選択・Shift+クリック・キーボード・タッチではリンクを起動しない（対象外・DA の逃げ道）。編集は F2/直接入力/IME を維持。
+ */
+export interface GridLinkColumnType {
+    readonly type: 'link';
+    /**
+     * 既定 open（opt-in・既定 false・親③「提供する場合」）。true のとき \`link-open\` 発火に加えて SDK が
+     * **絶対 http/https URL のみ** \`window.open(value, '_blank', 'noopener,noreferrer')\` で開く。
+     * javascript:/data:/相対/非URL は open せず診断 warn（\`link-open\` イベント自体は成否に関わらず常に発火）。
+     */
+    readonly defaultOpen?: boolean;
+}
+/**
+ * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）とハイパーリンク（DD-027-2）。書式（DD-027-3）は別チャネル
+ * （描画）で扱う想定のため本 union には加えない見込み。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ */
+export type GridColumnType = GridSelectColumnType | GridLinkColumnType;
+/**
+ * 絶対 http/https URL か（defaultOpen の open 可否・DD-027-2 決定・純関数＝TDD 対象）。\`new URL(value)\` がパースでき
+ * protocol が http:/https: のときだけ true。相対 URL・非 URL 文字列・\`javascript:\`/\`data:\`/\`file:\` 等は false
+ * （open せず診断 warn・link-open は別途常に発火）。base を渡さないため相対 URL は URL 構築に失敗＝false になる。
+ */
+export declare function isAbsoluteHttpUrl(value: string): boolean;
+/**
+ * columnTypes 設定の不正を fail-fast で通知する内部エラー（AC8）。mount-controller が catch して公開
+ * \`error\`（phase=config・**安定 code**=column-types-invalid）へ写像する。\`message\` は GridBootError と同様に
+ * そのまま公開 error の \`message\` として渡す（columnTypes は利用側が与える設定値＝機微情報でない・開発者が原因を
+ * 特定できるよう違反列/候補/正規化後表示を含める）。公開されるのは安定 code のみで、内部 \`reason\` enum は露出しない。
+ */
+export declare class ColumnTypeConfigError extends Error {
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    readonly reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict';
+    /** 対象列 ID（診断用）。 */
+    readonly columnId: string;
+    constructor(
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict',
+    /** 対象列 ID（診断用）。 */
+    columnId: string, message: string);
+}
+/** editor 経路の commit 前検証の結果（サイレント失敗を避けるため拒否値・列を持つ）。 */
+export interface EditorCommitValidation {
+    /** commit してよいか（false=未 submit＋通知）。 */
+    readonly allowed: boolean;
+    readonly columnId: string;
+    /** 検証対象の表示文字列（拒否時の通知に含める＝DD-027-1 AC4「拒否値を含む」）。 */
+    readonly value: string;
+}
+/** 列タイプの参照・検証を提供する Internal registry（consumer へは公開しない・決定⑤）。 */
+export interface ColumnTypeRegistry {
+    /** 列の型（未設定列は undefined）。 */
+    getColumnType(columnId: string): GridColumnType | undefined;
+    /** 選択式列か。 */
+    isSelectColumn(columnId: string): boolean;
+    /** ハイパーリンク列か（DD-027-2・クリック裁定・描画・hover cursor の列単位判定）。 */
+    isLinkColumn(columnId: string): boolean;
+    /** ハイパーリンク列の型（リンク列でなければ undefined）。defaultOpen の参照に使う（DD-027-2）。 */
+    getLinkType(columnId: string): GridLinkColumnType | undefined;
+    /** 選択式列の候補（選択式でなければ undefined）。 */
+    getSelectOptions(columnId: string): readonly string[] | undefined;
+    /** その列で自由入力が許可されているか（非選択式列は true＝制約なし）。 */
+    allowsFreeText(columnId: string): boolean;
+    /**
+     * editor 経路（IME/textarea 確定）の commit 前検証。非選択式列・\`allowFreeText:true\` 列・空文字（クリア）は
+     * 常に許可。選択式（\`allowFreeText:false\`）は候補一致のみ許可。**この関数は editor 経路だけが呼ぶ**
+     * （paste/setData/リモートは通さない＝決定②）。
+     */
+    validateEditorCommit(columnId: string, value: string): EditorCommitValidation;
+    /** 選択式列が 1 つでもあるか（ドロップダウン UI の配線要否判定）。 */
+    hasAnySelectColumn(): boolean;
+    /** ハイパーリンク列が 1 つでもあるか（hover cursor の cheap path 縮退判定・DD-027-2）。 */
+    hasAnyLinkColumn(): boolean;
+}
+/**
+ * columnTypes（mount オプション）と columnOrder から Internal registry を生成する（fail-fast・AC8）。
+ * columnTypes 未指定/空なら「型なし」registry を返す（現行挙動＝全列自由入力・AC7）。
+ * 不正設定（未知列・未対応 type・候補 0 件・候補重複・リンク×折り返し併用）は ColumnTypeConfigError を throw する。
+ *
+ * @param wrapColumns 折り返し（wrap）列（ColumnId 文字列）。リンク列と併用は描画契約が両立しないため fail-fast
+ *   （DD-027-2 検討内容・wrap-link-conflict）。未指定なら併用検査をしない（DD-027-1 の呼び出しと後方互換）。
+ */
+export declare function createColumnTypeRegistry(columnTypes: Readonly<Record<string, GridColumnType>> | undefined, columnOrder: readonly string[], wrapColumns?: Iterable<string>): ColumnTypeRegistry;
+
 // ==== packages/grid/src/diagnostics.ts ====
 /** 診断エントリの重大度。 */
 export type GridDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -282,16 +470,81 @@ export interface DiagnosticSink {
  */
 export declare function createDiagnosticSink(hook: GridDiagnosticHook | undefined, now?: () => number): DiagnosticSink;
 
+// ==== packages/grid/src/display-format.ts ====
+/** number 表示書式（Experimental 0.x・DD-033-2）。すべて任意（未指定＝raw の桁のまま素の十進表記）。 */
+export interface GridNumberDisplayFormat {
+    readonly type: 'number';
+    /** true=整数部を3桁カンマ区切りにする（ロケール非依存の固定カンマ）。 */
+    readonly grouping?: boolean;
+    /** 小数桁数（0〜20 の整数）。指定時は half-up 丸め＋末尾ゼロ埋め。未指定=丸めなし（raw の桁のまま）。 */
+    readonly decimals?: number;
+    /** true=100 倍（小数点2桁右シフト）して末尾に \`%\` を付ける。シフトは decimals 丸めの前に行う。 */
+    readonly percent?: boolean;
+    /** 本体の前に付ける文字列（通貨記号等・そのまま連結）。 */
+    readonly prefix?: string;
+    /** 本体（と \`%\`）の後に付ける文字列（単位等・そのまま連結）。 */
+    readonly suffix?: string;
+}
+/**
+ * date 表示書式（Experimental 0.x・DD-033-2）。\`pattern\` はトークン（\`YYYY\`/\`MM\`/\`DD\`/\`HH\`/\`mm\`/\`ss\`）を含む文字列で、
+ * トークン以外はリテラル素通し（\`YYYY/MM/DD\` の \`/\` 等）。受理形は ISO 2形のみ（フィールド直取り・TZ 非経由）。
+ */
+export interface GridDateDisplayFormat {
+    readonly type: 'date';
+    readonly pattern: string;
+}
+/** 列表示書式の判別 union（Experimental 0.x・DD-033-2）。 */
+export type GridColumnDisplayFormat = GridNumberDisplayFormat | GridDateDisplayFormat;
+/**
+ * columnCaptions/columnDisplayFormats 設定の不正を fail-fast で通知する内部エラー（AC7）。mount-controller が
+ * catch して公開 \`error\`（phase=config・**安定 code**=\`column-display-invalid\`）へ写像する（ColumnTypeConfigError と
+ * 同経路・相乗りしない）。\`message\` はそのまま公開 error の \`message\` として渡す（利用側が与える設定値＝機微情報でない・
+ * 違反列/理由を開発者が特定できるようにする）。公開されるのは安定 code のみで、内部 \`reason\` enum は露出しない。
+ */
+export declare class DisplayConfigError extends Error {
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    readonly reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'wrap-conflict' | 'link-conflict';
+    /** 対象列 ID（診断用）。 */
+    readonly columnId: string;
+    constructor(
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'wrap-conflict' | 'link-conflict',
+    /** 対象列 ID（診断用）。 */
+    columnId: string, message: string);
+}
+/** プリコンパイル済みの表示解決器（列→display 写像・列→caption。base-layer フックが束縛する）。 */
+export interface CompiledColumnDisplay {
+    /** 列 ID・raw 表示値 → 描画テキスト（display）。書式のない列・非該当 raw は raw をそのまま返す。 */
+    formatText(columnId: string, raw: string): string;
+    /** 列 ID → ヘッダーキャプション（未指定列は undefined＝既定ラベルを使う）。 */
+    captionFor(columnId: string): string | undefined;
+    /** キャプション or 表示書式が 1 つでもあるか（base-layer フックの束縛要否＝無ければ描画コスト増ゼロ）。 */
+    hasAny(): boolean;
+}
+/** wrap/link 併用検査のための列種別プレディケート（mount-controller が columnTypeRegistry/wrapColumns から渡す）。 */
+export interface DisplayColumnUsage {
+    readonly isWrapColumn?: (columnId: string) => boolean;
+    readonly isLinkColumn?: (columnId: string) => boolean;
+}
+/**
+ * columnCaptions/columnDisplayFormats（mount オプション）と columnOrder から表示解決器をプリコンパイルする
+ * （fail-fast・AC7）。両オプション未指定/空なら「表示なし」解決器を返す（現行描画と完全一致・hasAny=false・AC9）。
+ * 不正設定は DisplayConfigError を throw する（mount-controller が \`column-display-invalid\` へ写像）。
+ *
+ * @param usage wrap/link 併用検査のプレディケート（表示書式列にのみ適用。caption 列は検査しない）。未指定なら併用なし。
+ */
+export declare function compileDisplayFormats(displayFormats: Readonly<Record<string, GridColumnDisplayFormat>> | undefined, captions: Readonly<Record<string, string>> | undefined, columnOrder: readonly string[], usage?: DisplayColumnUsage): CompiledColumnDisplay;
+
 // ==== packages/grid/src/error-codes.ts ====
 /** error イベント（boot/transport 失敗）の安定コード。phase と対で consumer の障害切り分けに使う。 */
-export declare const GRID_ERROR_CODES: readonly ["config-unavailable", "config-invalid", "connect-failed", "runtime-fault", "standalone-options-conflict", "standalone-options-invalid"];
+export declare const GRID_ERROR_CODES: readonly ["config-unavailable", "config-invalid", "connect-failed", "runtime-fault", "standalone-options-conflict", "standalone-options-invalid", "column-types-invalid", "column-display-invalid"];
 export type GridErrorCode = (typeof GRID_ERROR_CODES)[number];
 /**
  * rejected イベントの安定コード。server 競合（内部 RejectCode / ConflictReason の写像）に加え、
  * クライアントが submit 前に拒否する実行前検査（range-too-large 等・DD-020-1）も同じ語彙で通知する
  * （実行前拒否は operationId が空文字＝submit されていない）。
  */
-export declare const GRID_CONFLICT_CODES: readonly ["cell-conflict", "row-unavailable", "column-unavailable", "revision-stale", "sequence-violation", "duplicate-row", "revalidation-failed", "dependency", "range-too-large", "paste-too-large", "paste-out-of-bounds", "undo-blocked", "redo-blocked", "row-anchor-unknown", "row-count-invalid", "row-delete-empty", "unknown"];
+export declare const GRID_CONFLICT_CODES: readonly ["cell-conflict", "row-unavailable", "column-unavailable", "revision-stale", "sequence-violation", "duplicate-row", "revalidation-failed", "dependency", "range-too-large", "paste-too-large", "paste-out-of-bounds", "undo-blocked", "redo-blocked", "row-anchor-unknown", "row-count-invalid", "row-delete-empty", "value-not-allowed", "unknown"];
 export type GridConflictCode = (typeof GRID_CONFLICT_CODES)[number];
 /**
  * boot 失敗を error phase の公開 code 付きで伝える内部エラー。mount-controller の boot が throw し、
@@ -306,6 +559,69 @@ export declare class GridBootError extends Error {
  * 公開 GridConflictCode へ写像する。未知 RejectCode は 'unknown'（前方互換）。
  */
 export declare function toGridConflictCode(reason: string, rawCode: string | undefined): GridConflictCode;
+
+// ==== packages/grid/src/format-rules.ts ====
+/**
+ * セル書式スタイル（公開・宣言的）。すべて任意。色文字列（CSS color）は検査しない（canvas fillStyle は不正値を
+ * 無視＝安全）。\`badge:true\` のとき値を丸角チップ（バッジ）として描く（\`badgeColor\` はチップ背景色・既定は
+ * \`cellBackground\` 系）。\`textColor\` は文字色（数値既定色より優先・右寄せは維持）。
+ */
+export interface GridCellFormatStyle {
+    /** セル背景色（CSS color・罫線は保存＝罫線幅ぶん inset して塗る）。 */
+    readonly cellBackground?: string;
+    /** 文字色（CSS color・数値既定色より優先）。 */
+    readonly textColor?: string;
+    /** true=値を丸角チップ（バッジ）で描画（右隣へオーバーフローしない）。 */
+    readonly badge?: boolean;
+    /** チップ背景色（\`badge:true\` 時。既定は \`cellBackground\` 系）。 */
+    readonly badgeColor?: string;
+}
+/**
+ * 書式ルール（公開・宣言的）。\`match\` はセル表示文字列の**完全一致**（v1。範囲・正規表現・callback は拡張点メモ）。
+ * \`style\` は一致セルへ適用する装飾。同一列内で同じ match 値を複数ルールが指定すると mount 時に fail-fast する。
+ */
+export interface GridColumnFormatRule {
+    /** 一致対象のセル表示文字列（完全一致・単一 or 複数）。 */
+    readonly match: string | readonly string[];
+    /** 一致セルへ適用する装飾。 */
+    readonly style: GridCellFormatStyle;
+}
+/**
+ * columnFormats 設定の不正を fail-fast で通知する内部エラー（AC8）。mount-controller が catch して公開
+ * \`error\`（phase=config・**安定 code**=column-types-invalid）へ写像する（ColumnTypeConfigError と同経路・
+ * 27-1 の写像を流用）。\`message\` はそのまま公開 error の \`message\` として渡す（columnFormats は利用側が与える
+ * 設定値＝機微情報でない・違反列/値を含め開発者が原因を特定できるようにする）。公開されるのは安定 code のみ。
+ */
+export declare class FormatRuleConfigError extends Error {
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match';
+    /** 対象列 ID（診断用）。 */
+    readonly columnId: string;
+    constructor(
+    /** 機械可読な理由（診断用・公開はしない）。 */
+    reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match',
+    /** 対象列 ID（診断用）。 */
+    columnId: string, message: string);
+}
+/** プリコンパイル済みの書式解決器（列→値→resolved style の O(1) lookup・base-layer の getCellStyle が束縛する）。 */
+export interface CompiledColumnFormats {
+    /**
+     * 列 ID・表示値に一致する解決済み style（無ければ undefined）。描画ホットパスの O(1) lookup。戻り値は
+     * base-layer の ResolvedCellStyle と構造同一ゆえ getCellStyle へそのまま渡せる（R7: render 型を import しない）。
+     */
+    getStyle(columnId: string, value: string): GridCellFormatStyle | undefined;
+    /** 書式ルールが 1 つでもあるか（base-layer への束縛要否＝無ければ描画コスト増ゼロ）。 */
+    hasAny(): boolean;
+}
+/**
+ * columnFormats（mount オプション）と columnOrder から書式解決器をプリコンパイルする（fail-fast・AC8）。
+ * columnFormats 未指定/空なら「書式なし」解決器を返す（現行描画と完全一致・AC3）。
+ * 不正設定（未知列・空ルール配列・空 match〔空配列/空文字〕・同一列内の match 重複）は FormatRuleConfigError を throw する。
+ *
+ * \`match\` は表示文字列の完全一致。列内で同じ match 値を複数ルールが指定するのは曖昧（どの style を採るか不定）
+ * ゆえ mount 時に fail-fast する（先勝ちで黙って握り潰さない＝サイレント破壊の禁止）。
+ */
+export declare function compileFormatRules(columnFormats: Readonly<Record<string, readonly GridColumnFormatRule[]>> | undefined, columnOrder: readonly string[]): CompiledColumnFormats;
 "
 `;
 

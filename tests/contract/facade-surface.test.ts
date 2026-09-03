@@ -79,8 +79,9 @@ function facadeDeclarationFiles(): Map<string, string> {
     const rel = srcPath.slice(rootAbs.length);
     const isFacadeFile = Object.values(FACADE_DIRS).some((dir) => rel.startsWith(`${dir}/`));
     if (isFacadeFile) {
-      // 防御的に改行を LF へ正規化する（newLine 指定と二重化・プラットフォーム差の排除）。
-      captured.set(rel, data.replace(/\r\n/g, '\n'));
+      // 改行を LF へ正規化し、TypeScript emitter がコメント付き引数へ付ける行末空白も除去する。
+      // 公開型の意味に影響しない整形差で snapshot が揺れないようにする。
+      captured.set(rel, data.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, ''));
     }
   });
   emittedFacadeFiles = captured;

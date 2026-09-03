@@ -12,6 +12,8 @@ export const GRID_ERROR_CODES = [
   'runtime-fault', // 配線後の予期しない実行時例外（runtime phase）
   'standalone-options-conflict', // 単独モードに server 系 options（serverUrl/displayName/clientId）を混在指定（config phase・DD-024）
   'standalone-options-invalid', // 単独モードで columnOrder が未指定/空（config phase・DD-024）
+  'column-types-invalid', // columnTypes/columnFormats mount オプションが不正（未知列・候補0件・重複・未対応 type〔DD-027-1〕・リンク×wrap 併用〔DD-027-2〕・空ルール配列/match 重複〔DD-027-3〕）→ fail-fast（config phase）
+  'column-display-invalid', // columnCaptions/columnDisplayFormats mount オプションが不正（未知列・空/空白キャプション・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap 併用・link 併用〔DD-033-2〕）→ fail-fast（config phase）
 ] as const;
 export type GridErrorCode = (typeof GRID_ERROR_CODES)[number];
 
@@ -37,6 +39,7 @@ export const GRID_CONFLICT_CODES = [
   'row-anchor-unknown', // insertRows の afterRowId が未知アンカー→実行前拒否（DD-021-1・submit なし）
   'row-count-invalid', // insertRows の count が 1 未満/非整数→実行前拒否（DD-021-1・submit なし）
   'row-delete-empty', // deleteRows の対象が空/全て非現存→実行前拒否（DD-021-1・submit なし）
+  'value-not-allowed', // 選択式列（allowFreeText:false）へ editor 経路で非候補値を確定→未 submit（DD-027-1・submit なし・拒否値は診断へ）
   'unknown', // 未知/未写像（前方互換フォールバック）
 ] as const;
 export type GridConflictCode = (typeof GRID_CONFLICT_CODES)[number];

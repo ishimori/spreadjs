@@ -21,6 +21,10 @@ export interface StandaloneEvent {
   changes?: Array<{ rowId: string; columnId: string; value: string; previousValue: string }>;
   phase?: string;
   message?: string;
+  /** DD-027-2 link-open（type==='link-open' のとき）。 */
+  rowId?: string;
+  columnId?: string;
+  value?: string;
 }
 
 async function callApi<R>(page: Page, method: string, args: unknown[] = []): Promise<R> {

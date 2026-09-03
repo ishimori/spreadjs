@@ -9,8 +9,10 @@ import {
   COLUMN_MIN_WIDTH,
   ROW_MAX_HEIGHT,
   ROW_MIN_HEIGHT,
+  autoFitColumnWidth,
   clampColumnWidth,
   clampRowHeight,
+  computeAutoFitContentWidth,
   computeResizeSize,
   resizeHitTest,
 } from './resize-interaction';
@@ -117,5 +119,74 @@ describe('computeResizeSize（ドラッグ位置 − 現在の左端/上端 → 
   it('行: coord − edge。クランプが効く', () => {
     expect(computeResizeSize('row', 84, 24)).toBe(60); // 60px
     expect(computeResizeSize('row', 30, 24)).toBe(ROW_MIN_HEIGHT); // 6 → 16
+  });
+});
+
+describe('autoFitColumnWidth（DD-027-3・C級・AC6/AC7）', () => {
+  it('最長内容 ＞ ヘッダー幅 → 内容 ＋ パディングを ceil して clamp', () => {
+    // 内容 180.3px・ヘッダー 12px・padding 10 → ceil(180.3)+10 = 191。
+    expect(autoFitColumnWidth({ maxContentWidth: 180.3, headerLabelWidth: 12, padding: 10 })).toBe(191);
+  });
+
+  it('ヘッダーラベル幅 ＞ 内容（Excel 準拠でヘッダーを含める）', () => {
+    // 内容 20px・ヘッダー 44px → max=44 → 44+10 = 54。
+    expect(autoFitColumnWidth({ maxContentWidth: 20, headerLabelWidth: 44, padding: 10 })).toBe(54);
+  });
+
+  it('空列（内容 0・ヘッダー小）→ 最小幅へ clamp', () => {
+    expect(autoFitColumnWidth({ maxContentWidth: 0, headerLabelWidth: 8, padding: 10 })).toBe(COLUMN_MIN_WIDTH);
+  });
+
+  it('超長内容 → 最大幅へ clamp', () => {
+    expect(autoFitColumnWidth({ maxContentWidth: 9000, headerLabelWidth: 12, padding: 10 })).toBe(COLUMN_MAX_WIDTH);
+  });
+
+  it('打ち切りの有無に依存しない（呼び出し側がそれまでの最大値を渡すため計算は同一）', () => {
+    // 打ち切り後の maxContentWidth=150 でも同じ式で幅が出る（打ち切りフラグは計算に入らない）。
+    expect(autoFitColumnWidth({ maxContentWidth: 150, headerLabelWidth: 12, padding: 10 })).toBe(160);
+  });
+});
+
+describe('computeAutoFitContentWidth（DD-027-3・走査打ち切り・Fable P2）', () => {
+  const len = (v: string): number => v.length; // measure スタブ（文字数＝幅）
+  const noBadge = (): number => 0;
+
+  it('空配列 → 幅0・scanned0・非打ち切り', () => {
+    expect(computeAutoFitContentWidth([], len, noBadge, 10)).toEqual({
+      maxContentWidth: 0,
+      scanned: 0,
+      truncated: false,
+    });
+  });
+
+  it('maxScan 未満 → 全件 measure・truncated=false', () => {
+    const r = computeAutoFitContentWidth(['a', 'bbb', 'cc'], len, noBadge, 10);
+    expect(r).toEqual({ maxContentWidth: 3, scanned: 3, truncated: false });
+  });
+
+  it('ちょうど maxScan 件 → 全件 measure・truncated=false（境界・off-by-one 防止）', () => {
+    const values = ['aa', 'a', 'aaa']; // maxScan=3
+    const r = computeAutoFitContentWidth(values, len, noBadge, 3);
+    expect(r).toEqual({ maxContentWidth: 3, scanned: 3, truncated: false });
+  });
+
+  it('maxScan+1 件（呼び出し側の abort で最大 maxScan+1 に束ねた形）→ 先頭 maxScan だけ measure・truncated=true', () => {
+    // 4 件目 "zzzzz"(幅5) は measure されない＝最大幅に含まれない（打ち切りの証明）。
+    let measured = 0;
+    const countingLen = (v: string): number => {
+      measured += 1;
+      return v.length;
+    };
+    const values = ['aa', 'a', 'aaa', 'zzzzz']; // maxScan=3・4件目が最長だが打ち切りで無視
+    const r = computeAutoFitContentWidth(values, countingLen, noBadge, 3);
+    expect(r).toEqual({ maxContentWidth: 3, scanned: 3, truncated: true });
+    expect(measured).toBe(3); // 打ち切り後は measure を呼ばない（予算保護）
+  });
+
+  it('badgeExtra が最大幅へ加算される（バッジ値のチップ余白）', () => {
+    const badgeIf = (v: string): number => (v === 'x' ? 100 : 0);
+    const r = computeAutoFitContentWidth(['yyyy', 'x'], len, badgeIf, 10);
+    // "x" は幅1+badge100=101 が最大（"yyyy"=4 を上回る）。
+    expect(r.maxContentWidth).toBe(101);
   });
 });

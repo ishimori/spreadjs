@@ -39,6 +39,7 @@
 | `doc/plan/stage2-backlog.md` | Stage 2 バックログ（Stage 1 SDK Alpha 完了後の送り項目一覧。DD-019〜022＋dist切替・registry昇格・PostgreSQL本採用・React Facade・既知制約回収を出典DD付きで記録。確定: DD-018・2026-07-15。Stage 2 開始時にロードマップ化） |
 | `doc/plan/phase2-dd-roadmap.md` | Stage 2 社内SDK Beta DDロードマップ（**正式版**・DD-023 策定・2026-07-16。S2-1〜6 ハードゲート・DD-023〜032 採番・consumer 要件起点の順序・命名/P-07 判断ゲート・Stage 3 準備条件・P-xx 期限到来分の処理） |
 | `doc/plan/kpi-ledger.md` | KPI 計測台帳（Stage 2 正式KPI の計測契約＋実測データ。憲章 §16.1 全 8 候補を正式 6＋記録のみ 2 へ分類・DD-026/030/028 が追記・DD-032 が S2-5 判定と Stage 3 棚卸しで一括参照する常設台帳。起票: DD-029-1） |
+| `doc/plan/cell-format-sharing-design.md` | セル書式の共有化 設計整合文書（Operation 化・snapshot/hash/OCC 拡張・§3.5 レイアウト共有との統合・発火条件付き実装子DDの参照正本。**設計まで＝実装しない**。起票: DD-027-3・親 DD-027 決定④） |
 | `doc/plan/stage3-outlook.md` | Stage 3 展望（薄い前方視界・ロードマップではない。Stage 3 移行条件の逆算＝Stage 2 の exit をブレさせないための準備項目可視化。Stage 3 ロードマップ化は DD-032 のバックログ確定後。起票: DD-023） |
 | `doc/plan/ime-manual-gate-ledger.md` | 実機 IME 実行記録台帳（Tier 1 Manual Gate 常設。トリガー T1/T2/T3・最小シナリオ5点・synthetic/実IME 区別列必須・遡及初期行=DD-012-1/012-3/024/025。S2-4 後半の担保・DD-032 が一括参照。起票: DD-028） |
 | `doc/plan/dd-risk-class-header.md` | DD Risk Class ヘッダ雛形＋製品化6観点チェック（Delivery Phase A の各DDが参照する運用コピー元。dd-update 非管理の場所へ新設。定義本体は phase1-dd-roadmap.md §2／phase0-dd-roadmap.md。起票: DD-011） |

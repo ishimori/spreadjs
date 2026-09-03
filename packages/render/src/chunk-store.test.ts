@@ -63,6 +63,38 @@ describe('ChunkStore: 可視範囲クエリ O(可視セル数)', () => {
     });
     expect(count).toBe(0);
   });
+
+  it('visitor が false を返すと即中断する（DD-027-3・予算保護・Fable P2）', () => {
+    const abortStore = createChunkStore({ chunkRows: 8 });
+    // 1 列に 10 行の非空セルを縦に敷く（走査順は行昇順）。
+    for (let row = 0; row < 10; row += 1) {
+      abortStore.set(row, 0, `v${row}`);
+    }
+    const seen: number[] = [];
+    const count = abortStore.queryRange(0, 100, 0, 1, (row) => {
+      seen.push(row);
+      if (seen.length >= 3) {
+        return false; // 3 件で中断
+      }
+    });
+    // 中断した件数（3）だけ visit され、以降（4〜10 件目）は visit されない。
+    expect(seen).toEqual([0, 1, 2]);
+    expect(count).toBe(3);
+  });
+
+  it('visitor が void/undefined を返すと継続する（後方互換）', () => {
+    const store2 = createChunkStore();
+    for (let row = 0; row < 5; row += 1) {
+      store2.set(row, 0, `v${row}`);
+    }
+    let n = 0;
+    const count = store2.queryRange(0, 100, 0, 1, () => {
+      n += 1;
+      // 明示的に何も返さない（undefined）＝中断しない。
+    });
+    expect(n).toBe(5);
+    expect(count).toBe(5);
+  });
 });
 
 describe('ChunkStore: set による更新・削除', () => {
@@ -81,7 +113,9 @@ describe('ChunkStore: set による更新・削除', () => {
     expect(store.nonEmptyCount()).toBe(3);
     // 昇順維持を範囲クエリで確認。
     const seen: number[] = [];
-    store.queryRange(5, 6, 0, 20, (_row, col) => seen.push(col));
+    store.queryRange(5, 6, 0, 20, (_row, col) => {
+      seen.push(col);
+    });
     expect(seen).toEqual([1, 3, 7]);
 
     store.set(5, 3, ''); // 削除
