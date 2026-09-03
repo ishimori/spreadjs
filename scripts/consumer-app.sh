@@ -4,7 +4,7 @@
 # consumer-app/（npm workspaces 非登録＝boundary 検査対象外）を pack 済み tarball closure だけで統合し、
 #   1) closure 宣言健全性（DA #4）  2) S1-3 不合格条件の機械検査（内部 import / test-support import / source path / workspace link / 未公開依存）
 #   3) 公開面の型解決（tsc）  4) server-hono ServerInstance lifecycle（Node）  5) 実挙動 E2E（serve→mount→日本語入力→共同編集反映→destroy／再mount leak なし）
-# を機械検証する。証跡は doc/DD/DD-016-2/ へ格納する。
+# を機械検証する。証跡は test-results/dd-evidence/DD-016-2/ へ格納する（gitignore 対象・再生成可能）。
 #
 # dev ツール（vite/tsx/playwright/tsc）はリポジトリルートの node_modules から実行し、consumer-app/node_modules には SDK tarball のみを置く。
 set -euo pipefail
@@ -12,7 +12,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$REPO_ROOT/consumer-app"
 VENDOR="$APP/.vendor"
-EVID="$REPO_ROOT/doc/DD/DD-016-2"
+# 証跡は再生成可能なので test-results/ 配下（gitignore 対象）へ出す。
+# かつては doc/DD/DD-016-2/ へ書いていたが、DD-016-2 は完了・アーカイブ済みで
+# このアクティブ側パスは存在しない。実行のたびに閉じた DD の孤児フォルダが復活し、
+# その未追跡ファイルが git status を汚していた（build-release.sh の同じ不具合は
+# DD-040 で是正済み＝2a07b0d。本スクリプトはその時に見落とされていた）。
+# アーカイブ側 doc/archived/DD/DD-016-2/ へ向け直す案は採らない。同フォルダの証跡は
+# DD-016-2 クローズ時点の記録で、実行のたびに上書きすると当時の証拠が壊れるため。
+EVID="$REPO_ROOT/test-results/dd-evidence/DD-016-2"
 CHECK_SRC=("$APP/src" "$APP/server" "$APP/e2e")
 
 CLOSURE_PKGS=(grid server-hono core types collab render selection ime server)

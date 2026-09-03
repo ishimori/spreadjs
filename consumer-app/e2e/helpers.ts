@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 
 import { expect, type Browser, type Page } from '@playwright/test';
 
-/** 証跡の格納先（doc/DD/DD-016-2/ 直下・絶対パス）。 */
+/** 証跡の格納先（test-results/dd-evidence/DD-016-2/ 直下・絶対パス。scripts/consumer-app.sh の EVID と一致させること）。 */
 export function evidencePath(fileName: string): string {
   const here = dirname(fileURLToPath(import.meta.url)); // consumer-app/e2e
-  return join(here, '..', '..', 'doc', 'DD', 'DD-016-2', fileName);
+  return join(here, '..', '..', 'test-results', 'dd-evidence', 'DD-016-2', fileName);
 }
 
 // consumer-app/src/main.ts が公開する観測ハンドル（テスト側の最小 ambient 宣言・test-support は使わない）。
