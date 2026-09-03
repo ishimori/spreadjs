@@ -7,7 +7,6 @@
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
 | DD-041 | Presence枠タグのpane clip漏れ | 検討中 | 不具合修正。他ユーザーの activeCell 枠と名前タグが pane ごとに clip されておらず、固定ペインの上へはみ出しうる。DD-039（ヘッダー帯の clip 漏れ）の実読中に発見した**同根・別箇所**。論点①（名前タグを pane 内で切るか）だけユーザー確認が要る |
-| DD-039 | 固定ペインのヘッダーclip漏れ | 進行中 | 不具合修正。固定ペインの列見出し／行番号に、スクロール側の見出しが重なって描かれる。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。原因は `base-layer.ts` の `drawHeaders` が pane 境界で clip を分けていないこと。**Phase 1・2 完了＝AC1〜7 充足**（unit 4 件・E2E 2 件を追加し、いずれも修正前コードでは fail することを実証。全回帰 green: unit 1216・E2E 154。frameP95 は修正前後とも 16.8ms）。Codex medium・M1 は未実施 |
 
 ## 保留・見送り
 
@@ -19,6 +18,7 @@
 | DD | 件名 | 主な成果 |
 |----|------|---------|
 | DD-040 | リリースmanifestのgitDirty判定 | manifest に `closureDirty` / `closureDirtyPaths` / `dirtyNote` を追加し、配布再現性を `gitDirty` と読み分けられるようにした。既存 `gitDirty` の意味は不変（後方互換）。AC 1〜7 全て実機で照合 |
+| DD-039 | 固定ペインのヘッダーclip漏れ | consumer 駆動（松下 納入計画・生産納期の実機検証）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。`drawHeaders` の帯 clip の内側に pane 境界の入れ子 clip を張り、固定ペインの見出しにスクロール側の見出しが重なる不具合を解消。AC1〜7 充足・**追加テストが修正前コードで fail することを実証**（unit 3/4・E2E 2/2）・全回帰 green（unit 1216／E2E 154）・frameP95 は修正前後とも 16.8ms・**Codex medium findings 0**。M1 は未実施＝既知の未保証境界へ移送 |
 | DD-038 | 貼り付け後の選択レンジ | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。論点①は(a)＝selection の不変条件により技術的に強制（起票時の所見を否定）。AC 1〜13 全て充足。tarball 引き渡しは松下 DD-016 の追補が受け取る |
 | DD-037 | 自由入力併存の選択式列 | consumer 駆動（松下 DD-012-3 の実機検証で判明）。要件正本は松下リポ `doc/DD/DD-012/sdk-requirements.md` **R8**。DD-027-1 の未達分の回収。論点①は(a)既定挙動変更を採用（CHANGELOG に破壊的変更として記載）。Manual Gate T1（実 IME での絞り込み）は未実施＝既知の未保証境界へ移送 |
 | DD-036 | 固定列・列背景・行readOnly | 松下 DD-014（納入計画のSpreadJS化）からの持ち込み。契約=`DD-036/contract.md`・計測=`DD-036/measurement.md`。Codex high の P2×4 を全反映。Manual Gate T1/M1 は未実施＝既知の未保証境界へ移送 |
