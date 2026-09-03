@@ -7,11 +7,6 @@ build/
 # ルート直下の release/ のみ（非アンカーだと scripts/release/ 等も無視され release スクリプト本体が漏れる）
 /release/
 
-# DD-024/025 E2E スクショ再生成物（正本は doc/archived/DD/ 側にコミット済み。
-# apps/playground/e2e/*-helpers.ts が実行のたびここへ再生成するため無視）
-/doc/DD/DD-024/
-/doc/DD/DD-025/
-
 # TypeScript インクリメンタルビルド情報
 *.tsbuildinfo
 

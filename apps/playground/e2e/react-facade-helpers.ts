@@ -109,9 +109,9 @@ export async function composeCommitR0ColA(page: Page, value: string): Promise<vo
   await page.keyboard.press('Enter');
 }
 
-/** 証跡（スクショ）の保存先絶対パス（doc/DD/DD-025/ 直下）。 */
+/** 証跡（スクショ）の保存先絶対パス（test-results/dd-evidence/DD-025/ 直下）。 */
 export function evidencePath(fileName: string): string {
-  return fileURLToPath(new URL(`../../../doc/DD/DD-025/${fileName}`, import.meta.url));
+  return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-025/${fileName}`, import.meta.url));
 }
 
 declare global {
