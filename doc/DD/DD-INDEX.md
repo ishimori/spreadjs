@@ -6,7 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-038 | 貼り付け後の選択レンジ | 進行中 | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。Phase 1 確定（論点①は(a)＝不変条件により技術的に強制／論点⑦を新設）。Phase 2 実装は DD-036 の `mount-controller.ts`・`clipboard-controller.ts` 並行編集のためコミット後まで待機（DD-037 の次） |
+| DD-038 | 貼り付け後の選択レンジ | 進行中 | consumer 駆動（松下 DD-016 のユーザー指摘）。要件正本は松下リポ `doc/DD/DD-016/sdk-requirements.md` **P1**。DD-020-2（クリップボード）の仕上げ。Phase 1 確定（論点①は(a)＝不変条件により技術的に強制／論点⑦を新設）。Phase 2 実装は DD-037 の `mount-controller.ts` 並行編集のためコミット後まで待機（DD-036 は 2026-09-03 完了・ca33b9f） |
 | DD-037 | 自由入力併存の選択式列 | 進行中 | consumer 駆動（松下 DD-012-3 の実機検証で判明）。要件正本は松下リポ `doc/DD/DD-012/sdk-requirements.md` **R8**。DD-027-1 の未達分の回収。Phase 1 確定（論点①は(a)既定挙動変更を採用）。Phase 2 実装は DD-036 の `mount-controller.ts` 並行編集のためコミット後まで待機 |
 
 ## 保留・見送り
