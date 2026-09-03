@@ -123,6 +123,40 @@ function parseDateColumns(
 }
 const columnTypes = parseDateColumns(params.get('date'), parseLinkColumns(linkParam, parseColumnTypes(selectParam)));
 
+// DD-036 C1/C2/C3: 固定行列数・静的列背景・読み取り専用行を URL で指定できる（E2E 用・?select= 等と同流儀）。
+//   ?frozenrows=2&frozencols=5      固定行数・固定列数（未指定は既定 1）
+//   ?colbg=col-b:ffe8e8,col-c:eef    列背景（値は CSS color。16進は # 省略可＝URL の # 断片化を避ける）
+//   ?readonlyrows=r2,r3              読み取り専用行
+function parseFrozenCount(raw: string | null): number | undefined {
+  if (raw === null || raw === '') {
+    return undefined;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+function parseColumnBackgrounds(raw: string | null): Record<string, string> | undefined {
+  if (raw === null || raw === '') {
+    return undefined;
+  }
+  const backgrounds: Record<string, string> = {};
+  for (const spec of raw.split(',')) {
+    const colonAt = spec.indexOf(':');
+    if (colonAt < 0) {
+      continue;
+    }
+    const columnId = spec.slice(0, colonAt);
+    const color = spec.slice(colonAt + 1);
+    if (columnId !== '' && color !== '') {
+      backgrounds[columnId] = /^[0-9a-fA-F]{3,8}$/.test(color) ? `#${color}` : color;
+    }
+  }
+  return Object.keys(backgrounds).length > 0 ? backgrounds : undefined;
+}
+const frozenRowCount = parseFrozenCount(params.get('frozenrows'));
+const frozenColumnCount = parseFrozenCount(params.get('frozencols'));
+const columnBackgrounds = parseColumnBackgrounds(params.get('colbg'));
+const readOnlyRows = (params.get('readonlyrows') ?? '').split(',').filter((r) => r !== '');
+
 // DD-027-3: セル書式ルールを URL で指定できる（E2E/計測用・?select= と同方式）。
 // 形式: `?format=<列>:<ルール>;<ルール>,<列>:...`
 //   列 = `columnId:ルール群`／ルール = `<match|match>=<style+style>`／match は `|` で複数指定。
@@ -348,6 +382,10 @@ const instance = mount(
     ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
     ...(readOnly ? { readOnly: true } : {}),
     ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
+    ...(readOnlyRows.length > 0 ? { readOnlyRows } : {}),
+    ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
+    ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
+    ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
     onEvent: renderStatus,
   },
 );

@@ -78,3 +78,34 @@ test('AC7-2: handle.setData 再注入直後の handle.scrollToRow → 画面外�
     await context.close();
   }
 });
+
+// ---- DD-036 C4: React handle.scrollToColumn（AC8）----
+
+async function scrollerScrollLeft(page: Page): Promise<number> {
+  return page.evaluate(() => document.querySelector('#react-root .nsheet-scroller')?.scrollLeft ?? -1);
+}
+
+test('AC8-3: handle.scrollToColumn → 画面外の列が可視化される（縦スクロールは動かない）', async ({ browser }) => {
+  const { context, page } = await openReactStandalone(browser, '?extracols=40');
+  try {
+    expect(await scrollerScrollLeft(page)).toBe(0);
+    // 縦にも送っておき、横だけが動くことを見る。
+    await page.evaluate(() => {
+      const h = window.__reactStandalone!;
+      const rows = Array.from({ length: 200 }, (_, i) => ({ rowId: `r${i}`, cells: { 'col-a': `行${i}` } }));
+      h.reinject({ rows });
+      h.scrollToRow('r150');
+    });
+    await expect.poll(async () => scrollerScrollTop(page)).toBeGreaterThan(0);
+    const topBefore = await scrollerScrollTop(page);
+
+    await page.evaluate(() => window.__reactStandalone?.scrollToColumn('col-x35'));
+    await expect
+      .poll(async () => scrollerScrollLeft(page), { message: 'handle.scrollToColumn で scrollLeft が進む' })
+      .toBeGreaterThan(0);
+    expect(await scrollerScrollTop(page)).toBe(topBefore);
+  } finally {
+    await context.close();
+  }
+});
+

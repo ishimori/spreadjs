@@ -221,7 +221,8 @@ test('AC5: readOnly 列でも範囲選択・コピー・行挿入削除・setDat
     // setData は許可（readOnly 列の値も差し替わる）。
     await page.evaluate(() => window.__standalone?.reinject({ rows: [{ rowId: 'n1', cells: { 'col-b': 'NEW' } }] }));
     await expect.poll(async () => sa.displayCell(page, 'n1', 'col-b')).toBe('NEW');
-    expect(await sa.rowCount(page)).toBe(1);
+    // DD-036: 行 Axis の再構築は次の構造 flush（rAF）ゆえ rowCount も poll で待つ（負荷時の取りこぼし是正）。
+    await expect.poll(async () => sa.rowCount(page)).toBe(1);
   } finally {
     await context.close();
   }

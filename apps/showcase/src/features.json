@@ -19,9 +19,9 @@
       "id": "scroll",
       "title": "大量データの高速表示",
       "status": "available",
-      "summary": "数万行のデータを Canvas 描画で滑らかにスクロール。実測: スクロール応答 p95 16.8ms・メモリ 65MB（予算 300MB）。",
-      "source": "DD-004・DD-012-2（CG-6）",
-      "meta": "5万行 実測済み",
+      "summary": "数万行のデータを Canvas 描画で滑らかにスクロール。実測: スクロール応答 p95 16.8ms・メモリ 65MB（予算 300MB）。列方向も 382 列 × 80 行（非空 3 万セル）で横スクロール p95 16.8ms・初回描画 256ms を実測。",
+      "source": "DD-004・DD-012-2（CG-6）・DD-036",
+      "meta": "5万行 × 200列 ／ 382列 × 80行 実測済み",
       "demo": "./demo.html?scenario=scroll"
     },
     {
@@ -72,8 +72,8 @@
       "id": "react",
       "title": "React 組み込み（<NanairoSheetView>）",
       "status": "available",
-      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列は grid と同名の props で指定できます。StrictMode・再mountでリークしません（react は peer 依存）。",
-      "source": "DD-025・DD-035",
+      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。StrictMode・再mountでリークしません（react は peer 依存）。",
+      "source": "DD-025・DD-035・DD-036",
       "meta": "peer: react ^19 ／ unit＋実ブラウザーE2E（StrictMode・leak）検証済み"
     },
     {
@@ -156,9 +156,9 @@
       "id": "column-types",
       "title": "列タイプ（選択式・リンク・日付・書式・読み取り専用列）",
       "status": "available",
-      "summary": "列単位で編集方式・クリック挙動・表示装飾を変えられます。選択式入力列（候補ドロップダウン・commit 前検証）、ハイパーリンク列（クリックで link-open 通知・SDK は画面遷移しない）、日付列（カレンダーのポップオーバーから LocalDate を選択・手入力と併存・開き方を列で指定）、読み取り専用列（readOnlyColumns＝編集開始を抑止し、範囲貼り付け・範囲クリアはその列だけスキップして他列へ適用）、値に応じた背景色・バッジ書式（利用側が値→書式ルールを与える view-local 描画）、列境界ダブルクリックの幅自動調整（auto-fit）。設定は宣言的な mount オプション（React では同名 props）のみで、Cell type plugin のプロトタイプを兼ねます。",
-      "source": "DD-027・DD-027-1・DD-027-2・DD-027-3・DD-035",
-      "meta": "選択式/リンク/日付カレンダー/書式/auto-fit/読み取り専用列 ／ unit＋実ブラウザーE2E 検証済み・日付カレンダー/読み取り専用列と実 MS-IME の併存は実機確認済み（DD-035 T1/M1）",
+      "summary": "列単位で編集方式・クリック挙動・表示装飾を変えられます。選択式入力列（候補ドロップダウン・commit 前検証）、ハイパーリンク列（クリックで link-open 通知・SDK は画面遷移しない）、日付列（カレンダーのポップオーバーから LocalDate を選択・手入力と併存・開き方を列で指定）、読み取り専用列（readOnlyColumns＝編集開始を抑止し、範囲貼り付け・範囲クリアはその列だけスキップして他列へ適用）、値に応じた背景色・バッジ書式（利用側が値→書式ルールを与える view-local 描画）、列単位の静的背景色（columnBackgrounds＝値によらない列色。空セルも塗る／値ベース書式が優先）、列境界ダブルクリックの幅自動調整（auto-fit）。設定は宣言的な mount オプション（React では同名 props）のみで、Cell type plugin のプロトタイプを兼ねます。",
+      "source": "DD-027・DD-027-1・DD-027-2・DD-027-3・DD-035・DD-036",
+      "meta": "選択式/リンク/日付カレンダー/書式/静的列背景/auto-fit/読み取り専用列 ／ unit＋実ブラウザーE2E 検証済み・日付カレンダー/読み取り専用列と実 MS-IME の併存は実機確認済み（DD-035 T1/M1）",
       "demo": "./demo.html?scenario=column-types"
     },
     {
@@ -169,6 +169,14 @@
       "source": "DD-033・DD-033-1・DD-033-2",
       "meta": "readOnly / columnCaptions / columnDisplayFormats ／ unit＋実ブラウザーE2E 検証済み",
       "demo": "./demo.html?scenario=detail-view"
+    },
+    {
+      "id": "matrix-view",
+      "title": "マトリクス型シートの表示制御（固定列・列網掛け・読み取り専用行）",
+      "status": "available",
+      "summary": "列が日付で並ぶような横長のシート向けの表示制御。先頭 n 行 / n 列を固定して横スクロールしてもラベル列を画面左に残す（frozenRowCount / frozenColumnCount・既定は 1／1）、非稼働日など特定の列を値によらず網掛けする（columnBackgrounds）、サーバー算出行・見出し行を編集不可にする（readOnlyRows＝編集開始を抑止し、範囲貼り付け・範囲クリアはその行だけスキップして他行へ適用）、「今日へジャンプ」のように指定列を可視域へ入れる（scrollToColumn＝縦スクロールは動かさない）。設定は宣言的な mount オプション（React では同名 props）で、読み取り専用行は権限制御ではありません（サーバー側強制なし）。",
+      "source": "DD-036",
+      "meta": "382列 × 80行 実測済み ／ unit＋実ブラウザーE2E 検証済み"
     },
     {
       "id": "formula",

@@ -7,7 +7,7 @@
 // （再mountで leak しない・AC2）④E2E 用 introspection は debugRegistry 経由（test-support）で露出する。
 
 import { SETCELLS_MAX_CELLS, cloneCellScalar, documentHash, displayRowOrder, getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
-import type { DeleteRowsOperation, InsertRowsOperation, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
+import type { DeleteRowsOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
 import type { Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
@@ -36,8 +36,8 @@ import type { PlacementConfig } from './editor-placement';
 import { captureEditStartRevision, draftToScalar, isRowLive } from './commit-bridge';
 import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
-import { FormatRuleConfigError, compileFormatRules } from './format-rules';
-import type { CompiledColumnFormats } from './format-rules';
+import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules } from './format-rules';
+import type { CompiledColumnBackgrounds, CompiledColumnFormats } from './format-rules';
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
 import { shouldArmLinkCandidate } from './link-column';
@@ -62,7 +62,13 @@ import type { ClipboardDocumentPort } from './clipboard-controller';
 import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from './resize-interaction';
 import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
-import { partitionReadOnlyColumnChanges, shouldSuppressReadonlyKey, touchesReadOnlyColumn } from './readonly-policy';
+import {
+  partitionReadOnlyColumnChanges,
+  partitionReadOnlyRowChanges,
+  shouldSuppressReadonlyKey,
+  touchesReadOnlyColumn,
+  touchesReadOnlyRow,
+} from './readonly-policy';
 import { decideRowStructureKey, rebaseRowIndex, resolveDeleteTargets } from './row-operations';
 import { createUndoController, decideUndoRedoKey } from './undo-stack';
 import type { UndoPatch } from './undo-stack';
@@ -124,8 +130,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const clientId = collabOptions?.clientId ?? crypto.randomUUID(); // 再接続で不変（S-J4）
   const wsUrl = serverOrigin === '' ? '' : `${serverOrigin.replace(/^http/, 'ws')}/ws`;
 
-  const frozenRowCount = 1;
-  const frozenColCount = 1;
   const metrics = createLoadMetrics();
 
   // DD-012-5: 折り返し（wrap）列（ColumnId 文字列）。mount 時固定（D1・実行時切替は Stage 2）。
@@ -154,6 +158,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // DD-027-3: セル書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。書式なしなら hasAny()=false で
   // base-layer への束縛を省き描画コスト増をゼロにする。
   let compiledFormats: CompiledColumnFormats | undefined;
+  // DD-036 C2: 静的列背景（columnBackgrounds）のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
+  // hasAny()=false なら base-layer への columnBackground 束縛を省き列バンド描画そのものを行わない（現行描画と一致）。
+  let compiledBackgrounds: CompiledColumnBackgrounds | undefined;
   // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
   // hasAny()=false（両オプション未指定）なら base-layer への columnHeaderLabel/formatCellText フック束縛を省く。
   let compiledDisplay: CompiledColumnDisplay | undefined;
@@ -216,6 +223,27 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // mount 時に1件（E2E/障害切り分けの確認点・決定事項）。抑止発動ごとの readonly-blocked とは別。
     diag.emit('info', 'readonly-mode', '表示専用モード（readOnly=true）でマウント: 文書変更を抑止し閲覧系のみ許可');
   }
+
+  // DD-036 C1: 固定行数/固定列数（mount オプション・既定 1＝DD-036 以前のハードコード値と完全一致）。view-local。
+  // 受理形は 0 以上の有限整数。非整数・負・NaN・非 number は診断 warn（frozen-count-invalid）を出して既定 1 へ倒す
+  // （readOnly の boolean 検証と同方針＝構成不整合ではないため mount は成功させる）。行数/列数の超過は
+  // ViewportTransform 側が Math.min(count) で自クランプする（全行/全列が固定＝スクロール領域が空になるだけ）。
+  function resolveFrozenCount(raw: unknown, label: string): number {
+    if (raw === undefined) {
+      return 1;
+    }
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+      diag.emit(
+        'warn',
+        'frozen-count-invalid',
+        `${label} は 0 以上の整数が必要（受領: ${String(raw)}）→ 既定 1 として扱う`,
+      );
+      return 1;
+    }
+    return raw;
+  }
+  const frozenRowCount = resolveFrozenCount(options.frozenRowCount, 'frozenRowCount');
+  const frozenColCount = resolveFrozenCount(options.frozenColumnCount, 'frozenColumnCount');
 
   function emit(event: GridEvent): void {
     for (const listener of [...listeners]) {
@@ -331,7 +359,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * （クリックで勝手にスクロールしない）。scroller.scrollTop/Left への代入は同期反映され、scroll イベント→
    * 再描画で追従する。
    */
-  function ensureCellVisible(cell: CellPosition): void {
+  function ensureCellVisible(cell: CellPosition, axes: 'both' | 'vertical' | 'horizontal' = 'both'): void {
     const transform = currentTransform();
     if (transform === undefined) {
       return;
@@ -340,14 +368,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const bodyOriginX = HEADER_WIDTH + transform.frozenWidth();
     const bodyOriginY = HEADER_HEIGHT + transform.frozenHeight();
     // 固定行/列のセルはスクロール非依存ゆえ追従不要（body セルのみ）。
-    if (cell.row >= frozenRowCount) {
+    // DD-036 C4: 軸指定（scrollToRow=縦のみ / scrollToColumn=横のみ）。既定 'both' は従来と同一挙動。
+    if (axes !== 'horizontal' && cell.row >= frozenRowCount) {
       if (rect.y < bodyOriginY) {
         scroller.scrollTop += rect.y - bodyOriginY; // 上へはみ出し → スクロールアップ（負）
       } else if (rect.y + rect.height > viewportHeight) {
         scroller.scrollTop += rect.y + rect.height - viewportHeight; // 下へはみ出し → スクロールダウン
       }
     }
-    if (cell.col >= frozenColCount) {
+    if (axes !== 'vertical' && cell.col >= frozenColCount) {
       if (rect.x < bodyOriginX) {
         scroller.scrollLeft += rect.x - bodyOriginX;
       } else if (rect.x + rect.width > viewportWidth) {
@@ -407,7 +436,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
   }
 
-  /** scrollToRow の実体（可視化のみ・横スクロールは動かさない＝frozen 列 index 0 を使う）。 */
+  /**
+   * scrollToRow の実体（可視化のみ・横スクロールは動かさない）。
+   * DD-036 C4: 軸指定 'vertical' で明示する（従来の「col: 0 は固定列だから横が動かない」という暗黙前提を廃止＝
+   * `frozenColumnCount: 0` でも横スクロールが動かない）。
+   */
   function performScrollToRow(rowId: string): void {
     const backend = sync;
     if (backend === undefined) {
@@ -418,9 +451,25 @@ export function createGridController(target: GridMountTarget, options: GridMount
       diag.emit('warn', 'scroll-row-unknown', `scrollToRow: 未知の行 rowId=${rowId}（tombstone/未注入）→ 無視`);
       return;
     }
-    ensureCellVisible({ row, col: 0 });
+    ensureCellVisible({ row, col: 0 }, 'vertical');
     backend.view.markViewportDirty();
     diag.emit('info', 'scroll-to-row', `scrollToRow: rowId=${rowId} index=${row}`);
+  }
+
+  /** scrollToColumn の実体（DD-036 C4・performScrollToRow の鏡像。縦スクロールは動かさない）。 */
+  function performScrollToColumn(columnId: string): void {
+    const backend = sync;
+    if (backend === undefined) {
+      return;
+    }
+    const col = backend.view.colIndexOf(createColumnId(columnId));
+    if (col < 0) {
+      diag.emit('warn', 'scroll-column-unknown', `scrollToColumn: 未知の列 columnId=${columnId} → 無視`);
+      return;
+    }
+    ensureCellVisible({ row: 0, col }, 'horizontal');
+    backend.view.markViewportDirty();
+    diag.emit('info', 'scroll-to-column', `scrollToColumn: columnId=${columnId} index=${col}`);
   }
 
   /**
@@ -491,6 +540,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       firstDataDrawn = true;
       metrics.mark('firstDraw');
       metrics.mark('firstOperable');
+      validateReadOnlyRowsOnce(); // DD-036 C3: 未知 rowId の診断 warn（初回描画後に 1 回だけ）
       if (focusRequested) {
         focusRequested = false;
         editor?.focus(); // boot 前に要求された focus を初回配置後に適用する（P2-3）
@@ -629,13 +679,65 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const colId = sync.view.columnIdAt(colIndex);
     return colId !== undefined && isReadOnlyColumnId(String(colId));
   }
-  /** アクティブセルが readOnly 列にあるか（textarea の列ロック・入口抑止の共通条件）。 */
-  function isActiveCellReadOnly(): boolean {
-    return editor !== undefined && isReadOnlyColumnIndex(editor.session.getActiveCell().col);
+  // ---- DD-036 C3: 行単位 readOnly（readOnlyRows）の判定（列版と同型・mount 固定・未知 rowId は warn のみ）----
+  // 列（columnOrder で mount 時に全 ID が既知）と違い行 ID は初期データ到着前に検証できないため registry へは
+  // 載せず、ここで Set を持つ（重複は集合として吸収＝fail-fast しない・契約 §3）。
+  const readOnlyRowSet = new Set<string>((options.readOnlyRows ?? []).map((r) => String(r)));
+  /** readOnlyRows が 1 つでもあるか（無ければ以下の判定は全て即 false＝現行経路のコスト増ゼロ）。 */
+  function hasReadOnlyRows(): boolean {
+    return readOnlyRowSet.size > 0;
   }
-  /** アクティブセルの列ロックを常駐 textarea へ同期する（activeCell 移動のたびに呼ぶ・同値なら無操作）。 */
-  function syncColumnLock(): void {
-    if (editor !== undefined && hasReadOnlyColumns()) {
+  /** RowId 文字列が readOnly 行か（SetCells フィルタ・chokepoint 用）。 */
+  function isReadOnlyRowId(rowId: string): boolean {
+    return readOnlyRowSet.has(rowId);
+  }
+  /** 行 index が readOnly 行か（dblclick・キー裁定・インジケーター用）。行消失は false。 */
+  function isReadOnlyRowIndex(rowIndex: number): boolean {
+    if (!hasReadOnlyRows() || sync === undefined) {
+      return false;
+    }
+    const rowId = sync.view.rowIdAt(rowIndex);
+    return rowId !== undefined && isReadOnlyRowId(String(rowId));
+  }
+  /** readOnly 列/行が 1 つでも指定されているか（未指定なら以下の分岐は一切コストを持たない）。 */
+  function hasReadOnlyCells(): boolean {
+    return hasReadOnlyColumns() || hasReadOnlyRows();
+  }
+  /**
+   * アクティブセルが readOnly 列 **または** readOnly 行にあるか（textarea のロック・入口抑止の共通条件）。
+   * DD-035 R4（列）と DD-036 C3（行）の和。
+   */
+  function isActiveCellReadOnly(): boolean {
+    if (editor === undefined) {
+      return false;
+    }
+    const active = editor.session.getActiveCell();
+    return isReadOnlyColumnIndex(active.col) || isReadOnlyRowIndex(active.row);
+  }
+  /**
+   * 未知 rowId の診断 warn（DD-036 C3・契約 §3）。行 ID は mount 時点では検証できないため、**初回描画の直後に 1 回だけ**
+   * 現在の行 Axis と突き合わせる（それ以降の行削除・tombstone では警告しない＝実行時に警告を出し続けない）。
+   * 未知でも mount は成功する（列の fail-fast とは扱いを分ける）。
+   */
+  let readOnlyRowsChecked = false;
+  function validateReadOnlyRowsOnce(): void {
+    const backend = sync;
+    if (readOnlyRowsChecked || !hasReadOnlyRows() || backend === undefined) {
+      return;
+    }
+    readOnlyRowsChecked = true;
+    const unknown = [...readOnlyRowSet].filter((rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0);
+    if (unknown.length > 0) {
+      diag.emit(
+        'warn',
+        'readonly-row-unknown',
+        `readOnlyRows: 未知の行 ${unknown.join(', ')}（初回描画時点の文書に存在しない）→ 該当 RowId が現れれば読み取り専用になる`,
+      );
+    }
+  }
+  /** アクティブセルのロックを常駐 textarea へ同期する（activeCell 移動のたびに呼ぶ・同値なら無操作）。 */
+  function syncCellLock(): void {
+    if (editor !== undefined && hasReadOnlyCells()) {
       editor.setInputLock(isActiveCellReadOnly());
     }
   }
@@ -643,19 +745,35 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * 範囲操作（貼り付け・範囲クリア・cut）の SetCells から readOnly 列への変更を除く（論点4: スキップして他列へ適用）。
    * 全件スキップなら null（呼び出し側は no-op）。上限/はみ出し検査は矩形全体で先に済んでいる（事後フィルタ）。
    */
-  function filterReadOnlyColumns(op: SetCellsOperation, label: string): SetCellsOperation | null {
-    if (!hasReadOnlyColumns()) {
+  function filterReadOnlyCells(op: SetCellsOperation, label: string): SetCellsOperation | null {
+    if (!hasReadOnlyCells()) {
       return op;
     }
-    const { kept, skipped } = partitionReadOnlyColumnChanges(op.changes, isReadOnlyColumnId);
-    if (skipped > 0) {
-      diag.emit(
-        'info',
-        'readonly-column-skipped',
-        `${label}: readOnly 列のセル ${skipped} 件をスキップ（他列へ適用 ${kept.length} 件）`,
-      );
+    let changes: readonly SetCellsChange[] = op.changes;
+    if (hasReadOnlyColumns()) {
+      const partition = partitionReadOnlyColumnChanges(changes, isReadOnlyColumnId);
+      if (partition.skipped > 0) {
+        diag.emit(
+          'info',
+          'readonly-column-skipped',
+          `${label}: readOnly 列のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
+        );
+      }
+      changes = partition.kept;
     }
-    return kept.length === 0 ? null : { ...op, changes: [...kept] };
+    // DD-036 C3: 行版を続けて適用する（和＝列 or 行のどちらかに該当するセルがスキップされる）。
+    if (hasReadOnlyRows()) {
+      const partition = partitionReadOnlyRowChanges(changes, isReadOnlyRowId);
+      if (partition.skipped > 0) {
+        diag.emit(
+          'info',
+          'readonly-row-skipped',
+          `${label}: readOnly 行のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
+        );
+      }
+      changes = partition.kept;
+    }
+    return changes.length === 0 ? null : { ...op, changes: [...changes] };
   }
 
   /**
@@ -1135,6 +1253,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
           return;
         }
         // DD-035 R4: readOnly 列のセルは編集 UI（textarea・ドロップダウン・カレンダー）を一切開かない（入口抑止）。
+        if (isReadOnlyRowIndex(hit.rowIndex)) {
+          diag.emit('info', 'readonly-row-blocked', `readOnlyRows: 行 ${String(sync.view.rowIdAt(hit.rowIndex))} のダブルクリック編集を抑止`);
+          return;
+        }
         if (isReadOnlyColumnIndex(hit.colIndex)) {
           diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 列 ${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
           return;
@@ -1223,6 +1345,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       columnTypeRegistry = createColumnTypeRegistry(options.columnTypes, columnOrder, wrapColumnStrings, options.readOnlyColumns);
       // DD-027-3: セル書式ルールをプリコンパイル（fail-fast）。不正は columnTypes と同じ column-types-invalid へ写像する。
       compiledFormats = compileFormatRules(options.columnFormats, columnOrder);
+      // DD-036 C2: 静的列背景をプリコンパイル（fail-fast・未知列/空色 → column-types-invalid＝columnFormats と同経路）。
+      compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
       // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
       // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
       compiledDisplay = compileDisplayFormats(options.columnDisplayFormats, options.columnCaptions, columnOrder, {
@@ -1378,8 +1502,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       diag.emit('warn', 'readonly-blocked', 'readOnly: submitSetCells で SetCells を破棄（undo 記録前）');
       return;
     }
+    // DD-036 C3: readOnly 行版の保証層（列版と同型・undo 記録前）。
+    if (hasReadOnlyRows() && touchesReadOnlyRow(op.changes, isReadOnlyRowId)) {
+      diag.emit('warn', 'readonly-row-blocked', 'readOnlyRows: submitSetCells で readOnly 行への SetCells を破棄（undo 記録前）');
+      return;
+    }
     // DD-035 R4: readOnly 列への変更を含む SetCells は op 全体を破棄する（保証層・undo 記録前）。範囲操作は
-    // filterReadOnlyColumns で事前にスキップ済みのため、ここへ到達するのは入口をすり抜けた経路＝warn。
+    // filterReadOnlyCells で事前にスキップ済みのため、ここへ到達するのは入口をすり抜けた経路＝warn。
     if (hasReadOnlyColumns() && touchesReadOnlyColumn(op.changes, isReadOnlyColumnId)) {
       diag.emit('warn', 'readonly-column-blocked', 'readOnlyColumns: submitSetCells で readOnly 列への SetCells を破棄（undo 記録前）');
       return;
@@ -1400,6 +1529,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 通常はここへ到達しないため diag は warn（到達自体が想定外＝障害切り分けの手掛かり）。
     if (readOnly) {
       diag.emit('warn', 'readonly-blocked', 'readOnly: submitToBackend で SetCells を破棄（絶対防衛線・送信ゼロ）');
+      return;
+    }
+    // DD-036 C3: 絶対防衛線の行版（列版と同型・Undo/Redo 補償を含む全 SetCells が通る）。
+    if (hasReadOnlyRows() && touchesReadOnlyRow(op.changes, isReadOnlyRowId)) {
+      diag.emit('warn', 'readonly-row-blocked', 'readOnlyRows: submitToBackend で readOnly 行への SetCells を破棄（絶対防衛線）');
       return;
     }
     // DD-035 R4: 絶対防衛線（Undo/Redo 補償を含む全 SetCells）。readOnly 列への変更を含めば op 全体を破棄する。
@@ -1663,6 +1797,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
             },
           }
         : {}),
+      // DD-036 C2: 静的列背景のフック（列単位・値を見ない）。指定が 1 列も無ければ束縛せず列バンド描画を行わない。
+      ...(compiledBackgrounds?.hasAny() === true
+        ? {
+            columnBackground: (colIndex: number) => {
+              const id = backend.view.columnIdAt(colIndex);
+              return id === undefined ? undefined : compiledBackgrounds?.getBackground(String(id));
+            },
+          }
+        : {}),
       // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
       // 完全一致（AC9）。判定は raw・描画は display（columnHeaderLabel=ヘッダー・formatCellText=セル）。
       ...(compiledDisplay?.hasAny() === true
@@ -1747,7 +1890,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
           return;
         case 'submit': {
           // DD-035 R4: readOnly 列のセルはスキップして他列だけクリアする（全件スキップなら no-op）。
-          const op = filterReadOnlyColumns(outcome.operation, '範囲クリア');
+          const op = filterReadOnlyCells(outcome.operation, '範囲クリア');
           if (op === null) {
             return;
           }
@@ -1800,7 +1943,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const tsv = serializeSelectionToTsv(clipPort, range);
       if (outcome.kind === 'submit') {
         // DD-035 R4: cut のクリアは readOnly 列をスキップ（copy＝TSV は全列そのまま＝閲覧系）。
-        const op = filterReadOnlyColumns(outcome.operation, 'cut');
+        const op = filterReadOnlyCells(outcome.operation, 'cut');
         if (op !== null) {
           submitSetCells(op);
           backend.view.markCellDirty();
@@ -1845,7 +1988,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
           return true;
         case 'submit': {
           // DD-035 R4: readOnly 列のセルはスキップして他列へ貼り付ける（TSV 列位置不変・全件スキップなら消費のみ）。
-          const op = filterReadOnlyColumns(outcome.operation, '貼り付け');
+          const op = filterReadOnlyCells(outcome.operation, '貼り付け');
           if (op === null) {
             return true;
           }
@@ -1974,7 +2117,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       if (isActiveCellReadOnly()) {
-        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns: 選択式ドロップダウンを抑止');
+        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns/readOnlyRows: 選択式ドロップダウンを抑止');
         return;
       }
       if (editor === undefined || selectDropdown === undefined || columnTypeRegistry === undefined) {
@@ -2084,7 +2227,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       if (isActiveCellReadOnly()) {
-        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns: 日付カレンダーを抑止');
+        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns/readOnlyRows: 日付カレンダーを抑止');
         return;
       }
       if (editor === undefined || datePicker === undefined || columnTypeRegistry === undefined) {
@@ -2185,7 +2328,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const showIndicator =
         !readOnly &&
         isDateCellIndex(active.col) &&
-        !isReadOnlyColumnIndex(active.col) &&
+        !isActiveCellReadOnly() && // DD-035 R4 / DD-036 C3: readOnly 列・行では開けないため affordance も出さない
         !editor.session.isComposing() &&
         editor.session.getPhase() === 'Navigation';
       let indicatorRect: CellRect | null = null;
@@ -2229,7 +2372,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const active = editor.session.getActiveCell();
       const showIndicator =
         isSelectCellIndex(active.col) &&
-        !isReadOnlyColumnIndex(active.col) && // DD-035 R4: readOnly 列では開けないため affordance も出さない
+        !isActiveCellReadOnly() && // DD-035 R4 / DD-036 C3: readOnly 列・行では開けないため affordance も出さない
         !editor.session.isComposing() &&
         editor.session.getPhase() === 'Navigation';
       let indicatorRect: CellRect | null = null;
@@ -2310,7 +2453,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         if (editor === undefined) {
           return;
         }
-        syncColumnLock(); // DD-035 R4: activeCell の列に応じて textarea の readOnly 属性を同期（非 composing 時のみ）
+        syncCellLock(); // DD-035 R4 / DD-036 C3: activeCell の列・行に応じて textarea の readOnly 属性を同期（非 composing 時のみ）
         ensureActiveCellVisible(); // アクティブセルを可視域へ（scrollTop/Left を同期更新しうる）
         // DD-020-1 AC4: activeCell 移動・編集開始で明示レンジを単一選択へ戻す（不変条件は controller が判定）。
         selectionCtrl.syncWithEditor(editor.session.getActiveCell(), editor.session.getPhase());
@@ -2354,7 +2497,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // アンカーが readOnly 列でも可編集列を含むレンジのクリアは契約どおり成立させる。
         const rangeDelete = input.key === 'Delete' && selectionCtrl.getRange() !== null;
         if (
-          hasReadOnlyColumns() &&
+          hasReadOnlyCells() &&
           !rangeDelete &&
           isActiveCellReadOnly() &&
           shouldSuppressReadonlyKey({
@@ -2368,7 +2511,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
             phase: current.session.getPhase(),
           })
         ) {
-          diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 編集キー「${input.key}」を抑止`);
+          diag.emit(
+            'info',
+            isReadOnlyRowIndex(current.session.getActiveCell().row) ? 'readonly-row-blocked' : 'readonly-column-blocked',
+            `readOnlyColumns/readOnlyRows: 編集キー「${input.key}」を抑止`,
+          );
           return true;
         }
         // DD-035 R2: 日付カレンダーの前段裁定。open 中は矢印/PageUp/Down/Enter/Esc/Tab を消費し他キーを握り潰す。
@@ -2387,7 +2534,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
             sessionComposing: current.session.isComposing(),
             phase: current.session.getPhase(),
             isOpen: datePicker.isOpen(),
-            isDateCell: openOn !== undefined && !readOnly && !isReadOnlyColumnIndex(active.col),
+            isDateCell: openOn !== undefined && !readOnly && !isActiveCellReadOnly(),
             openOn: openOn ?? 'dblclick',
           });
           switch (decision) {
@@ -2447,7 +2594,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
             isOpen: selectDropdown.isOpen(),
             // DD-035 R4: readOnly 列の選択式セルは「非選択式」として裁定する（Enter=下移動等の閲覧系キーを奪わない。
             // 編集開始キーは readonly 裁定/列ロックが遮断済み）。
-            isSelectCell: isSelectCellIndex(active.col) && !isReadOnlyColumnIndex(active.col),
+            isSelectCell: isSelectCellIndex(active.col) && !isActiveCellReadOnly(),
           });
           switch (decision) {
             case 'open':
@@ -2563,7 +2710,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       onClipboardPaste: performPaste,
     });
 
-    syncColumnLock(); // DD-035 R4: 初期 activeCell（0,0）の列ロックを同期
+    syncCellLock(); // DD-035 R4 / DD-036 C3: 初期 activeCell（0,0）のロックを同期
     syncLayout();
     backend.start();
   }
@@ -2694,6 +2841,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     scrollToRow(rowId: string) {
       runOrDefer(() => performScrollToRow(rowId));
+    },
+    scrollToColumn(columnId: string) {
+      runOrDefer(() => performScrollToColumn(columnId));
     },
     setActiveCell(rowId: string, columnId: string) {
       runOrDefer(() => performSetActiveCell(rowId, columnId));

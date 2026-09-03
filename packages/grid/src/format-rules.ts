@@ -7,7 +7,8 @@
 //     不一致クライアントは異なる装飾を見る＝共有化設計文書 `doc/plan/cell-format-sharing-design.md` に明記）。
 //   - 一致条件は **v1 では完全一致のみ**（`match: string | string[]`＝セル表示文字列の完全一致）。列→値→style の
 //     Map へプリコンパイルし、描画ホットパスでは O(1) lookup にする（ルールの線形走査を描画時にしない）。
-//   - 書式は **非空セルのみ**に付く（値ベース）。列全体の静的背景色（値によらない列色）は v1 対象外。
+//   - 書式は **非空セルのみ**に付く（値ベース）。列全体の静的背景色（値によらない列色）は DD-036 C2 で
+//     `columnBackgrounds`＝**別 API・別解決器**（本ファイル末尾の compileColumnBackgrounds）として追加した。
 //   - 公開面は宣言的 mount オプション `columnFormats` のみ（index.ts）。registry 相当の登録 API は公開しない（決定⑤）。
 //
 // 【拡張点メモ（P-07 材料・DD-027-3 検討内容）】
@@ -58,7 +59,7 @@ export interface GridColumnFormatRule {
 export class FormatRuleConfigError extends Error {
   constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match',
+    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color',
     /** 対象列 ID（診断用）。 */
     readonly columnId: string,
     message: string,
@@ -172,6 +173,64 @@ export function compileFormatRules(
   const hasAny = byColumn.size > 0;
   return {
     getStyle: (columnId, value) => byColumn.get(columnId)?.get(value),
+    hasAny: () => hasAny,
+  };
+}
+
+// ---- DD-036 C2: 列単位の静的背景色（columnBackgrounds）----
+//
+// 値ベース書式（上の compileFormatRules）とは**別経路**の解決器。値によらず列全体を塗るため、
+//   - 非空セルだけでなく**空セルも塗る**（描画は base-layer の pane 背景直後・罫線の前に列バンドを塗る）
+//   - 解決は列単位の O(1) lookup（セル値を見ない）
+// 優先順位は「値ベース書式 > 静的列背景」（値ベース背景は base-layer が後からセル矩形へ上塗りする）。
+// format-rules の「非空セルのみ・値ベース」という芯を濁さないため、同ファイル内でも Map・API を分けている
+// （DD-027-3 の拡張点メモ「列全体の静的背景色も同経路で追加する」に対する本DDの結論）。
+
+/** プリコンパイル済みの静的列背景解決器（列 ID → CSS color の O(1) lookup）。 */
+export interface CompiledColumnBackgrounds {
+  /** 列 ID の静的背景色（未指定列は undefined）。 */
+  getBackground(columnId: string): string | undefined;
+  /** 静的列背景が 1 列でもあるか（base-layer への束縛要否＝無ければ描画コスト増ゼロ）。 */
+  hasAny(): boolean;
+}
+
+/**
+ * columnBackgrounds（mount オプション）と columnOrder から静的列背景の解決器をプリコンパイルする（fail-fast）。
+ * 未指定/空なら「背景なし」解決器を返す（現行描画と完全一致）。
+ * 不正設定（未知列・空/空白のみの色）は FormatRuleConfigError を throw する（公開 code は column-types-invalid）。
+ * 色文字列そのものの妥当性は検査しない（Canvas fillStyle は不正値を無視＝安全・columnFormats と同方針）。
+ */
+export function compileColumnBackgrounds(
+  columnBackgrounds: Readonly<Record<string, string>> | undefined,
+  columnOrder: readonly string[],
+): CompiledColumnBackgrounds {
+  const byColumn = new Map<string, string>();
+  const columnSet = new Set(columnOrder.map((c) => String(c)));
+
+  if (columnBackgrounds !== undefined) {
+    for (const [columnId, color] of Object.entries(columnBackgrounds)) {
+      if (!columnSet.has(columnId)) {
+        throw new FormatRuleConfigError(
+          'unknown-column',
+          columnId,
+          `columnBackgrounds: 未知の列 "${columnId}"（columnOrder に存在しない）`,
+        );
+      }
+      // 空/空白のみの色は「死に設定」＝黙って無効化せず fail-fast する（empty-match と同じ理由）。
+      if (typeof color !== 'string' || color.trim() === '') {
+        throw new FormatRuleConfigError(
+          'empty-color',
+          columnId,
+          `columnBackgrounds: 列 "${columnId}" の色が空（CSS color 文字列が必要）`,
+        );
+      }
+      byColumn.set(columnId, color);
+    }
+  }
+
+  const hasAny = byColumn.size > 0;
+  return {
+    getBackground: (columnId) => byColumn.get(columnId),
     hasAny: () => hasAny,
   };
 }

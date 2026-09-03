@@ -17,10 +17,11 @@ export const R0_COL_A = { x: 52 + 80 / 2, y: 24 + 22 / 2 } as const; // (92, 35)
 /** react-standalone.html を開き、grid の初回描画（canvas 2 + 常駐 textarea）まで待つ。 */
 export async function openReactStandalone(
   browser: Browser,
+  query = '',
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
-  await page.goto('/react-standalone.html');
+  await page.goto(`/react-standalone.html${query}`);
   await waitReactReady(page);
   return { context, page };
 }
@@ -131,6 +132,7 @@ declare global {
       insertRows(options: { readonly afterRowId: string | null; readonly count?: number }): void;
       deleteRows(rowIds: readonly string[]): void;
       scrollToRow(rowId: string): void;
+      scrollToColumn(columnId: string): void;
       setActiveCell(rowId: string, columnId: string): void;
       lastRowStructureChange(): unknown;
     };

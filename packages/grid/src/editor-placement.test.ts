@@ -87,3 +87,46 @@ describe('computeEditorPlacement（§13.5 pane 区別・AC3 追従）', () => {
     expect(computeEditorPlacement(t, 1, 3, CFG).visible).toBe(false);
   });
 });
+
+describe('DD-036 C1: 固定列数が n>1 でも pane 区別（可視判定）が固定バンド境界で正しい', () => {
+  const FROZEN_COLS = 3;
+  const FROZEN_ROWS = 2;
+  const cfg: PlacementConfig = {
+    headerWidth: HEADER_W,
+    headerHeight: HEADER_H,
+    viewportWidth: VIEW_W,
+    viewportHeight: VIEW_H,
+    frozenRowCount: FROZEN_ROWS,
+    frozenColCount: FROZEN_COLS,
+  };
+  const transform = createViewportTransform({
+    rowAxis: createAxis({ ids: rowIds(1000), defaultSize: ROW_H }),
+    colAxis: createAxis({ ids: colIds(50), defaultSize: COL_W }),
+    headerWidth: HEADER_W,
+    headerHeight: HEADER_H,
+    frozenRowCount: FROZEN_ROWS,
+    frozenColCount: FROZEN_COLS,
+    viewportWidth: VIEW_W,
+    viewportHeight: VIEW_H,
+    scrollLeft: 10 * COL_W,
+    scrollTop: 10 * ROW_H,
+    overscanX: COL_W,
+    overscanY: VIEW_H,
+  });
+
+  it('固定列のセルは横スクロール後も可視（header 直後に留まる）', () => {
+    const p = computeEditorPlacement(transform, 0, FROZEN_COLS - 1, cfg);
+    expect(p.visible).toBe(true);
+    expect(p.rect.x).toBe(HEADER_W + (FROZEN_COLS - 1) * COL_W);
+  });
+
+  it('固定バンドの下へ流れたスクロール列のセルは非可視（固定/本体境界で隠れる）', () => {
+    // 列 index 11 は scrollLeft=10 列ぶん → x = HEADER_W + 80。固定バンド右端（HEADER_W + 240）より左＝隠れる。
+    const hidden = computeEditorPlacement(transform, 12, 11, cfg);
+    expect(hidden.visible).toBe(false);
+    // 固定バンドの右隣に出る列（index 14）は可視。
+    const shown = computeEditorPlacement(transform, 12, 14, cfg);
+    expect(shown.visible).toBe(true);
+  });
+});
+

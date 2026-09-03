@@ -70,6 +70,14 @@ export interface NanairoSheetViewCommonProps {
   readonly readOnly?: boolean;
   /** 読み取り専用列（grid readOnlyColumns・DD-035 R4）。 */
   readonly readOnlyColumns?: readonly string[];
+  /** 読み取り専用行（grid readOnlyRows・DD-036 C3）。未知 RowId は grid 側で診断 warn のみ。 */
+  readonly readOnlyRows?: readonly string[];
+  /** 固定行数（grid frozenRowCount・DD-036 C1・既定 1）。 */
+  readonly frozenRowCount?: number;
+  /** 固定列数（grid frozenColumnCount・DD-036 C1・既定 1）。 */
+  readonly frozenColumnCount?: number;
+  /** 列単位の静的背景色（grid columnBackgrounds・DD-036 C2）。 */
+  readonly columnBackgrounds?: Readonly<Record<string, string>>;
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -133,6 +141,8 @@ export interface NanairoSheetViewHandle {
   deleteRows(rowIds: readonly string[]): void;
   /** 指定行を可視域へ（grid GridInstance.scrollToRow 直結・DD-035 R6）。setData/insertRows 直後の新 RowId でも成立。 */
   scrollToRow(rowId: string): void;
+  /** 指定列を可視域へ（grid GridInstance.scrollToColumn 直結・DD-036 C4）。縦スクロールは動かさない。 */
+  scrollToColumn(columnId: string): void;
   /** アクティブセルを移して可視化＋focus（grid GridInstance.setActiveCell 直結・DD-035 R6）。 */
   setActiveCell(rowId: string, columnId: string): void;
 }
@@ -195,6 +205,11 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     columnDisplayFormats: props.columnDisplayFormats === undefined ? null : canonicalJson(props.columnDisplayFormats),
     readOnly: props.readOnly ?? null,
     readOnlyColumns: props.readOnlyColumns === undefined ? null : [...props.readOnlyColumns].sort(),
+    // DD-036: 行 readOnly は集合＝ソート。固定行列数は素の数値。列背景 Record はキー順非依存で正準化。
+    readOnlyRows: props.readOnlyRows === undefined ? null : [...props.readOnlyRows].sort(),
+    frozenRowCount: props.frozenRowCount ?? null,
+    frozenColumnCount: props.frozenColumnCount ?? null,
+    columnBackgrounds: props.columnBackgrounds === undefined ? null : canonicalJson(props.columnBackgrounds),
   });
 }
 
@@ -240,6 +255,11 @@ function toMountOptions(
     columnDisplayFormats: props.columnDisplayFormats,
     readOnly: props.readOnly,
     readOnlyColumns: props.readOnlyColumns,
+    // DD-036: 固定行列数・列背景・行 readOnly（undefined はそのまま渡す＝grid 側で未指定＝現行挙動）。
+    readOnlyRows: props.readOnlyRows,
+    frozenRowCount: props.frozenRowCount,
+    frozenColumnCount: props.frozenColumnCount,
+    columnBackgrounds: props.columnBackgrounds,
     onEvent,
     onDiagnostic,
   };
@@ -348,6 +368,14 @@ function NanairoSheetViewImpl(
           return;
         }
         instance.scrollToRow(rowId);
+      },
+      scrollToColumn(columnId): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'scrollToColumn を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.scrollToColumn(columnId);
       },
       setActiveCell(rowId, columnId): void {
         const instance = instanceRef.current;

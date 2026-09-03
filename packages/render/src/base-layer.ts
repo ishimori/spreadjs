@@ -98,6 +98,13 @@ export interface BaseLayerDeps {
    * display）。grid 側がプリコンパイル済みの raw→display 写像を束縛する。DOM/grid 型非依存の構造フック（R7）。
    */
   readonly formatCellText?: (colIndex: number, rawValue: string) => string;
+  /**
+   * 列単位の静的背景色フック（DD-036 C2）。列 index → CSS color（未指定列は undefined）。**値によらず列全体**を塗る
+   * ため、pane 背景の直後・罫線描画の**前**に列バンドとして塗る（＝空セルも塗られ、罫線・値・選択は上に乗る）。
+   * 値ベース書式（getCellStyle の cellBackground）は可視非空セルの描画時に後から上塗りされる＝**値ベースが勝つ**。
+   * 未指定なら列バンド描画そのものを行わない（現行描画と完全一致・コスト増ゼロ）。
+   */
+  readonly columnBackground?: (colIndex: number) => string | undefined;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -169,6 +176,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   // DD-033-2: 表示書式フック（未指定なら恒等＝raw 素通し）。判定は raw・描画は display（下の visitor 参照）。
   const formatCellText = deps.formatCellText ?? ((_col: number, raw: string) => raw);
   const columnHeaderLabelFn = deps.columnHeaderLabel;
+  const columnBackgroundFn = deps.columnBackground;
   const frozenColCount = deps.frozenColCount ?? 0;
   const cellFontSizePx = parseFontSizePx(cellFont);
   const lineHeight = deps.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
@@ -452,6 +460,33 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
   };
 
+  /**
+   * 静的列背景（DD-036 C2）: pane 内の指定列を「可視行範囲いっぱいの縦バンド」として 1 列 1 回で塗る。
+   * セル単位に塗らないのは、空セルも含む列全体が対象で、かつ列数ぶんの fillRect で足りるため（描画予算）。
+   * 罫線は本メソッドの後に引かれるため網掛けで消えない。
+   */
+  const drawColumnBackgrounds = (frame: FrameViewport, pane: PaneRange): void => {
+    if (columnBackgroundFn === undefined) {
+      return;
+    }
+    if (pane.rows.end <= pane.rows.start || pane.cols.end <= pane.cols.start) {
+      return;
+    }
+    const { transform } = frame;
+    const top = transform.cellRect(pane.rows.start, pane.cols.start).y;
+    const lastRow = transform.cellRect(pane.rows.end - 1, pane.cols.start);
+    const height = lastRow.y + lastRow.height - top;
+    for (let col = pane.cols.start; col < pane.cols.end; col += 1) {
+      const color = columnBackgroundFn(col);
+      if (color === undefined) {
+        continue;
+      }
+      const rect = transform.cellRect(pane.rows.start, col);
+      ctx.fillStyle = color;
+      ctx.fillRect(rect.x, top, rect.width, height);
+    }
+  };
+
   const drawPane = (frame: FrameViewport, pane: PaneRange): void => {
     if (pane.clip.width <= 0 || pane.clip.height <= 0) {
       return;
@@ -462,6 +497,8 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.clip();
     ctx.fillStyle = pane.pane === 'body' ? colors.cellBackground : colors.frozenBackground;
     ctx.fillRect(pane.clip.x, pane.clip.y, pane.clip.width, pane.clip.height);
+    // DD-036 C2: 静的列背景は pane 背景の直後・罫線の前（固定 pane でも frozenBackground より優先して塗る）。
+    drawColumnBackgrounds(frame, pane);
     drawPaneGrid(frame, pane);
     drawPaneValues(frame, pane);
     ctx.restore();

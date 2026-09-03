@@ -25,7 +25,20 @@ if (!(rootEl instanceof HTMLElement)) {
   throw new Error('#react-root が見つかりません');
 }
 
-const COLUMN_ORDER = ['col-a', 'col-b', 'col-c', 'col-d'];
+// DD-036 C4: handle.scrollToColumn の検証には横スクロールが要るため `?extracols=N` で列を増やせる
+// （既定は従来の 4 列＝未指定なら既存 E2E と完全一致）。
+const EXTRA_COLUMN_COUNT = (() => {
+  const raw = new URLSearchParams(location.search).get('extracols');
+  const n = raw === null ? 0 : Number(raw);
+  return Number.isInteger(n) && n > 0 && n <= 400 ? n : 0;
+})();
+const COLUMN_ORDER = [
+  'col-a',
+  'col-b',
+  'col-c',
+  'col-d',
+  ...Array.from({ length: EXTRA_COLUMN_COUNT }, (_, i) => `col-x${i}`),
+];
 const SEED_ROW_COUNT = 20;
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
@@ -106,6 +119,8 @@ interface ReactStandaloneHandle {
   insertRows(options: { readonly afterRowId: string | null; readonly count?: number }): void;
   deleteRows(rowIds: readonly string[]): void;
   scrollToRow(rowId: string): void;
+  /** DD-036 C4: 指定列を可視域へ（縦は動かさない）。 */
+  scrollToColumn(columnId: string): void;
   setActiveCell(rowId: string, columnId: string): void;
   /** 直近の row-structure-change（insert の新 RowId を E2E が拾うため）。 */
   lastRowStructureChange(): unknown;
@@ -182,6 +197,9 @@ const handle: ReactStandaloneHandle = {
   },
   scrollToRow(rowId): void {
     viewRef?.current?.scrollToRow(rowId);
+  },
+  scrollToColumn(columnId): void {
+    viewRef?.current?.scrollToColumn(columnId);
   },
   setActiveCell(rowId, columnId): void {
     viewRef?.current?.setActiveCell(rowId, columnId);

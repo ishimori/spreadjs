@@ -261,6 +261,48 @@ export interface GridCommonMountOptions {
    * - 不正設定（未知列・重複）は mount 時に `error`（phase=config・code=`column-types-invalid`）で fail-fast する。
    */
   readonly readOnlyColumns?: readonly string[];
+  /**
+   * 読み取り専用行（RowId 文字列の配列・Experimental 0.x・DD-036 C3）。両モード共通・mount 時固定。
+   * `readOnlyColumns`（DD-035 R4）の**行版**で、抑止・スキップ・保証層は同型（両方指定なら和＝どちらかに該当する
+   * セルが読み取り専用）:
+   * - **抑止（入口）**: 指定行のセルがアクティブな間、編集開始（印字キー・F2・ダブルクリック・IME）／Delete・Backspace
+   *   クリア／選択式ドロップダウン／日付カレンダー を開かない。常駐 textarea は `readOnly` 属性になる（実 IME を物理遮断）。
+   * - **範囲操作**: 範囲貼り付け・範囲クリア（Delete）・cut のクリアは指定行のセルだけ**スキップ**して他行へ適用する
+   *   （TSV の行位置はずらさない・全セルがスキップなら no-op・診断 info `readonly-row-skipped`）。
+   * - **保証層（chokepoint）**: 指定行への変更を含む SetCells は submit 直前で op 全体を破棄する（診断 warn
+   *   `readonly-row-blocked`）＝入口をすり抜ける経路でも指定行への文書 Operation 送信ゼロ。
+   * - **維持**: 範囲選択・コピー・スクロール・リサイズ・link-open・行挿入削除・setData・リモート受信反映。
+   * - **未知 RowId は診断 warn のみ**（code=`readonly-row-unknown`・初回描画後に 1 回だけ判定）。列と違い行は初期データ
+   *   到着前に検証できないため fail-fast しない（`readOnlyColumns` の `column-types-invalid` とは扱いを分ける）。
+   *   重複指定は無害（集合として扱う）。
+   * - **注意**: 権限制御ではない（サーバー側強制なし＝`readOnly` / `readOnlyColumns` と同じ）。
+   */
+  readonly readOnlyRows?: readonly string[];
+  /**
+   * 固定行数（先頭 n 行・Experimental 0.x・DD-036 C1）。既定 1（＝DD-036 以前の固定値と完全一致）。`0` で固定なし。
+   * 両モード共通・mount 時固定・**view-local**（文書状態にしない＝設定が異なるクライアントは異なる見え方をする）。
+   * 0 以上の整数以外は診断 warn（code=`frozen-count-invalid`）を出して既定 1 へ倒す（mount は成功する）。
+   * 実際の行数を超える指定は行数でクランプされる（全行が固定＝スクロール領域が空になるだけ）。
+   */
+  readonly frozenRowCount?: number;
+  /**
+   * 固定列数（先頭 n 列・Experimental 0.x・DD-036 C1）。既定 1。`frozenRowCount` と同じ検証・クランプ・view-local 契約。
+   * 横スクロールしても先頭 n 列が画面左に残る（マトリクス型シートのラベル列）。
+   */
+  readonly frozenColumnCount?: number;
+  /**
+   * 列単位の静的背景色（ColumnId 文字列→CSS color・Experimental 0.x・DD-036 C2）。両モード共通・mount 時固定
+   * （columnFormats と同運用）。**値によらない列全体の背景色**（非稼働日の網掛け等）。
+   * - **空セルも塗る**（`columnFormats` は非空セルのみ＝別経路）。罫線・選択・Presence は従来どおり上に乗る。
+   *   固定 pane の列も指定色で塗られる（固定背景色より優先）。
+   * - **優先順位**: 同一セルに `columnFormats` の値ベース背景が解決されたら**値ベースが勝つ**。値ベース書式が無いセル
+   *   （空セル・非一致値）は静的列色のまま。
+   * - **view-local**（描画のみ）: 文書状態・cell-commit・コピー TSV は一切変更しない。全クライアントの設定一致は
+   *   利用側責務（`cell-format-sharing-design.md`）。
+   * - 不正設定（未知列・空/空白のみの色）は mount 時に `error`（phase=`config`・code=`column-types-invalid`）で
+   *   fail-fast する（columnFormats と同経路）。色文字列の妥当性は検査しない（Canvas は不正値を無視＝安全）。
+   */
+  readonly columnBackgrounds?: Readonly<Record<string, string>>;
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**
@@ -348,6 +390,13 @@ export interface GridInstance {
    * （文書 Operation ではないため `rejected` は出さない・同期 throw しない）。
    */
   scrollToRow(rowId: string): void;
+  /**
+   * 指定列を可視域へ入れる（Experimental 0.x・DD-036 C4・両モード）。`scrollToRow` の鏡像で、列が body viewport の
+   * 外にあれば最小スクロールで可視化し、既に可視なら何もしない（**縦スクロールは動かさない**）。固定列
+   * （index < `frozenColumnCount`）は常に可視のため無変更。構造変更（`setData`/行挿入削除）直後の保留・同期 flush は
+   * `scrollToRow` と同じ機構を共有する。未知 ColumnId は診断 warn（code=`scroll-column-unknown`）のみで no-op。
+   */
+  scrollToColumn(columnId: string): void;
   /**
    * アクティブセルを指定セルへ移して可視化する（Experimental 0.x・DD-035 R6・両モード）。セルクリックと同じ経路を通る:
    * 明示レンジは解除、編集中なら確定して移動、IME 変換中は変換確定後に移動（pendingNavigation）、開いている選択式/日付

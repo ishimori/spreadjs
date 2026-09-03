@@ -45,12 +45,29 @@ export function shouldSuppressReadonlyKey(input: ReadonlyPolicyInput): boolean {
 
 // ---- DD-035 R4: 列単位 readOnly（readOnlyColumns）の SetCells フィルタ（純関数・DOM 非依存） ----
 
-/** readOnly 列フィルタの結果。`kept` が空なら呼び出し側は no-op（submit しない）。 */
+/** readOnly フィルタの結果（列版・行版で共有）。`kept` が空なら呼び出し側は no-op（submit しない）。 */
 export interface ReadOnlyColumnPartition {
-  /** readOnly 列以外への変更（順序維持）。 */
+  /** readOnly 対象以外への変更（順序維持）。 */
   readonly kept: readonly SetCellsChange[];
-  /** スキップした readOnly 列への変更件数。 */
+  /** スキップした readOnly 対象への変更件数。 */
   readonly skipped: number;
+}
+
+/** 述語に一致する変更を除く共通走査（列版・行版の実体・順序維持）。 */
+function partitionBy(
+  changes: readonly SetCellsChange[],
+  isBlocked: (change: SetCellsChange) => boolean,
+): ReadOnlyColumnPartition {
+  const kept: SetCellsChange[] = [];
+  let skipped = 0;
+  for (const change of changes) {
+    if (isBlocked(change)) {
+      skipped += 1;
+    } else {
+      kept.push(change);
+    }
+  }
+  return { kept, skipped };
 }
 
 /**
@@ -63,16 +80,7 @@ export function partitionReadOnlyColumnChanges(
   changes: readonly SetCellsChange[],
   isReadOnlyColumn: (columnId: string) => boolean,
 ): ReadOnlyColumnPartition {
-  const kept: SetCellsChange[] = [];
-  let skipped = 0;
-  for (const change of changes) {
-    if (isReadOnlyColumn(String(change.columnId))) {
-      skipped += 1;
-    } else {
-      kept.push(change);
-    }
-  }
-  return { kept, skipped };
+  return partitionBy(changes, (change) => isReadOnlyColumn(String(change.columnId)));
 }
 
 /** SetCells が readOnly 列への変更を 1 件でも含むか（chokepoint の保証層＝含めば op 全体を破棄する）。 */
@@ -81,4 +89,26 @@ export function touchesReadOnlyColumn(
   isReadOnlyColumn: (columnId: string) => boolean,
 ): boolean {
   return changes.some((change) => isReadOnlyColumn(String(change.columnId)));
+}
+
+// ---- DD-036 C3: 行単位 readOnly（readOnlyRows）の SetCells フィルタ（列版と同型・rowId 述語）----
+
+/**
+ * SetCells の changes から readOnly 行（`isReadOnlyRow(rowId)===true`）への変更を除く（DD-036 C3）。
+ * 契約は列版と同じ: 「readOnly 行のセルだけスキップし他行へ適用・TSV の行位置はずらさない・全セルがスキップなら no-op」。
+ * 列版と併用するときは両方を順に適用する（和＝どちらかに該当するセルがスキップされる）。
+ */
+export function partitionReadOnlyRowChanges(
+  changes: readonly SetCellsChange[],
+  isReadOnlyRow: (rowId: string) => boolean,
+): ReadOnlyColumnPartition {
+  return partitionBy(changes, (change) => isReadOnlyRow(String(change.rowId)));
+}
+
+/** SetCells が readOnly 行への変更を 1 件でも含むか（chokepoint の保証層＝含めば op 全体を破棄する）。 */
+export function touchesReadOnlyRow(
+  changes: readonly SetCellsChange[],
+  isReadOnlyRow: (rowId: string) => boolean,
+): boolean {
+  return changes.some((change) => isReadOnlyRow(String(change.rowId)));
 }

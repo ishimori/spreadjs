@@ -24,7 +24,20 @@ if (!(stage instanceof HTMLElement)) {
   throw new Error('#int-stage が見つかりません');
 }
 
-const COLUMN_ORDER = ['col-a', 'col-b', 'col-c', 'col-d'];
+// DD-036: 横スクロールが要る検証（固定列・scrollToColumn）のため、`?extracols=N` で列を増やせる
+// （既定は従来の 4 列＝未指定なら既存 E2E と完全一致。追加列 ID は col-x0, col-x1, ...）。
+const EXTRA_COLUMN_COUNT = (() => {
+  const raw = new URLSearchParams(location.search).get('extracols');
+  const n = raw === null ? 0 : Number(raw);
+  return Number.isInteger(n) && n > 0 && n <= 400 ? n : 0;
+})();
+const COLUMN_ORDER = [
+  'col-a',
+  'col-b',
+  'col-c',
+  'col-d',
+  ...Array.from({ length: EXTRA_COLUMN_COUNT }, (_, i) => `col-x${i}`),
+];
 const SEED_ROW_COUNT = 20;
 
 // DD-027-1: 選択式入力列を URL で指定できる（E2E 用・main.ts と同形式）。
@@ -213,6 +226,39 @@ function parseDateColumns(
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
+// DD-036 C1/C2/C3: 固定行列数・静的列背景・読み取り専用行を URL で指定できる（E2E 用・?select= 等と同流儀）。
+//   ?frozenrows=2&frozencols=5      固定行数・固定列数（未指定は既定 1）
+//   ?colbg=col-b:ffe8e8,col-c:eef    列背景（値は CSS color。16進は # 省略可＝URL の # 断片化を避ける）
+//   ?readonlyrows=r2,r3              読み取り専用行
+function parseFrozenCount(raw: string | null): number | undefined {
+  if (raw === null || raw === '') {
+    return undefined;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+function parseColumnBackgrounds(raw: string | null): Record<string, string> | undefined {
+  if (raw === null || raw === '') {
+    return undefined;
+  }
+  const backgrounds: Record<string, string> = {};
+  for (const spec of raw.split(',')) {
+    const colonAt = spec.indexOf(':');
+    if (colonAt < 0) {
+      continue;
+    }
+    const columnId = spec.slice(0, colonAt);
+    const color = spec.slice(colonAt + 1);
+    if (columnId !== '' && color !== '') {
+      backgrounds[columnId] = /^[0-9a-fA-F]{3,8}$/.test(color) ? `#${color}` : color;
+    }
+  }
+  return Object.keys(backgrounds).length > 0 ? backgrounds : undefined;
+}
+const frozenRowCount = parseFrozenCount(searchParams.get('frozenrows'));
+const frozenColumnCount = parseFrozenCount(searchParams.get('frozencols'));
+const columnBackgrounds = parseColumnBackgrounds(searchParams.get('colbg'));
+const readOnlyRows = (searchParams.get('readonlyrows') ?? '').split(',').filter((r) => r !== '');
 const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTypes);
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
@@ -313,6 +359,10 @@ const handle: StandaloneHandle = {
         ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
+        ...(readOnlyRows.length > 0 ? { readOnlyRows } : {}),
+        ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
+        ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
+        ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
         onEvent,
         onDiagnostic: (entry) => {
           diagnostics.push(entry);

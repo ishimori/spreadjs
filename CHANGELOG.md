@@ -19,6 +19,31 @@
 
 ### Added
 
+- **grid 固定行列数 `frozenRowCount` / `frozenColumnCount`（Experimental・DD-036 C1）**: 先頭 n 行 / n 列を
+  スクロール時に固定する（マトリクス型シートのラベル列。松下 納入計画 consumer 駆動）。**既定は 1／1**＝
+  DD-036 以前のハードコード値と完全一致（未指定の consumer は無影響）。`0` で固定なし。両モード共通・mount 時固定・
+  **view-local**（文書状態にしない＝共有化は `cell-format-sharing-design.md` のスコープ）。
+  行数/列数を超える指定はクランプ。0 以上の整数以外は診断 `frozen-count-invalid` warn を出して既定 1 へ倒す
+  （mount は成功する）。
+- **grid 列単位の静的背景色 `columnBackgrounds`（Experimental・DD-036 C2）**: ColumnId→CSS color で**値によらない
+  列全体の背景色**（非稼働日の網掛け等）を描く。`columnFormats`（値ベース・非空セルのみ）とは**別経路**で、
+  **空セルも塗る**（pane 背景の直後・罫線の前に列バンドとして塗る＝罫線・選択・Presence は上に乗る）。
+  同一セルに値ベース書式の背景があれば**値ベースが勝つ**。固定 pane の列にも効く。view-local・mount 時固定。
+  未知列・空/空白のみの色は `column-types-invalid` で fail-fast（色文字列の妥当性は検査しない）。
+- **grid 読み取り専用行 `readOnlyRows`（Experimental・DD-036 C3）**: RowId 配列で指定した行のセルを編集不可にする
+  （`readOnlyColumns` の行版・両方指定なら和）。抑止（入口＝編集開始/Delete/ドロップダウン/カレンダー・常駐 textarea の
+  `readOnly` 属性）／範囲スキップ（貼り付け・範囲クリア・cut は指定行だけスキップ＝TSV の行位置不変・診断
+  `readonly-row-skipped`）／保証層（submit 直前で op 全体を破棄＝診断 `readonly-row-blocked`）は列版と同型。
+  行挿入削除・setData・コピー・リモート受信反映は従来どおり。**未知 RowId は診断 `readonly-row-unknown` warn のみ**
+  （行は初期データ到着前に検証できないため列の fail-fast とは扱いを分ける・初回描画後に 1 回判定）。
+  **権限制御ではない**（サーバー側強制なし）。新規公開 error/conflict code なし。
+- **grid 命令 API `scrollToColumn(columnId)`（Experimental・DD-036 C4）**: 指定列を最小スクロールで可視化する
+  （`scrollToRow` の鏡像＝**縦スクロールは動かさない**・可視なら動かない・固定列は常に可視ゆえ無変更）。
+  `setData`／行挿入削除の直後でも同期で成立する（DD-035 R6 の保留・同期 flush 機構を共有）。未知 ColumnId は診断
+  `scroll-column-unknown` warn のみで no-op。
+- **react props 4 点＋handle `scrollToColumn`（Experimental・DD-036）**: props へ `frozenRowCount`／`frozenColumnCount`／
+  `columnBackgrounds`／`readOnlyRows`（grid 同名オプションへ 1:1 写像・識別系＝値変更で自動 remount・Record と行 ID 集合は
+  キー順/並び順非依存で正準化）、handle へ `scrollToColumn`（未 mount は `handle-before-mount` warn）を追加した。
 - **grid 日付列 `columnTypes` の `{ type: 'date', openOn? }`（Experimental・DD-035 R2）**: カレンダーのポップオーバーから
   LocalDate（`YYYY-MM-DD`・ADR-0012）を選んで確定する列タイプ（松下 生産納期 consumer 駆動）。
   - **手入力と併存**: 印字文字キーは従来どおり常駐 textarea の手入力を開始し `2026/7/31` → `2026-07-31` に正準化する

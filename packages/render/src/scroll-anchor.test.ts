@@ -126,3 +126,40 @@ describe('ScrollAnchor: anchor 行が削除された場合のフォールバッ�
     expect(corrected.scrollTop).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('DD-036 C1: 固定列/固定行が n>1 でもアンカー捕捉・補正が対称に効く', () => {
+  it('固定 5 列のとき、アンカー列は固定バンドの右隣（index>=5）で scrollLeft は固定幅ぶんを差し引いた値へ復元される', () => {
+    const rowAxis = makeRowAxis(100);
+    const colAxis = makeColAxis(200);
+    const anchor = captureAnchor({
+      rowAxis,
+      colAxis,
+      frozenRowCount: 2,
+      frozenColCount: 5,
+      scrollTop: 0,
+      scrollLeft: 560, // 固定 5 列（280px）の右から 560px 進んだ位置
+    });
+    // leftContent = 280 + 560 = 840 → 840/56 = col15 ちょうど。
+    expect(anchor.columnId).toBe(createColumnId('c15'));
+    expect(anchor.offsetWithinColumn).toBe(0);
+    expect(anchor.columnIndexHint).toBeGreaterThanOrEqual(5);
+
+    const corrected = correctScroll({ rowAxis, colAxis, frozenRowCount: 2, frozenColCount: 5, anchor });
+    expect(corrected.scrollLeft).toBe(560); // 構造不変なら往復して同じ値
+  });
+
+  it('固定列より左（固定バンド内）はアンカーにならない（frozenColCount でクランプ）', () => {
+    const rowAxis = makeRowAxis(100);
+    const colAxis = makeColAxis(200);
+    const anchor = captureAnchor({
+      rowAxis,
+      colAxis,
+      frozenRowCount: 0,
+      frozenColCount: 5,
+      scrollTop: 0,
+      scrollLeft: 0,
+    });
+    expect(anchor.columnId).toBe(createColumnId('c5'));
+  });
+});
+
