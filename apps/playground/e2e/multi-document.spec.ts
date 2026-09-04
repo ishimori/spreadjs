@@ -60,13 +60,17 @@ test.describe('DD-043 複数文書 serve（1 プロセス・年度別 board）',
         .toBe('A面');
 
       // doc-b は revision も内容も動かない（文書間の漏れゼロ）。
+      // 「最初のサンプルで一致したら終わり」の poll では遅れて届くフレームを見逃すため、
+      // 一定時間サンプリングし続けて**その間ずっと不変**であることを確認する。
       const bRowId = await ih.rowIdAt(b.page, 0);
       expect(bRowId).toBeDefined();
-      await expect
-        .poll(async () => (await ih.snapshot(b.page)).committedRevision, { timeout: 3_000 })
-        .toBe(beforeB.committedRevision);
-      expect(await ih.committedCell(b.page, bRowId!, '2026-04-01')).toBe('');
-      expect((await ih.snapshot(b.page)).committedHash).toBe(beforeB.committedHash);
+      for (let i = 0; i < 6; i += 1) {
+        await b.page.waitForTimeout(250);
+        const s = await ih.snapshot(b.page);
+        expect(s.committedRevision, `doc-b の revision が動いた（${i}）`).toBe(beforeB.committedRevision);
+        expect(s.committedHash, `doc-b の hash が動いた（${i}）`).toBe(beforeB.committedHash);
+        expect(await ih.committedCell(b.page, bRowId!, '2026-04-01')).toBe('');
+      }
 
       // ③ doc-b 側の編集は doc-a へ漏れない（逆方向も確認）。
       const aHashAfterEdit = (await ih.snapshot(a.page)).committedHash;
@@ -75,7 +79,10 @@ test.describe('DD-043 複数文書 serve（1 プロセス・年度別 board）',
       await expect
         .poll(async () => ih.committedCell(b.page, bRowId!, '2026-04-01'), { timeout: 10_000 })
         .toBe('B面');
-      expect((await ih.snapshot(a.page)).committedHash).toBe(aHashAfterEdit);
+      for (let i = 0; i < 6; i += 1) {
+        await a.page.waitForTimeout(250);
+        expect((await ih.snapshot(a.page)).committedHash, `doc-a の hash が動いた（${i}）`).toBe(aHashAfterEdit);
+      }
     } finally {
       await a.context.close();
       await b.context.close();

@@ -5,7 +5,9 @@
 //   M4 起動時の検疫＝一方の復旧失敗が他方の起動を妨げない（AC3）／
 //   M5 構成の fail-fast（documents×単一文書オプション併用・空/重複 documentIds・resolve が null）／
 //   M6 サーバー起点 submit の宛先文書指定（未知 ID は reject）／
-//   M7 join の申告 documentId 不一致は厳格接続で切断（他文書の envelope を oplog へ混ぜない）。
+//   M7 join の申告 documentId 不一致は厳格接続で切断／M8 join 後の submitOperation で別文書を名乗っても切断／
+//   M9 単一文書（従来）接続の申告不一致は受理しつつ oplog はサーバー値へ正規化される（oplog 汚染経路の封鎖・Codex P1）／
+//   M10 1 文書の close 失敗でも残りの文書とサーバーの後始末を完遂する（Codex P1）。
 // 単一文書構成の後方互換（AC2）は既存スイート全体（serve.stores / serve.auth / serve.submit / persistence / smoke）が担保する。
 import { WebSocket } from 'ws';
 
@@ -64,6 +66,64 @@ function connect(port: number, documentId: string, clientId: string, columnOrder
 
 function valueOf(client: SessionClient, rowId: string, columnId: string): CellScalar | undefined {
   return getCell(client.session.committedDocument, row(rowId), col(columnId))?.value;
+}
+
+/** 生 WS で接続し、送信フレームと close コードを観測する（プロトコル違反の検証用）。 */
+async function rawClient(url: string): Promise<{
+  send(message: unknown): void;
+  closeCode(): Promise<number>;
+  socket: WebSocket;
+}> {
+  const socket = new WebSocket(url);
+  cleanups.push(() => {
+    socket.terminate();
+  });
+  const closed = new Promise<number>((resolve) => {
+    socket.on('close', (code: number) => resolve(code));
+  });
+  socket.on('error', () => {}); // terminate 後の error を uncaught 化させない
+  await new Promise<void>((resolve, reject) => {
+    socket.on('open', () => resolve());
+    socket.on('unexpected-response', (_req, res) => reject(new Error(`upgrade rejected: ${String(res.statusCode)}`)));
+  });
+  return {
+    send: (message) => socket.send(JSON.stringify(message)),
+    closeCode: () => closed,
+    socket,
+  };
+}
+
+/** 生 WS 用の join フレーム。 */
+function joinFrame(documentId: string, clientId: string): unknown {
+  return { type: 'join', protocolVersion: 1, documentId, lastAppliedRevision: 0, clientId };
+}
+
+/** 生 WS 用の submitOperation フレーム（SetCells 1 件）。 */
+function submitFrame(options: {
+  documentId: string;
+  clientId: string;
+  columnId: string;
+  baseRevision: number;
+  value: string;
+}): unknown {
+  return {
+    type: 'submitOperation',
+    envelope: {
+      protocolVersion: 1,
+      documentId: options.documentId,
+      operationId: `${options.clientId}-op-1`,
+      transactionId: `tx-${options.clientId}-1`,
+      actorId: options.clientId,
+      clientId: options.clientId,
+      clientSequence: 1,
+      baseRevision: options.baseRevision,
+      operation: {
+        type: 'setCells',
+        changes: [{ rowId: 'row-1', columnId: options.columnId, value: { kind: 'string', value: options.value } }],
+        conflictPolicy: 'reject-overlap',
+      },
+    },
+  };
 }
 
 /** WS upgrade の HTTP 応答ステータスを観測する（受理された場合は 101 を返して閉じる）。 */
@@ -264,16 +324,82 @@ describe('serve() 複数文書（DD-043・ADR-0025）', () => {
     ).rejects.toThrow(/serve していません/);
   });
 
-  it('M7: 文書を明示した接続は join の申告 documentId 不一致で切断される（envelope の混入を防ぐ）', async () => {
+  it('M7: 文書を明示した接続は join の申告 documentId 不一致で 1008 切断される', async () => {
     const server = await startServer(twoDocuments());
     // `?documentId=doc-a` で繋ぎながら join では doc-b を名乗る（誤配線・改竄の模擬）。
-    const rogue = createSessionClient(`ws://127.0.0.1:${server.port}/ws?documentId=doc-a`, {
-      clientId: 'client-rogue',
-      documentId: 'doc-b',
-      columnOrder: COLUMNS_A.map((c) => createColumnId(c)),
-    });
-    cleanups.push(() => rogue.transport.close());
-    await waitFor(() => !rogue.session.isOnline && server.connectionCount() === 0, 'rogue rejected');
+    const rogue = await rawClient(`ws://127.0.0.1:${server.port}/ws?documentId=doc-a`);
+    rogue.send(joinFrame('doc-b', 'client-rogue'));
+    expect(await rogue.closeCode()).toBe(1008); // 実際に upgrade→join を通した上で拒否されている
     expect(server.connectionCount('doc-a')).toBe(0);
+
+    // 対照: 正しく名乗った接続は切断されない（拒否側だけが通る偽陽性を排除する）。
+    const honest = await rawClient(`ws://127.0.0.1:${server.port}/ws?documentId=doc-a`);
+    honest.send(joinFrame('doc-a', 'client-honest'));
+    await waitFor(() => server.connectionCount('doc-a') === 1, 'honest joined');
+    expect(honest.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('M8: join 後に別文書を名乗る submitOperation も厳格接続では 1008 切断される（oplog 汚染の封鎖・Codex P1）', async () => {
+    const server = await startServer(twoDocuments());
+    const rogue = await rawClient(`ws://127.0.0.1:${server.port}/ws?documentId=doc-a`);
+    rogue.send(joinFrame('doc-a', 'client-rogue')); // join は正しく名乗る
+    await waitFor(() => server.connectionCount('doc-a') === 1, 'joined');
+    // 受理後に別文書 ID の envelope を送る（Room は documentId を見ないため、素通しすると doc-a の oplog へ
+    // doc-b の entry が入り、次回起動の復旧が entry 照合で失敗して doc-a が丸ごと検疫される）。
+    rogue.send(
+      submitFrame({ documentId: 'doc-b', clientId: 'client-rogue', columnId: 'col-a', baseRevision: 1, value: 'X' }),
+    );
+    expect(await rogue.closeCode()).toBe(1008);
+    // doc-a の文書は動いていない（拒否は適用前）。
+    const snapshot = (await (await fetch(`${server.url}/snapshot?documentId=doc-a`)).json()) as {
+      document: { revision: number };
+    };
+    expect(snapshot.document.revision).toBe(1); // seed のみ
+  });
+
+  it('M9: 単一文書（従来）接続の申告不一致は受理しつつ、oplog はサーバー値へ正規化される（後方互換×汚染封鎖）', async () => {
+    const oplog = new MemoryServeOpLog();
+    const diagnostics: ServeDiagnostic[] = [];
+    const server = await startServer({
+      documentId: 'demo-doc',
+      seedRows: 2,
+      oplog,
+      snapshotStore: new MemoryServeSnapshots(),
+      onDiagnostic: (entry) => diagnostics.push(entry),
+    });
+    // 従来経路（`?documentId=` 無し・単一文書構成）。別文書を名乗っても切断しない（後方互換）。
+    const legacy = await rawClient(`ws://127.0.0.1:${server.port}/ws`);
+    legacy.send(joinFrame('other-doc', 'client-legacy'));
+    await waitFor(() => server.connectionCount() === 1, 'legacy joined');
+    legacy.send(
+      submitFrame({ documentId: 'other-doc', clientId: 'client-legacy', columnId: 'col-a', baseRevision: 1, value: 'Y' }),
+    );
+    await waitFor(() => oplog.entries.length >= 2, 'op appended');
+    expect(legacy.socket.readyState).toBe(WebSocket.OPEN); // 切断していない
+    // oplog に入った envelope の documentId は serve 中の文書へ正規化されている（別 ID のまま記録すると
+    // 次回起動の復旧が entry 照合で失敗する）。
+    expect(oplog.entries.every((e) => e.documentId === 'demo-doc')).toBe(true);
+    expect(diagnostics.filter((d) => d.code === 'document-mismatch')).toHaveLength(1); // 警告は接続あたり 1 回
+  });
+
+  it('M10: 1 文書の close 失敗でも残りの文書とサーバーの後始末を完遂する（Codex P1）', async () => {
+    const failing = new MemoryServeOpLog();
+    failing.close = () => Promise.reject(new Error('close 失敗（テスト注入）'));
+    const healthySnapshots = new MemoryServeSnapshots();
+    const server = await serve({
+      port: 0,
+      documents: {
+        documentIds: ['doc-a', 'doc-b'],
+        resolve: (documentId) =>
+          documentId === 'doc-a'
+            ? { columnOrder: COLUMNS_A, seedRows: 1, oplog: failing, snapshotStore: new MemoryServeSnapshots() }
+            : { columnOrder: COLUMNS_B, seedRows: 1, oplog: new MemoryServeOpLog(), snapshotStore: healthySnapshots },
+      },
+    });
+    const port = server.port;
+    // stop() は失敗を伝えるが、後続文書・HTTP/WS の後始末は完了している。
+    await expect(server.stop()).rejects.toThrow(/後始末に失敗/);
+    // http server が閉じている＝同じポートへ接続できない（閉じ残していないことの外形確認）。
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
   });
 });

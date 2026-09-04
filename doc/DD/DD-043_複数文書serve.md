@@ -53,7 +53,7 @@ Evidence Level: standard
 | ① | **(a) resolver 関数**。ただし v1 は D3（起動時の検疫）のため serve する集合を列挙できる必要があり、公開面は `documents = { documentIds, resolve, defaultDocumentId? }` の 1 オプションに束ねた | ADR-0025 決定1。無限 Book 化は `documentIds` を任意化して `resolve` を遅延呼び出しにする**追加**で到達でき、resolve の契約・protocol・既存 consumer は不変 |
 | ② | **(a) `?documentId=`（query）**。`/ws` と `/config` の両方。無指定は `defaultDocumentId`（既定 `documentIds[0]`） | handshake frame 方式は upgrade 完了まで宛先 Room が決まらず「どの Room にも属さない接続」の TTL/後始末という新状態を作る。query なら upgrade 時点で確定し、前段プロキシの routing キーにもそのまま使える |
 | ②' | **authenticate → 文書解決**の順（未知 ID でも認証が先） | 未認証の相手へ文書集合の存在を漏らさない。文書単位の認可は hook が `request.url` から行える |
-| ②'' | join の申告 documentId 不一致は、**複数文書構成 or `?documentId=` 明示の接続でのみ 1008 切断**。従来の単一文書・無指定接続は受理し警告診断のみ（`document-mismatch`） | 不一致 join は他文書の envelope を oplog へ混ぜる汚染源。ただし後方互換（AC2）を優先し legacy 経路は落とさない |
+| ②'' | 申告 documentId の不一致は **join だけでなく毎 `submitOperation` で検証**する。**複数文書構成 or `?documentId=` 明示の接続は 1008 切断**、従来の単一文書・無指定接続は受理しつつ **envelope をサーバー値へ正規化**して記録する（警告診断 `document-mismatch` は接続あたり 1 回） | 不一致 envelope は他文書 ID のまま oplog へ入り、次回起動の復旧が entry 照合で失敗して**その文書が丸ごと検疫される**（Codex P1）。join だけの検証では、正しく join した接続が後から別文書を名乗る経路が残る。後方互換（AC2）は「受理する」ことで守り、汚染経路だけを塞ぐ |
 | ③ | 診断 `document-quarantined`（error）＋ `ServerInstance.documentIds` / `quarantined`。**`/health` は `ok` のまま変えない** | `/health` の応答形式変更はプローブ側の破壊的変更。外形観測は「検疫文書への `/config`・`/ws` が 404」で足り、運用通知は consumer のログ基盤へ届く診断 hook が正道 |
 | ④ | **v1 はプロセス単位の fail-stop を維持**（実行時の恒久失敗は現行どおり） | ADR-0025 決定3・4 |
 
@@ -87,7 +87,7 @@ Evidence Level: standard
 - [x] `startServer` を「文書レジストリ＋文書ランタイム（Sequencer/Room/PersistentRoom/RoomBridge）」へ分解（単一文書構成は N=1 の同じ経路）
 - [x] `/config`・`/snapshot`・`/ws` の `?documentId=` 対応（未知は 404）と upgrade の評価順序（authenticate →文書解決）
 - [x] 起動時の検疫（複数文書構成のみ）＋診断 `document-quarantined` / `document-unknown` / `document-mismatch`
-- [x] `RoomBridge` に文書 ID 検証（厳格接続は不一致 join を 1008 切断）・接続メタの一本化
+- [x] `RoomBridge` に文書 ID 検証（厳格接続は不一致の join / submitOperation を 1008 切断・従来経路は envelope 正規化）・接続メタの一本化
 - [x] Facade（`serve`/`ServerInstance`）に `documents` / `documentIds` / `quarantined` / 文書別 `connectionCount` / 宛先付き `submit`
 - [x] grid Facade: `mount({ documentId })` 指定時に `/config?documentId=`・`/ws?documentId=` を送る
 - [x] 検証資材: `serve.documents.test.ts`（M1〜M7）・`dev-multi-document.ts`＋`dev:multi-document`・playground `?doc=`・E2E `multi-document.spec.ts`（playwright webServer 追加・:8801）
@@ -103,7 +103,8 @@ Evidence Level: standard
 - **実機（consumer 実データ）での年度切替は未実施**。SDK 側は自動 E2E（2 board の独立編集）まで。松下 DD-014-3 の実機検証（2 ブラウザ収束・同一トランザクション投影・在庫/月計のサーバー起点算出）で確認する
 - **文書数のスケール**: 検証したのは 2 文書。N 枚（数十以上）での起動時間・メモリは未計測（v1 の実需は 1〜3 枚）
 - **実行時の文書単位隔離は未提供**: 1 文書の durable 恒久失敗は従来どおりプロセス単位 fail-stop（ADR-0025 決定3・改訂事項）
-- **単一文書・`?documentId=` 無指定の接続では join の documentId 不一致を切断しない**（警告診断のみ）。後方互換を優先した意図的な緩和で、複数文書構成では切断する
+- **単一文書・`?documentId=` 無指定の接続では documentId 不一致を切断しない**（受理し envelope をサーバー値へ正規化・警告診断は接続あたり 1 回）。後方互換を優先した意図的な緩和で、複数文書構成・`?documentId=` 明示の接続では切断する
+- **`column-types-format` AC4 の flake**: 本DDの作業中、full E2E で 2 回連続失敗し、単体再実行・修正前コミットの full・修正後の full ではいずれも green だった（共有文書 × タイミング依存の既存 flake と判断。DD-043 の変更経路とは無関係＝当該 spec は単一文書・`?documentId=` 無指定で documentId は常に一致する）。再発したら別DDで扱う
 
 ## ログ
 
@@ -112,4 +113,11 @@ Evidence Level: standard
 - スコープの決め（consumer との壁打ち 2026-09-04）: v1 は N 枚固定 + 起動時の検疫。動的な部屋の作成・後片付け・実行時隔離は**使う consumer が現れるまで作らない**（③は 1〜2 枚・②は 3 シートで、いずれも起動時に既知）。ただし契約だけは無限 Book に整合させる → ADR-0025 を Proposed で同時起票
 - 検証（松下 DD-014-3 側で実施予定）: 2 ブラウザ収束・同一トランザクション投影・在庫/月計のサーバー起点算出
 - 実装・検証（spreadjs 側セッション・Opus）: Phase 1 の確定 → 実装 → 全回帰 green（`npm test` 1,229 / E2E 157）。ADR-0025 を Accepted 化し、実装で確定した細目（resolver と列挙の対・query 方式の根拠・評価順序・検疫の適用範囲・`/health` 不変）を ADR へ追記
+- **Codex レビュー（high・ユーザー指示）**: 依頼 `DD-043/codex-review-request.md` / 結果 `DD-043/codex-review-result.md`。P1 2 件・P2 2 件を**全て妥当と判断して反映**した
+  - **P1 envelope の documentId を毎 op 検証していない**（正しく join した接続が後から別文書を名乗ると oplog が汚染され、次回起動で当該文書が検疫される）→ `RoomBridge.normalizeDocument` を追加（厳格接続は 1008 切断・従来経路は正規化）。裏取り: `recoverSequencerState` は oplog 全 entry の documentId を照合する（`packages/server/src/persistent-room.ts:117`）。回帰 M8/M9 を追加
+  - **P1 1 文書の close 失敗で後始末が中断する**（後続文書・認証待ち socket・ws・http server が閉じ残る）→ `closeRuntimes` を「全文書を閉じ切ってから 1 つの Error にまとめる」形へ、`closeServer` は失敗を保持して teardown を完遂してから throw。起動途中の失敗経路は `closeRuntimesQuietly`（元の失敗を隠さない）。回帰 M10 を追加
+  - **P2 M7 が接続確立前に成功していた**（不一致 join を受理する実装でも通る偽陽性）→ 生 WS で join を送り **close code 1008 を観測**する形へ。正しく名乗った接続が切断されない対照も追加
+  - **P2 E2E の分離検証が初回一致で終了していた**（遅れて届く別文書フレームを見逃す）→ 1.5 秒サンプリングし続けて revision / hash / セル値が**その間ずっと不変**であることを確認する形へ
+  - 自己レビューでの追加修正: デモ HTML の読込を文書構築の前へ移動（起動途中失敗時のハンドル漏れ経路を消す）
+  - 反映後の全回帰: `npm test` 1,232 passed / `npm run typecheck` / `npm run lint` / `npm run test:e2e` 157 passed
 - 公開 API 影響: `ServeOptions.documents` ほか型の**追加のみ**（既存シグネチャの破壊的変更なし）。`.d.ts` snapshot は更新（`npx vitest run tests/contract -u`）・CHANGELOG 記載済み

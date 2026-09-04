@@ -173,6 +173,8 @@ interface RoomController {
 interface ConnectionMeta {
   readonly identity: ServeIdentity | undefined;
   readonly strictDocument: boolean;
+  /** 申告 documentId 不一致の警告を出したか（後方互換の緩和経路で、接続あたり 1 回だけ警告する）。 */
+  mismatchWarned: boolean;
 }
 
 /**
@@ -198,7 +200,7 @@ class RoomBridge {
    * （複数文書 serve・`?documentId=` 明示時。他文書の envelope を oplog へ混ぜない）。
    */
   onConnect(ws: WebSocket, identity: ServeIdentity | undefined, strictDocument = false): void {
-    this.metaByWs.set(ws, { identity, strictDocument });
+    this.metaByWs.set(ws, { identity, strictDocument, mismatchWarned: false });
     ws.on('message', (data: RawData) => {
       this.onMessage(ws, data);
     });
@@ -284,9 +286,16 @@ class RoomBridge {
     if (existing === undefined) {
       return; // join 前の非 join メッセージは無視（接続は維持）
     }
+    // DD-043: envelope の申告 documentId は **毎 op** 検証する（join だけの検証では、正しく join した接続が後から
+    // 別文書を名乗る envelope を送って oplog を汚染できる＝次回起動の復旧が entry の documentId 照合で失敗し、
+    // その文書が丸ごと検疫される・Codex P1）。
+    const normalized = this.normalizeDocument(ws, message);
+    if (normalized === undefined) {
+      return; // 厳格接続の不一致＝切断済み
+    }
     // DD-026-2: 認証済み接続は申告の actorId/userId/displayName を信用せず、identity で上書きしてから Room へ渡す。
     const identity = this.metaByWs.get(ws)?.identity;
-    const result = this.room.handleMessage(existing, identity !== undefined ? withIdentity(message, identity) : message);
+    const result = this.room.handleMessage(existing, identity !== undefined ? withIdentity(normalized, identity) : normalized);
     if (result instanceof Promise) {
       // durable 境界（oplog fsync）解決後に ACK/broadcast を dispatch する（DD-014 durable ACK 契約）。
       // 書込失敗時は当該接続のみ切断（他接続へ波及させない・P08）。
@@ -301,7 +310,7 @@ class RoomBridge {
 
   /**
    * join の申告 documentId を検証する（DD-043）。厳格接続（複数文書 serve・`?documentId=` 明示）で不一致なら切断して false。
-   * 従来の単一文書・無指定接続は後方互換のため受理し、警告診断だけ出す（申告の不一致は envelope の documentId 汚染源）。
+   * 従来の単一文書・無指定接続は後方互換のため受理し、警告診断だけ出す（join 自体は何も書き込まないため）。
    */
   private acceptDocument(ws: WebSocket, join: JoinMessage): boolean {
     if (String(join.documentId) === this.documentId) {
@@ -311,12 +320,47 @@ class RoomBridge {
       this.closeSocket(ws, 1008, 'document mismatch');
       return false;
     }
+    this.warnDocumentMismatch(ws, String(join.documentId), 'join');
+    return true;
+  }
+
+  /**
+   * join 後のメッセージの申告 documentId を接続先の文書へ揃える（DD-043・Codex P1）。
+   * 厳格接続の不一致は切断して undefined を返す。従来の単一文書・無指定接続は**サーバー値へ正規化**して受理する
+   * （受理挙動は従来どおり保ちつつ、別文書 ID の envelope が oplog へ入る汚染経路だけを塞ぐ）。
+   */
+  private normalizeDocument(ws: WebSocket, message: ClientMessageExceptJoin): ClientMessageExceptJoin | undefined {
+    if (message.type !== 'submitOperation') {
+      return message; // presence/heartbeat/requestCatchup は文書 ID を運ばない
+    }
+    const declared = String(message.envelope.documentId);
+    if (declared === this.documentId) {
+      return message;
+    }
+    if (this.metaByWs.get(ws)?.strictDocument === true) {
+      this.closeSocket(ws, 1008, 'document mismatch');
+      return undefined;
+    }
+    this.warnDocumentMismatch(ws, declared, 'submitOperation');
+    return {
+      type: 'submitOperation',
+      envelope: { ...message.envelope, documentId: createDocumentId(this.documentId) },
+    };
+  }
+
+  /** 申告 documentId 不一致の警告（接続あたり 1 回・毎 op の警告で診断を溢れさせない）。 */
+  private warnDocumentMismatch(ws: WebSocket, declared: string, where: string): void {
+    const meta = this.metaByWs.get(ws);
+    if (meta === undefined || meta.mismatchWarned) {
+      return;
+    }
+    meta.mismatchWarned = true;
     this.diagnostics?.(
       'warn',
       'document-mismatch',
-      `join の documentId '${String(join.documentId)}' が serve 中の '${this.documentId}' と一致しません（単一文書構成のため従来どおり受理）`,
+      `${where} の documentId '${declared}' が serve 中の '${this.documentId}' と一致しません` +
+        '（単一文書構成のため受理し、サーバー値へ正規化して記録します）',
     );
-    return true;
   }
 
   private onClose(ws: WebSocket): void {
@@ -619,10 +663,31 @@ async function closeStoreQuietly(store: { close(): Promise<void> } | undefined):
   }
 }
 
-/** 構築済みランタイムを全て閉じる（起動途中の失敗・stop の後始末）。 */
+/**
+ * 構築済みランタイムを全て閉じる（起動途中の失敗・stop の後始末）。
+ * 1 文書の close 失敗で残りの文書の後始末を打ち切らない（consumer 注入ストアの close は失敗し得る・Codex P1）。
+ * 失敗があれば全文書を閉じ切ってから 1 つの Error にまとめて throw する。
+ */
 async function closeRuntimes(runtimes: Map<string, DocumentRuntime>): Promise<void> {
-  for (const runtime of runtimes.values()) {
-    await runtime.close();
+  const failures: string[] = [];
+  for (const [documentId, runtime] of runtimes) {
+    try {
+      await runtime.close();
+    } catch (error) {
+      failures.push(`${documentId}: ${errorMessage(error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`serve: 文書の後始末に失敗しました（他の文書・サーバーの後始末は完了）: ${failures.join(' / ')}`);
+  }
+}
+
+/** 起動途中の失敗経路での後始末（close の失敗で元の失敗を握りつぶさない・記録だけする）。 */
+async function closeRuntimesQuietly(runtimes: Map<string, DocumentRuntime>): Promise<void> {
+  try {
+    await closeRuntimes(runtimes);
+  } catch (error) {
+    console.error(`collaboration-server: startup cleanup failed: ${errorMessage(error)}`);
   }
 }
 
@@ -689,6 +754,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   // DD-005 統合データセット指定時は列順・シードを 50,000行×200列へ切り替える（既存の小規模デモとは排他）。
   const datasetConfig = resolveDataset(options.integrationDataset);
   const runtimeDeps = { clock, ttlMillis, snapshotIntervalOps: options.snapshotIntervalOps, diagnostics };
+  // デモ HTML の読込は文書を構築する前に済ませる（ここで失敗しても閉じるべきハンドルを作っていない状態にする）。
+  const demoHtml = loadDemoHtml();
 
   // 文書レジストリ（DD-043）。単一文書構成は N=1 の同じ経路を通る（分岐は「仕様の作り方」だけ）。
   const runtimes = new Map<string, DocumentRuntime>();
@@ -712,7 +779,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
         spec = { documentId, columnOrder: [...config.columnOrder], ...omitUndefined(config) };
         validateDocumentSpec(spec, ` [documentId=${documentId}]`);
       } catch (error) {
-        await closeRuntimes(runtimes);
+        await closeRuntimesQuietly(runtimes);
         throw error;
       }
       try {
@@ -766,7 +833,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     return runtime;
   };
 
-  const demoHtml = loadDemoHtml();
   const app = new Hono();
   // dev サーバー: playground 統合ページは別オリジン（Vite dev の別ポート）から /config・/snapshot を fetch するため
   // CORS を許可する（開発用途のみ。DD-005 Phase 2 headed smoke でクロスオリジン fetch のブロックが判明し追加）。
@@ -806,7 +872,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       created.once('error', reject); // listen 失敗（ポート使用中等）は reject
     });
   } catch (error) {
-    await closeRuntimes(runtimes); // listen 前に構築済みの文書ハンドルを残さない
+    await closeRuntimesQuietly(runtimes); // listen 前に構築済みの文書ハンドルを残さない
     throw error;
   }
   const { server, boundPort } = listening;
@@ -815,7 +881,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
 
   if (!(server instanceof HttpServer)) {
-    await closeServer(server, undefined, undefined, runtimes);
+    await closeRuntimesQuietly(runtimes);
+    await closeServer(server, undefined, undefined, undefined);
     throw new Error('collaboration-server: expected a Node http.Server for WebSocket upgrade');
   }
 
@@ -1027,8 +1094,15 @@ async function closeServer(
   if (sweepTimer !== undefined) {
     clearInterval(sweepTimer);
   }
+  // 各文書の保留中 durable 書込を確定して oplog/snapshot ハンドルを閉じる。失敗しても socket/ws/http の後始末は
+  // 最後まで進める（1 文書の close 失敗でサーバーごと閉じ残さない・Codex P1）。失敗は全て閉じてから throw する。
+  let runtimeCloseError: unknown;
   if (runtimes !== undefined) {
-    await closeRuntimes(runtimes); // 各文書の保留中 durable 書込を確定して oplog/snapshot ハンドルを閉じる
+    try {
+      await closeRuntimes(runtimes);
+    } catch (error) {
+      runtimeCloseError = error;
+    }
   }
   if (pendingAuthSockets !== undefined) {
     for (const socket of pendingAuthSockets) {
@@ -1055,6 +1129,9 @@ async function closeServer(
       }
     });
   });
+  if (runtimeCloseError !== undefined) {
+    throw runtimeCloseError; // 後始末は完遂した上で、文書 close の失敗は呼び出し側へ伝える
+  }
 }
 
 function errorMessage(error: unknown): string {

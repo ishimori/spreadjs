@@ -156,6 +156,7 @@ await server.submit(op, { actorId: 'system', documentId: 'plan-2027' }); // 宛�
 クライアント側は `mount({ serverUrl, documentId: 'plan-2027' })` と名乗る（`/config?documentId=`・`/ws?documentId=` が付く）。
 
 - **未知 ID は拒否**: serve していない `documentId` への `/config`・WS 接続は 404（grid は config phase のエラーで止まる）。
+  接続先と違う文書を名乗る join / 操作は切断される（単一文書構成の従来接続だけは受理し、サーバー値へ正規化して記録する）。
 - **起動時の検疫**: 復旧に失敗した文書だけを外し、残りの文書で立ち上がる（診断 `document-quarantined`・error／`server.quarantined` に載る）。
   1 文書のデータ破損で全文書が起動できなくなる再起動ループを防ぐための挙動で、**単一文書構成（`documents` 未指定）の復旧失敗は
   従来どおり `serve()` が reject する**（0 文書での起動成功を装わない）。

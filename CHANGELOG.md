@@ -33,8 +33,12 @@
     **単一文書構成（`documents` 未指定）の復旧失敗は従来どおり起動失敗**（0 文書での起動成功を装わない）。
   - `ServerInstance` に `documentIds`（serve 中の文書）・`quarantined`（検疫された文書）を追加。`connectionCount(documentId?)`
     は文書別／全体合計を返し、`submit(op, { actorId, documentId? })` は宛先文書を選べる（いずれも引数追加＝後方互換）。
+  - **申告 documentId の検証**: join と各 `submitOperation` の envelope が接続先の文書と一致するかを検証する。
+    複数文書構成・`?documentId=` 明示の接続は不一致で切断（close 1008）。従来の単一文書・無指定接続は**受理したうえで
+    envelope をサーバー値へ正規化**して記録する（挙動は従来どおり・別文書 ID の entry が oplog へ入って次回起動の
+    復旧を壊す経路だけを塞ぐ）。
   - 新しい診断コード: `document-quarantined`（error）・`document-unknown`（warn・未知 documentId の接続/設定取得を 404 で拒否）・
-    `document-mismatch`（warn・join の申告 documentId が接続先と不一致）。
+    `document-mismatch`（warn・申告 documentId が接続先と不一致。接続あたり 1 回）。
   - **単一文書構成は無変更で動く**（既存 consumer は `documents` を渡さない限り挙動・API とも従来どおり。全回帰 green）。
   - 公開 `.d.ts` snapshot 差分あり（型の追加のみ・既存シグネチャの破壊的変更なし）。
 
