@@ -8,7 +8,7 @@
 #   - P2-1: consumer-harness/src/index.ts を確定 API（mount sync / serverUrl 必須 / async serve /
 #     GRID_API_VERSION / SERVER_HONO_API_VERSION）へ追随済み。
 #   - pack closure（要確認A=(a)）: grid/server-hono に加え内部 private package（core/types/collab/render/
-#     selection/ime/server）も npm pack し、9 tarball を同時 install する（engineering-patterns #4）。
+#     selection/ime/server）と React Facade も npm pack し、10 tarball を同時 install する（engineering-patterns #4）。
 #   - closure 宣言健全性（DA #4）: scripts/consumer/check-closure.mjs で「実行時 inter-dep が devDependencies に
 #     隠れていない」ことを install 成否に依存せず静的検査する。
 set -euo pipefail
@@ -17,8 +17,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS="$REPO_ROOT/consumer-harness"
 VENDOR="$HARNESS/.vendor"
 
-# pack closure 対象（Facade2 ＋ 内部7＝最大9。formula/apps は grid/server-hono の実行時 closure 外）。
-CLOSURE_PKGS=(grid server-hono core types collab render selection ime server)
+# pack closure 対象（公開 Facade 3 ＋ 内部7＝10。formula/apps は現行 Facade の実行時 closure 外）。
+CLOSURE_PKGS=(grid react server-hono core types collab render selection ime server)
 
 fail() { echo "[harness] NG: $*" >&2; exit 1; }
 
@@ -54,12 +54,12 @@ for p in "${CLOSURE_PKGS[@]}"; do
 done
 
 # ---- 2. tarball を harness へ install（workspace link を使わない独立 install） ----
-echo "[harness] tarball（9本）を install..."
+echo "[harness] tarball（${#CLOSURE_PKGS[@]}本）を install..."
 rm -rf "$HARNESS/node_modules" "$HARNESS/package-lock.json"
 (
   cd "$HARNESS"
   # shellcheck disable=SC2046
-  npm install --no-save --install-links $(printf "%s\n" "$VENDOR"/*.tgz) >/dev/null
+  npm install --no-save --install-links --no-audit --no-fund $(printf "%s\n" "$VENDOR"/*.tgz) >/dev/null
 )
 
 # ---- 3. 不合格条件: workspace link（symlink）でなく tarball 展開実体であること（closure 全 package） ----

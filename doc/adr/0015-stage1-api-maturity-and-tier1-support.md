@@ -82,6 +82,7 @@ registry への昇格（`publishConfig`＋`npm publish --tag alpha`）は Stage 
 ## 再検討条件
 
 - 最初の consumer が確定し React 経路が必須化 → Facade `react` を Stage 1 公開面へ追加（`package-boundary.md` §5 昇格条件）。
+- **昇格条件充足（2026-09-04）**: DD-025でReact Facadeを実装し、DD-044で `@nanairo-sheet/react` を標準pack配布セットへ追加した。現行配布はFacade 3＋内部7の10 tarball。
 - Stage 2 移行時に一部 Facade API を Stable へ昇格する判断が必要になったら、本ADRを更新し Stable 区分を新設。
 - Tier 1 に他ブラウザ/OS を追加する要求 → compatibility matrix と CG-4 の再判定（DD-018 以降）。
 </content>

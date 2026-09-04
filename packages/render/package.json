@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/render",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "Canvas 仮想スクロール描画基盤（axis・viewport・base/overlay layer・scroll anchor・DPI・text cache・chunk store）。grid Facade が配線する内部 package",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

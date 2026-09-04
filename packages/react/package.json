@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/react",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "React Facade（@nanairo-sheet/react）。<NanairoSheetView> で grid Facade を lifecycle/props/event 変換のみで束ねる（内部状態を React state へ複製しない・憲章 §11.2）。公開面は grid Facade の薄い写像（DD-025）。",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

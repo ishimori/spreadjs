@@ -18,26 +18,31 @@
 private registry は使わない（決定事項A）。SDK 提供側で配布成果物を生成する:
 
 ```bash
-bash scripts/release/build-release.sh      # typecheck/lint/test → release/ に 9 tarball＋manifest.json
+bash scripts/release/build-release.sh      # typecheck/lint/test → release/ に 10 tarball＋manifest.json
 ```
 
 `release/manifest.json` に版数・sha256・生成コミット・channel（`alpha`）と install コマンドが記録される。
 
-## 2. install（配布 closure 全 9 tarball を同時に）
+## 2. install（配布セット全 10 tarball を同時に）
 
-`@nanairo-sheet/*` は private・未 publish のため、Facade2（grid・server-hono）＋内部7（core・types・collab・render・
-selection・ime・server）＝**9 tarball を同時 install** する（1 つでも欠けると module 解決に失敗する）。
+`@nanairo-sheet/*` は private・未 publish のため、Facade3（grid・react・server-hono）＋内部7（core・types・collab・render・
+selection・ime・server）＝**10 tarball を配布セットとして同時 install** する。React Facade は grid の実行時 closure には必須でないが、
+松下を含む React consumer が手作業で別 tarball を補わないよう標準セットへ含める（`react ^19` は consumer が用意する peer dependency）。
 `manifest.json` の `install` フィールドをそのまま使う:
 
 ```bash
 cd <your-consumer>
 npm install --no-save --install-links \
-  nanairo-sheet-grid-0.1.0-alpha.0.tgz nanairo-sheet-server-hono-0.1.0-alpha.0.tgz \
-  nanairo-sheet-core-0.1.0-alpha.0.tgz nanairo-sheet-types-0.1.0-alpha.0.tgz \
-  nanairo-sheet-collab-0.1.0-alpha.0.tgz nanairo-sheet-render-0.1.0-alpha.0.tgz \
-  nanairo-sheet-selection-0.1.0-alpha.0.tgz nanairo-sheet-ime-0.1.0-alpha.0.tgz \
-  nanairo-sheet-server-0.1.0-alpha.0.tgz
+  nanairo-sheet-grid-0.1.0-alpha.1.tgz nanairo-sheet-react-0.1.0-alpha.1.tgz \
+  nanairo-sheet-server-hono-0.1.0-alpha.1.tgz \
+  nanairo-sheet-core-0.1.0-alpha.1.tgz nanairo-sheet-types-0.1.0-alpha.1.tgz \
+  nanairo-sheet-collab-0.1.0-alpha.1.tgz nanairo-sheet-render-0.1.0-alpha.1.tgz \
+  nanairo-sheet-selection-0.1.0-alpha.1.tgz nanairo-sheet-ime-0.1.0-alpha.1.tgz \
+  nanairo-sheet-server-0.1.0-alpha.1.tgz
 ```
+
+配布物はTS製品ソース（`src/**/*.ts`）と実行時必須assetだけを含み、モノレポ専用の `tsconfig*.json` とテストコードは含めない。
+dist配布ではないため、consumer側にTSを透過コンパイルできるビルド環境が必要な点は変わらない。
 
 > consumer は**公開 Facade だけ**を import する（内部 package・`@nanairo-sheet/*/test-support`・source path 直接参照は禁止＝S1-3）。
 

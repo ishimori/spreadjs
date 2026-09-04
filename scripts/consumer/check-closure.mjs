@@ -2,7 +2,7 @@
 //
 // 目的: 「pack closure が flat install の hoisting 頼みで、内部 package 相互の実行時依存の
 //   宣言漏れ（devDependencies のまま）を隠していないか」を機械検出する。
-//   npm install <9 tarball> は全 package を top-level へ hoist するため、依存を devDependencies に
+//   npm install <closure 全 tarball> は全 package を top-level へ hoist するため、依存を devDependencies に
 //   置いていても module 解決は"たまたま"通ってしまう（＝宣言漏れが install 成功で隠れる）。
 //   本検査は install 成否に依存せず、各内部 package の**非テスト（実行時）ソース**が import する
 //   `@nanairo-sheet/*` が、その package の `dependencies` に宣言されていることを直接検証する。

@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/types",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "ブランド型・共通イベント・公開型（ランタイム依存ゼロ）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

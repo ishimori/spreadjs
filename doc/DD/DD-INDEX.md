@@ -17,6 +17,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-044 | Tarball同梱物の健全化 | alpha.1の10 package配布セットへ更新し、開発用設定・テストの同梱を機械防止 |
 | DD-043 | 複数文書serve | consumer 駆動（松下 納入計画③の共同編集化 = 松下 DD-014-3〔年度単位の board 切替〕）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§D**（DD-012 要件票 §A の U4 を置き換え）。将来制約の正本は **ADR-0025**（**Accepted**・実装で確定した細目を追記）。**実装・全回帰 green。実機検証は松下 DD-014-3 側** |
 | DD-041 | Presence枠タグのpane clip漏れ | 不具合修正。他ユーザーの activeCell 枠と名前タグを pane ごとの clip へ差し替えた（論点①=(a) で確定）。unit 5 件＋E2E 1 件で固定し、修正前は E2E で固定帯に 1,028 ピクセルの漏れ・修正後 0 を実測。Manual Gate M1 は E2E が自動化したため実機確認不要 |
 | DD-040 | リリースmanifestのgitDirty判定 | manifest に `closureDirty` / `closureDirtyPaths` / `dirtyNote` を追加し、配布再現性を `gitDirty` と読み分けられるようにした。既存 `gitDirty` の意味は不変（後方互換）。AC 1〜7 全て実機で照合 |

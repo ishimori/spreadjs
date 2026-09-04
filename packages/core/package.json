@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/core",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "文書モデル・決定論的適用・正準ハッシュ（ランタイム依存ゼロ）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

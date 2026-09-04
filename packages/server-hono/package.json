@@ -1,8 +1,14 @@
 {
   "name": "@nanairo-sheet/server-hono",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "public/**/*",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "同期サーバーの唯一の公開面（Facade・Experimental 0.x）。Hono + @hono/node-server + ws で Room/Sequencer/PersistentRoom を配線し serve()/stop() を提供する。内部型（SnapshotData/RecoveryReport）を再エクスポートしない（R7）。",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

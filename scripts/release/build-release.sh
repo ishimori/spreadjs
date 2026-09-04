@@ -4,7 +4,7 @@
 # 配布経路は「private registry publish」ではなく **pack closure 方式（DD-016-2 実証）を正式化** したもの
 #   （決定事項 A・ADR-0015 の S1-6 再解釈）。本スクリプトは:
 #     1) 再現 build ゲート: typecheck / lint / test を前置し、いずれか red なら成果物を作らない
-#     2) 配布 closure（内部 9 package = grid/server-hono/core/types/collab/render/selection/ime/server）を
+#     2) 配布 closure（10 package = grid/react/server-hono/core/types/collab/render/selection/ime/server）を
 #        `npm pack` して tarball を生成する（formula/apps は Alpha 配布 closure 外）
 #     3) manifest（channel=alpha・版数・sha256・bytes・生成コミット SHA・dirty フラグ）を出力する
 #   を行い、「consumer が成果物のみで統合できる・再現可能・チャネル明示」という S1-6 の実質を満たす。
@@ -25,7 +25,7 @@ SKIP_VERIFY=0
 # （かつての EVID＝DD-017 evidence への複製先は廃止。理由は末尾「5. 証跡について」を参照）
 
 # 配布 closure（consumer-app.sh / consumer-harness.sh と一致させること）。
-CLOSURE_PKGS=(grid server-hono core types collab render selection ime server)
+CLOSURE_PKGS=(grid react server-hono core types collab render selection ime server)
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -119,10 +119,10 @@ for p in "${CLOSURE_PKGS[@]}"; do
     *) fail "$p の版 $v が alpha チャネル表記（*-alpha.*）でない" ;;
   esac
 done
-log "  ok: 配布 closure 9 package 全て $EXPECTED_VERSION（channel=$CHANNEL）"
+log "  ok: 配布 closure ${#CLOSURE_PKGS[@]} package 全て $EXPECTED_VERSION（channel=$CHANNEL）"
 
-# ---- 3. pack（9 tarball を OUT_DIR へ生成） ----
-log "3. npm pack（配布 closure 9 tarball → $OUT_DIR）"
+# ---- 3. pack（closure 全 tarball を OUT_DIR へ生成） ----
+log "3. npm pack（配布 closure ${#CLOSURE_PKGS[@]} tarball → $OUT_DIR）"
 # 任意 --out での破壊を避けるため rm -rf は使わず、既知の成果物（*.tgz・manifest.json）だけを掃除する（P1-3）。
 # OUT_DIR が REPO_ROOT やその主要サブディレクトリを指す誤指定を拒否する保護も置く。
 OUT_ABS="$(cd "$REPO_ROOT" && mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
@@ -189,14 +189,19 @@ const manifest = {
   // 自プロジェクトへコピーしてから実行するか、release/ を cwd にして実行する（P1-4・installNote 参照）。
   installNote:
     'tarball は本 manifest と同じ release/ にある。consumer プロジェクトへ tarball をコピー（例 vendor/）してから install を実行するか、release/ を cwd にして実行する。scripts/consumer-app.sh は tarball を .vendor へコピーして検証する。',
-  install: 'npm install --no-save --install-links ' + packages.map((p) => './' + p.tarball).join(' '),
+  install: 'npm install --no-save --install-links --no-audit --no-fund ' + packages.map((p) => './' + p.tarball).join(' '),
   packages,
 };
 writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(`[release]   manifest: ${packages.length} package / version ${version} / channel ${channel}`);
 NODE
 
-# ---- 5. 証跡について ----
+# ---- 5. pack 内容の健全性（DD-044） ----
+log "5. pack 内容検査（モノレポ設定・テストを除外し、公開 entrypoint を保持）"
+node "$REPO_ROOT/scripts/release/check-pack-contents.mjs" "$OUT_DIR" \
+  || fail "pack 内容 NG（tsconfig/test の混入または entrypoint 欠落）"
+
+# ---- 6. 証跡について ----
 # **DD フォルダへは複製しない**（かつては DD-017 の evidence へ複製していた）。理由は 3 つ:
 #   1. DD-017 は完了・アーカイブ済みで、`doc/archived/DD/DD-017/release-manifest.json` は
 #      **CG-4（Tier 1 環境）の gate 証拠**として `doc/plan/cg-ledger.md` と DD-018 の
@@ -209,8 +214,8 @@ NODE
 #      `release/` は .gitignore 済みだが、manifest が gitCommit を刻むため成果物は再現可能。
 # 特定リリースを記録に残したいときは、その判断をした DD の添付フォルダへ**手で**コピーする
 # （＝そのDDの証跡として凍結する）。build スクリプトが自動で書き込む先ではない。
-log "5. 証跡: $MANIFEST（成果物と同じ場所。DD フォルダへは複製しない）"
+log "6. 証跡: $MANIFEST（成果物と同じ場所。DD フォルダへは複製しない）"
 
-log "OK: 配布成果物 $OUT_DIR（9 tarball＋manifest.json）生成完了。"
+log "OK: 配布成果物 $OUT_DIR（${#CLOSURE_PKGS[@]} tarball＋manifest.json）生成完了。"
 log "  consumer 統合: tarball を consumer へコピー（例 mkdir vendor && cp $OUT_DIR/*.tgz vendor/）後、vendor/ で manifest.json の install を実行。"
 log "  再現検証: RELEASE_VENDOR_DIR=$OUT_DIR bash scripts/consumer-app.sh"

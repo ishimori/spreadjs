@@ -2,7 +2,7 @@
 
 > 設置: DD-016-2 Phase 3（要確認B 確定＝**リポジトリ内 `consumer-app/`**・npm workspaces 非登録＝boundary 検査対象外）。
 
-Stage 1 SDK Alpha の公開 Facade（`@nanairo-sheet/grid`・`@nanairo-sheet/server-hono`）を、**monorepo の外にいる
+Stage 1 SDK Alpha の公開 Facade（`@nanairo-sheet/grid`・`@nanairo-sheet/react`・`@nanairo-sheet/server-hono`）を、**monorepo の外にいる
 利用者と同じ経路**（`npm pack` した tarball を install）で取り込み、**実挙動**（serve→mount→日本語入力→共同編集反映→
 destroy→再mount で leak なし）まで実証する vanilla TS アプリ。
 
@@ -22,10 +22,11 @@ destroy→再mount で leak なし）まで実証する vanilla TS アプリ。
 さらに `scripts/consumer/check-closure.mjs` が、内部 package 相互の**実行時依存が dependencies に宣言済み**
 （devDependencies に隠れて flat-install hoisting 頼みになっていない）ことを install 成否に依存せず静的検査する。
 
-## pack closure（要確認A=(a)）
+## pack 配布セット（要確認A=(a)・DD-044更新）
 
-`@nanairo-sheet/*` は private・未 publish のため、Facade2（grid・server-hono）＋内部7（core・types・collab・render・
-selection・ime・server）＝**9 tarball** を同時 install して依存 closure を解決する（`doc/engineering-patterns.md` #4）。
+`@nanairo-sheet/*` は private・未 publish のため、Facade3（grid・react・server-hono）＋内部7（core・types・collab・render・
+selection・ime・server）＝**10 tarball** を同時 install する（`doc/engineering-patterns.md` #4）。Reactはこのvanilla appでは
+直接使わないが、React consumerを含む標準配布セットの欠落を検出するためinstall対象に含める。
 
 ## 実挙動 E2E（Phase 3・synthetic）
 

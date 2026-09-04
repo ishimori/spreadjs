@@ -1,9 +1,14 @@
 {
   "name": "@nanairo-sheet/grid",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "Canvas 描画グリッドの唯一の公開面（Facade・Experimental 0.x）。mount/destroy・GridEvent（接続状態・エラー通知）・lifecycle 契約。内部パッケージ（core/collab/render/selection/ime）を束ねるが再エクスポートしない（境界文書 §3・R7）。",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

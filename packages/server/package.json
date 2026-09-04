@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/server",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "全順序シーケンサー・権威 Room・Presence・スナップショット（ランタイム依存ゼロ・トランスポート非依存）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

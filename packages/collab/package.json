@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/collab",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "共同編集クライアント（ClientSession・楽観適用/rollback・replay・Conflict Queue・トランスポート抽象・JSON境界codec）。トランスポート非依存・外部ランタイム依存ゼロ（ADR-022）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

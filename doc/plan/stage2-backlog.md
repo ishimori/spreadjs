@@ -18,10 +18,10 @@
 
 | 項目 | 内容 | 出典DD | 現状（Stage 1） | Stage 2 での対応 |
 |---|---|---|---|---|
-| dist ビルド配布への切替 | `tsc` emit の js＋d.ts 配布（9 package のビルドパイプライン新設） | DD-017 決定事項B | TS ソース配布（`main: ./src/index.ts`）で継続。consumer は vite 等 TS 透過コンパイル環境前提 | registry 昇格時に dist ビルド配布へ切替（汎用性向上） |
-| private registry 昇格 | Verdaccio/社内 registry へ `publishConfig`＋`npm publish --tag alpha` | DD-017 決定事項A・ADR-0015 §「S1-6 再解釈」 | pack tarball closure 方式（内部9 tarball 同時 install・registry 非経由）を正式化。版採番・closure・チャネル表記は確立済 | registry へ昇格（切替は最小＝メタ確立済み） |
+| dist ビルド配布への切替 | `tsc` emit の js＋d.ts 配布（10 package のビルドパイプライン新設） | DD-017 決定事項B | TS ソース配布（`main: ./src/index.ts`）で継続。consumer は vite 等 TS 透過コンパイル環境前提。DD-044で開発用設定・テストの同梱は除外済 | registry 昇格時に dist ビルド配布へ切替（汎用性向上） |
+| private registry 昇格 | Verdaccio/社内 registry へ `publishConfig`＋`npm publish --tag alpha` | DD-017 決定事項A・ADR-0015 §「S1-6 再解釈」 | pack tarball方式（Reactを含む10 tarball標準セット・registry非経由）。版採番・closure・チャネル表記は確立済 | registry へ昇格（切替は最小＝メタ確立済み） |
 | PostgreSQL 本採用・運用 | ファイルベース実装（append-only JSONL oplog＋snapshot・fsync）→ PostgreSQL adapter | ADR-0023・DD-014 要確認① | `OpLogStore`/`SnapshotStore` interface 抽象＋ファイルベース実装のみ | 本番運用段階で PostgreSQL adapter 追加（interface 差替）。DB 運用は Alpha 配布へ波及するため Stage 2 |
-| React 薄ラッパー Facade | `@nanairo-sheet/react`（最初の consumer が React の場合に必須化） | roadmap §7・ADR-0015 §5 昇格条件・DD-017 対象外 | Stage 1 は最小経路（`grid`/`server-hono`）へ絞る。React Facade 未搭載 | 最初の consumer が React 確定時に Stage 1 公開面へ追加（`package-boundary.md` §5 昇格条件） |
+| React 薄ラッパー Facade | `@nanairo-sheet/react`（最初の consumer が React の場合に必須化） | roadmap §7・ADR-0015 §5 昇格条件・DD-017 対象外 | **回収済（DD-025）**。DD-044で標準配布セットにも追加 | 対応完了（将来のReact対応範囲拡張は別DD） |
 | 複数配布チャネル運用 | 複数 registry/チャネルの並行運用 | DD-017 対象外・roadmap §0 S1-6 注記 | 単一チャネル（alpha）のみ | Stage 2 |
 | 汎用診断/テレメトリ基盤 | error code 語彙・debug hook を超える汎用診断・テレメトリ | DD-017 対象外・roadmap §0 S1-6 注記 | 最小 error code 語彙＋debug logging hook（`error-codes.md`）のみ | Stage 2 |
 

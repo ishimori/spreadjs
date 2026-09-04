@@ -44,7 +44,7 @@
 
 - **症状**: Facade の全テストが green なのに、`npm pack` した tarball を独立 consumer へ install すると module 解決に失敗（`Cannot find module '@nanairo-sheet/render'` 等）。
 - **原因**: 実行時 import する `@nanairo-sheet/*` を `devDependencies` に置くと `npm pack`→install で omit される。workspace ルートの symlink がテストでは解決を肩代わりするため問題が隠れる（Codex 指摘）。
-- **正しいやり方**: Facade が**実行時 import** する内部 package は `dependencies` に置く（`test-support.ts` だけが使う collab 等は devDep のまま）。private 内部 package を registry 非経由で consumer へ届けるには bundle（`bundledDependencies`）or 全 package を pack して同梱する（**配布戦略は DD-017 で「全 9 package pack tarball＋sha256 manifest」に正式確定**〔`scripts/release/build-release.sh`・ADR-0015 Accepted〕・pack 実証＝DD-016-2）。
+- **正しいやり方**: Facade が**実行時 import** する内部 package は `dependencies` に置く（`test-support.ts` だけが使う collab 等は devDep のまま）。private 内部 package を registry 非経由で consumer へ届けるには bundle（`bundledDependencies`）or 全 package を pack して同梱する（**配布戦略は DD-017 で pack tarball＋sha256 manifest に正式確定**、DD-044でReactを含む10 package標準セットへ更新〔`scripts/release/build-release.sh`・ADR-0015 Accepted〕）。
 - **元DD**: DD-016-1（Codex xhigh P1-1）→ DD-017 で配布経路確定
 
 ## 5. Windows のドライブレター casing 差で vite `html-inline-proxy` がルート workspace 経由 build だけ決定的に失敗する（「間欠 flake」に見える）
@@ -176,5 +176,12 @@
 - **原因**: `for (const x of xs) await x.close()` は最初の reject でループごと抜ける。後続リソースはもちろん、その後に続く外側の後始末（socket 破棄・server.close）も実行されない。閉じる対象が**利用側から注入された実装**（consumer の DB ハンドル等）なら、close が失敗するのは異常系ではなく想定内。
 - **正しいやり方**: 後始末は**全件試行してから失敗をまとめて報告**する（`failures.push(...)` → 最後に 1 つの Error）。外側の teardown は失敗を変数に退避して**最後まで進めてから** rethrow する。起動途中の失敗経路では、後始末の失敗で**元の失敗を隠さない**（記録だけして元の例外を投げる）。
 - **元DD**: DD-043（複数文書 serve で `closeRuntimes` が 1 文書目の close 失敗で中断し、残りの文書・認証待ち socket・ws・http server が閉じ残っていた。Codex レビュー P1 で発覚）
+
+## 21. TSソースのtarball配布は `files` 境界と「成果物を起動する検査」の両方で守る
+
+- **症状**: consumerのVSCodeだけが `tsconfig.base.json` 欠落を警告する。逆に `files: ["src"]` へ狭めるだけだと、unit/typecheckはgreenのまま配布後のサーバー起動がruntime asset欠落で失敗する。
+- **原因**: `npm pack` の既定選択はpackage直下の開発用 `tsconfig*.json` や `src/**/*.test.ts` まで同梱する。一方、単純なallowlistはソースから相対参照するHTML等の非TS assetを落とせる。モノレポ内テストは元ファイルを直接使うため、どちらも検出しない。
+- **正しいやり方**: 各packageの `files` を製品ソース＋必須runtime assetへ限定する。release時に**実tarball**を開き、開発用設定・test/specが0、package.jsonの全entrypointが存在することを検査する。そのうえでtarballだけを独立consumerへinstallし、型解決だけでなくserve/build/E2Eまで動かす。ファイル名を上書きせずpackage版も採番し、lock/cacheが更新を識別できるようにする。
+- **元DD**: DD-044（松下consumerのVSCode診断から発覚。最初の `files: ["src"]` 候補は `server-hono/public/demo.html` を落とし、独立consumer lifecycleが検出）
 
 <!-- 以降、パターンを追記していく。番号は通し番号 -->

@@ -22,7 +22,7 @@ VENDOR="$APP/.vendor"
 EVID="$REPO_ROOT/test-results/dd-evidence/DD-016-2"
 CHECK_SRC=("$APP/src" "$APP/server" "$APP/e2e")
 
-CLOSURE_PKGS=(grid server-hono core types collab render selection ime server)
+CLOSURE_PKGS=(grid react server-hono core types collab render selection ime server)
 
 mkdir -p "$EVID"
 LOG="$EVID/consumer-app-run.log"
@@ -84,7 +84,7 @@ if [ -n "${RELEASE_VENDOR_DIR:-}" ]; then
   cp "$RELEASE_VENDOR_DIR"/*.tgz "$VENDOR/"
   log "  ok: 配布成果物 $rel_count tarball を fresh pack せず流用（manifest 同一性検証済・配布物そのもので統合）"
 else
-  log "[consumer-app] 3. pack closure（9 tarball）→ consumer-app へ install"
+  log "[consumer-app] 3. pack closure（${#CLOSURE_PKGS[@]} tarball）→ consumer-app へ install"
   for p in "${CLOSURE_PKGS[@]}"; do
     npm pack --workspace "@nanairo-sheet/$p" --pack-destination "$VENDOR" >/dev/null 2>&1
   done
@@ -93,7 +93,7 @@ rm -rf "$APP/node_modules" "$APP/package-lock.json"
 (
   cd "$APP"
   # shellcheck disable=SC2046
-  npm install --no-save --install-links $(printf "%s\n" "$VENDOR"/*.tgz) >/dev/null 2>&1
+  npm install --no-save --install-links --no-audit --no-fund $(printf "%s\n" "$VENDOR"/*.tgz) >/dev/null 2>&1
 )
 
 # ---- 4. workspace link でなく tarball 展開実体・closure 完備・stray なし ----
@@ -106,7 +106,7 @@ for p in "${CLOSURE_PKGS[@]}"; do
 done
 installed_count=$(find "$APP/node_modules/@nanairo-sheet" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
 [ "$installed_count" -eq "${#CLOSURE_PKGS[@]}" ] || fail "@nanairo-sheet 配下が closure(${#CLOSURE_PKGS[@]}) と一致しない（$installed_count 個・stray の可能性）"
-log "  ok: 9 package 全て tarball 展開実体・symlink 0・stray 0"
+log "  ok: ${#CLOSURE_PKGS[@]} package 全て tarball 展開実体・symlink 0・stray 0"
 
 # ---- 5. 公開面だけで tsc --noEmit（consumer-app/src の型解決を pack から） ----
 log "[consumer-app] 5. tsc --noEmit（consumer 公開面の型解決）"

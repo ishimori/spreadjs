@@ -1,8 +1,13 @@
 {
   "name": "@nanairo-sheet/ime",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "type": "module",
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.spec.ts"
+  ],
   "description": "日本語IME編集状態機械・グリッドジオメトリ/ナビゲーション・IMEトレース採取（DOM非依存・ランタイム依存ゼロ）",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

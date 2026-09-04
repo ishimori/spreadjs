@@ -1,21 +1,30 @@
 # CHANGELOG — @nanairo-sheet Alpha
 
-`@nanairo-sheet/*`（Facade `grid` / `server-hono` と内部 package）の変更履歴。
+`@nanairo-sheet/*`（Facade `grid` / `react` / `server-hono` と内部 package）の変更履歴。
 
 ## 運用ルール（S1-5・ADR-0015 D1）
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（`0.1.0-alpha.0`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.1`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
-- **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 9 tarball＋manifest（版数・sha256・
+- **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
 ## [Unreleased]
+
+## [0.1.0-alpha.1] - 2026-09-04
+
+### Fixed
+
+- **Tarball 同梱物の健全化（DD-044）**: TSソース配布を維持したまま、配布対象10 packageの `files` を製品runtime資産へ限定し、
+  consumerでは解決不能なモノレポ専用 `tsconfig*.json` とテストコードを除外。release gateが全entrypointの存在と禁止ファイル0を検査する。
+  `@nanairo-sheet/react` を標準配布セットへ追加し、React consumerが旧tarballを手作業で補う経路も解消した。
 
 ### Added
 
