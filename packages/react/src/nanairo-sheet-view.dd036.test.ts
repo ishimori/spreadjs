@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // React Facade（<NanairoSheetView>）の DD-036 追加分 unit（jsdom・grid mount() をモック）:
-//   - props 4 点（frozenRowCount / frozenColumnCount / columnBackgrounds / readOnlyRows）の GridMountOptions への
+//   - props（frozenRowCount / frozenColumnCount / columnBackgrounds / rowBackgrounds / readOnlyRows）の GridMountOptions への
 //     1:1 写像と「識別系＝値変更で remount・同値リテラル（キー順違い・行順違いを含む）では remount しない」（契約 §5）
 //   - ref handle の scrollToColumn が GridInstance へ直結し、未 mount 時は `handle-before-mount` warn で無視される
 // 既存は nanairo-sheet-view.test.ts / .dd035.test.ts（無修正）。
@@ -81,8 +81,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('DD-036 props の写像（AC8/AC10）', () => {
-  it('4 props を grid の同名 mount オプションへ 1:1 写像する', () => {
+describe('DD-036/DD-045 props の写像（AC8/AC10）', () => {
+  it('固定 pane・静的背景・readOnly props を grid の同名 mount オプションへ 1:1 写像する', () => {
     render(
       createElement(
         NanairoSheetView,
@@ -90,6 +90,7 @@ describe('DD-036 props の写像（AC8/AC10）', () => {
           frozenRowCount: 2,
           frozenColumnCount: 5,
           columnBackgrounds: { b: '#eef3ff' },
+          rowBackgrounds: { r2: '#e5e7eb' },
           readOnlyRows: ['r1', 'r2'],
         }),
       ),
@@ -98,13 +99,14 @@ describe('DD-036 props の写像（AC8/AC10）', () => {
     expect(opt.frozenRowCount).toBe(2);
     expect(opt.frozenColumnCount).toBe(5);
     expect(opt.columnBackgrounds).toEqual({ b: '#eef3ff' });
+    expect(opt.rowBackgrounds).toEqual({ r2: '#e5e7eb' });
     expect(opt.readOnlyRows).toEqual(['r1', 'r2']);
   });
 
   it('未指定なら undefined のまま渡す（grid 側で既定＝既存 consumer 無影響）', () => {
     render(createElement(NanairoSheetView, standaloneProps()));
     const opt = h.instances[0]!.options;
-    for (const key of ['frozenRowCount', 'frozenColumnCount', 'columnBackgrounds', 'readOnlyRows']) {
+    for (const key of ['frozenRowCount', 'frozenColumnCount', 'columnBackgrounds', 'rowBackgrounds', 'readOnlyRows']) {
       expect(opt[key], key).toBeUndefined();
     }
   });
@@ -116,6 +118,7 @@ describe('DD-036 props の写像（AC8/AC10）', () => {
         standaloneProps({
           frozenColumnCount: 5,
           columnBackgrounds: { a: '#fff', b: '#000' },
+          rowBackgrounds: { r1: '#eee', r2: '#ddd' },
           readOnlyRows: ['r2', 'r1'],
         }),
       ),
@@ -129,6 +132,7 @@ describe('DD-036 props の写像（AC8/AC10）', () => {
         standaloneProps({
           frozenColumnCount: 5,
           columnBackgrounds: { b: '#000', a: '#fff' },
+          rowBackgrounds: { r2: '#ddd', r1: '#eee' },
           readOnlyRows: ['r1', 'r2'],
         }),
       ),
@@ -136,20 +140,36 @@ describe('DD-036 props の写像（AC8/AC10）', () => {
     expect(h.instances).toHaveLength(1);
     expect(h.instances[0]!.destroyed).toBe(false);
 
-    // 固定列数が変われば remount（mount 時固定のオプションゆえ）。
+    // 行背景の値が変われば remount（mount 時固定のオプションゆえ）。
     rerender(
       createElement(
         NanairoSheetView,
         standaloneProps({
-          frozenColumnCount: 3,
+          frozenColumnCount: 5,
           columnBackgrounds: { a: '#fff', b: '#000' },
+          rowBackgrounds: { r1: '#fff', r2: '#ddd' },
           readOnlyRows: ['r1', 'r2'],
         }),
       ),
     );
     expect(h.instances).toHaveLength(2);
     expect(h.instances[0]!.destroyed).toBe(true);
-    expect(h.instances[1]!.options.frozenColumnCount).toBe(3);
+    expect(h.instances[1]!.options.rowBackgrounds).toEqual({ r1: '#fff', r2: '#ddd' });
+
+    // 固定列数が変わっても従来どおり remount。
+    rerender(
+      createElement(
+        NanairoSheetView,
+        standaloneProps({
+          frozenColumnCount: 3,
+          columnBackgrounds: { a: '#fff', b: '#000' },
+          rowBackgrounds: { r1: '#fff', r2: '#ddd' },
+          readOnlyRows: ['r1', 'r2'],
+        }),
+      ),
+    );
+    expect(h.instances).toHaveLength(3);
+    expect(h.instances[2]!.options.frozenColumnCount).toBe(3);
   });
 });
 

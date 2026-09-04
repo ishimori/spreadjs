@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-09-04",
+  "updated": "2026-09-05",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -180,11 +180,12 @@
     },
     {
       "id": "matrix-view",
-      "title": "マトリクス型シートの表示制御（固定列・列網掛け・読み取り専用行）",
+      "title": "マトリクス型シートの表示制御（固定列・行列の網掛け・読み取り専用行）",
       "status": "available",
-      "summary": "列が日付で並ぶような横長のシート向けの表示制御。先頭 n 行 / n 列を固定して横スクロールしてもラベル列を画面左に残す（frozenRowCount / frozenColumnCount・既定は 1／1）、非稼働日など特定の列を値によらず網掛けする（columnBackgrounds）、サーバー算出行・見出し行を編集不可にする（readOnlyRows＝編集開始を抑止し、範囲貼り付け・範囲クリアはその行だけスキップして他行へ適用）、「今日へジャンプ」のように指定列を可視域へ入れる（scrollToColumn＝縦スクロールは動かさない）。設定は宣言的な mount オプション（React では同名 props）で、読み取り専用行は権限制御ではありません（サーバー側強制なし）。",
-      "source": "DD-036",
-      "meta": "382列 × 80行 実測済み ／ unit＋実ブラウザーE2E 検証済み"
+      "summary": "列が日付で並ぶような横長のシート向けの表示制御。先頭 n 行 / n 列を固定して横スクロールしてもラベル列を画面左に残す（frozenRowCount / frozenColumnCount・既定は 1／1）、非稼働日など特定の列を値によらず網掛けする（columnBackgrounds）ほか、結論行・区切り行を値によらず行全体の帯にする（rowBackgrounds＝RowId→色。空セル・固定 pane・横スクロール先まで連続）ことができます。行背景と列背景の交差は行が優先し、値に応じたセル書式はさらに優先されます。サーバー算出行・見出し行は readOnlyRows で編集不可にでき、「今日へジャンプ」は scrollToColumn で指定列を可視域へ入れられます。すべて宣言的な mount オプション（React では同名 props）で、背景は view-local、読み取り専用行は権限制御ではありません。",
+      "source": "DD-036・DD-045",
+      "meta": "382列 × 80行／行背景 205列 × 60行・帯2本を実測 ／ unit＋実ブラウザーE2E・headed目視検証済み",
+      "demo": "./demo.html?scenario=matrix-view"
     },
     {
       "id": "formula",

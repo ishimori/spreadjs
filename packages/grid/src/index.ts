@@ -303,6 +303,15 @@ export interface GridCommonMountOptions {
    *   fail-fast する（columnFormats と同経路）。色文字列の妥当性は検査しない（Canvas は不正値を無視＝安全）。
    */
   readonly columnBackgrounds?: Readonly<Record<string, string>>;
+  /**
+   * 行単位の静的背景色（RowId 文字列→CSS color・Experimental 0.x・DD-045）。両モード共通・mount 時固定・view-local。
+   * - 空セルを含む行全体を塗り、固定 pane と横スクロール先でも帯を連続させる。
+   * - 行/列背景の交差は行背景が勝ち、`columnFormats` の値ベース背景はさらに上から勝つ。
+   * - RowId は描画時に現在位置へ解決するため、行挿入・削除後も同じ行実体へ追従する。
+   * - 未知 RowId は初回描画後に診断 warn `row-background-unknown` のみ。空/空白色は mount 時 fail-fast。
+   * 文書状態・protocol・snapshot・hash・cell-commit・コピー TSV は変更しない。
+   */
+  readonly rowBackgrounds?: Readonly<Record<string, string>>;
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**

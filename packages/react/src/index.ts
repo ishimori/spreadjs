@@ -78,6 +78,8 @@ export interface NanairoSheetViewCommonProps {
   readonly frozenColumnCount?: number;
   /** 列単位の静的背景色（grid columnBackgrounds・DD-036 C2）。 */
   readonly columnBackgrounds?: Readonly<Record<string, string>>;
+  /** 行単位の静的背景色（grid rowBackgrounds・DD-045）。RowId → CSS color。 */
+  readonly rowBackgrounds?: Readonly<Record<string, string>>;
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -210,6 +212,7 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     frozenRowCount: props.frozenRowCount ?? null,
     frozenColumnCount: props.frozenColumnCount ?? null,
     columnBackgrounds: props.columnBackgrounds === undefined ? null : canonicalJson(props.columnBackgrounds),
+    rowBackgrounds: props.rowBackgrounds === undefined ? null : canonicalJson(props.rowBackgrounds),
   });
 }
 
@@ -260,6 +263,7 @@ function toMountOptions(
     frozenRowCount: props.frozenRowCount,
     frozenColumnCount: props.frozenColumnCount,
     columnBackgrounds: props.columnBackgrounds,
+    rowBackgrounds: props.rowBackgrounds,
     onEvent,
     onDiagnostic,
   };

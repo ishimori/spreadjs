@@ -50,6 +50,7 @@ const columnTypes: Record<string, GridColumnType> | undefined = isColumnTypesSce
 // 数値/日付の表示書式（columnDisplayFormats）＋値の装飾（columnFormats）を併用する BI 明細閲覧構成。
 // いずれも mount 時固定の宣言的オプション（consumer は Facade のみ）・view-local（文書の raw 値は不変）。
 const isDetailViewScenario = scenario.id === 'detail-view';
+const isMatrixViewScenario = scenario.id === 'matrix-view';
 const readOnly = isDetailViewScenario ? true : undefined;
 const columnCaptions: Record<string, string> | undefined = isDetailViewScenario
   ? {
@@ -87,6 +88,11 @@ const columnFormats: Record<string, readonly GridColumnFormatRule[]> | undefined
         ],
       }
     : undefined;
+// DD-045: マトリクスデモでは列背景と行背景を交差させ、固定 pane・横スクロール先でも横帯が連続することを実演する。
+const frozenRowCount = isMatrixViewScenario ? 1 : undefined;
+const frozenColumnCount = isMatrixViewScenario ? 5 : undefined;
+const columnBackgrounds = isMatrixViewScenario ? { 'col-6': '#eef3ff' } : undefined;
+const rowBackgrounds = isMatrixViewScenario ? { r30: '#e5e7eb', r45: '#fef3c7' } : undefined;
 
 // --- シナリオパネル ---------------------------------------------------------
 
@@ -216,6 +222,10 @@ const instance = mount(
     ...(columnCaptions !== undefined ? { columnCaptions } : {}),
     ...(columnDisplayFormats !== undefined ? { columnDisplayFormats } : {}),
     ...(readOnly !== undefined ? { readOnly } : {}),
+    ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
+    ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
+    ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
+    ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
     onEvent,
   },
 );

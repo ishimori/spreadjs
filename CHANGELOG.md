@@ -6,17 +6,31 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.1`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.2`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
 ## [Unreleased]
+
+## [0.1.0-alpha.2] - 2026-09-05
+
+### Added
+
+- **grid 行単位の静的背景色 `rowBackgrounds`（Experimental・DD-045）**: `RowId → CSS color` の mount オプションで、
+  値によらない行全体の帯（結論行・区切り行等）を描く。**空セルも塗り**、固定 pane の左右・横スクロール先まで帯が続く。
+  `columnBackgrounds` と交差したセルは行背景が勝ち、`columnFormats` の値ベース背景はさらに上から勝つ。RowId は描画時に現在位置へ
+  解決するため、行挿入・削除後も同じ行実体へ追従する。未知 RowId は `row-background-unknown` warn 1回のみ、空/空白色は
+  `column-types-invalid` で mount を fail-fast する。view-local で、文書状態・protocol・snapshot・hash・`cell-commit`・コピー TSV は不変。
+- **react `rowBackgrounds` prop（Experimental・DD-045）**: grid の同名オプションへ1:1写像する識別系 prop。Record のキー順を
+  正準化し、同値なら remount せず、値が変わったときだけ remount する。
+- **配布**: 10 package の pack closure を `0.1.0-alpha.2` に更新。実tarballの同梱物・manifest・独立consumerを検証する。
 
 ## [0.1.0-alpha.1] - 2026-09-04
 

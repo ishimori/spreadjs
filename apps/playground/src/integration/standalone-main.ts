@@ -231,9 +231,10 @@ function parseDateColumns(
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
-// DD-036 C1/C2/C3: 固定行列数・静的列背景・読み取り専用行を URL で指定できる（E2E 用・?select= 等と同流儀）。
+// DD-036/DD-045: 固定行列数・静的列/行背景・読み取り専用行を URL で指定できる（E2E 用）。
 //   ?frozenrows=2&frozencols=5      固定行数・固定列数（未指定は既定 1）
 //   ?colbg=col-b:ffe8e8,col-c:eef    列背景（値は CSS color。16進は # 省略可＝URL の # 断片化を避ける）
+//   ?rowbg=r5:e5e7eb,r30:fff         行背景（RowId → CSS color）
 //   ?readonlyrows=r2,r3              読み取り専用行
 function parseFrozenCount(raw: string | null): number | undefined {
   if (raw === null || raw === '') {
@@ -242,7 +243,7 @@ function parseFrozenCount(raw: string | null): number | undefined {
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
-function parseColumnBackgrounds(raw: string | null): Record<string, string> | undefined {
+function parseStaticBackgrounds(raw: string | null): Record<string, string> | undefined {
   if (raw === null || raw === '') {
     return undefined;
   }
@@ -262,7 +263,8 @@ function parseColumnBackgrounds(raw: string | null): Record<string, string> | un
 }
 const frozenRowCount = parseFrozenCount(searchParams.get('frozenrows'));
 const frozenColumnCount = parseFrozenCount(searchParams.get('frozencols'));
-const columnBackgrounds = parseColumnBackgrounds(searchParams.get('colbg'));
+const columnBackgrounds = parseStaticBackgrounds(searchParams.get('colbg'));
+const rowBackgrounds = parseStaticBackgrounds(searchParams.get('rowbg'));
 const readOnlyRows = (searchParams.get('readonlyrows') ?? '').split(',').filter((r) => r !== '');
 const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTypes);
 
@@ -368,6 +370,7 @@ const handle: StandaloneHandle = {
         ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
         ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
+        ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
         onEvent,
         onDiagnostic: (entry) => {
           diagnostics.push(entry);

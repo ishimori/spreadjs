@@ -318,6 +318,15 @@ export interface GridCommonMountOptions {
      *   fail-fast する（columnFormats と同経路）。色文字列の妥当性は検査しない（Canvas は不正値を無視＝安全）。
      */
     readonly columnBackgrounds?: Readonly<Record<string, string>>;
+    /**
+     * 行単位の静的背景色（RowId 文字列→CSS color・Experimental 0.x・DD-045）。両モード共通・mount 時固定・view-local。
+     * - 空セルを含む行全体を塗り、固定 pane と横スクロール先でも帯を連続させる。
+     * - 行/列背景の交差は行背景が勝ち、\`columnFormats\` の値ベース背景はさらに上から勝つ。
+     * - RowId は描画時に現在位置へ解決するため、行挿入・削除後も同じ行実体へ追従する。
+     * - 未知 RowId は初回描画後に診断 warn \`row-background-unknown\` のみ。空/空白色は mount 時 fail-fast。
+     * 文書状態・protocol・snapshot・hash・cell-commit・コピー TSV は変更しない。
+     */
+    readonly rowBackgrounds?: Readonly<Record<string, string>>;
     /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
     readonly onEvent?: GridEventListener;
     /**
@@ -763,6 +772,19 @@ export interface CompiledColumnBackgrounds {
  * 色文字列そのものの妥当性は検査しない（Canvas fillStyle は不正値を無視＝安全・columnFormats と同方針）。
  */
 export declare function compileColumnBackgrounds(columnBackgrounds: Readonly<Record<string, string>> | undefined, columnOrder: readonly string[]): CompiledColumnBackgrounds;
+/** プリコンパイル済みの静的行背景解決器（RowId → CSS color の O(1) lookup）。 */
+export interface CompiledRowBackgrounds {
+    /** RowId の静的背景色（未指定行は undefined）。 */
+    getBackground(rowId: string): string | undefined;
+    /** 静的行背景が 1 行でもあるか（無ければ描画フックを束縛しない）。 */
+    hasAny(): boolean;
+}
+/**
+ * rowBackgrounds（mount オプション）から静的行背景の解決器をプリコンパイルする。
+ * 未指定/空なら「背景なし」解決器を返す。不正設定（空/空白のみの色）は FormatRuleConfigError を throw する。
+ * CSS color 自体の妥当性は columnBackgrounds と同じく検査しない。
+ */
+export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<string, string>> | undefined): CompiledRowBackgrounds;
 "
 `;
 
@@ -808,6 +830,8 @@ export interface NanairoSheetViewCommonProps {
     readonly frozenColumnCount?: number;
     /** 列単位の静的背景色（grid columnBackgrounds・DD-036 C2）。 */
     readonly columnBackgrounds?: Readonly<Record<string, string>>;
+    /** 行単位の静的背景色（grid rowBackgrounds・DD-045）。RowId → CSS color。 */
+    readonly rowBackgrounds?: Readonly<Record<string, string>>;
     /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
     readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
     /** レイアウト確定通知（GridEvent 'layout' の写像）。 */

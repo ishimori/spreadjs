@@ -185,6 +185,8 @@ const grid = mount(
   {
     serverUrl: 'http://127.0.0.1:8790',
     displayName: 'alice',
+    // RowId → 色。値によらず空セルを含む行全体を塗る（view-local・DD-045）。
+    rowBackgrounds: { r30: '#e5e7eb' },
     onEvent: (event: GridEvent) => {
       // connection / pending / rejected / divergence / error
       if (event.type === 'error') {
@@ -202,6 +204,8 @@ grid.focus(); // 常駐 textarea へフォーカス → セルをクリック/�
 - **セル編集**: セルをクリック（アクティブ化）またはダブルクリック（編集開始）し、日本語 IME で変換・確定。
 - **共同編集**: 同じ `serverUrl` へ別 client を mount すると変更が相互反映される。
 - **接続状態**: `grid.connectionState()`（`online`/`offline`/`stopped`）または `onEvent` の `connection` イベント。
+- **静的な行背景**: `rowBackgrounds` は RowId に追従し、固定 pane と横スクロール先を含む行全体を塗る。行/列背景の
+  交差は行が優先し、`columnFormats` の値ベース背景はさらに優先される。描画のみで、文書値・保存・コピー TSV は変わらない。
 
 ## 4b. 単独グリッドモード（サーバー不要・DD-024）
 
@@ -301,6 +305,7 @@ export function OrderGrid() {
         ref={ref}
         mode="standalone"
         columnOrder={['col-a', 'col-b', 'col-c']}
+        rowBackgrounds={{ r30: '#e5e7eb' }}
         onCellCommit={handleCommit}
         style={{ position: 'absolute', inset: 0 }}
       />
@@ -310,7 +315,8 @@ export function OrderGrid() {
 ```
 
 - **props の変更契約（3 分類）**:
-  - **識別系**（`mode`/`serverUrl`/`columnOrder`/`wrapColumns`/`documentId`/`displayName`/`clientId`）の変更は
+  - **識別系**（`mode`/`serverUrl`/`columnOrder`/`wrapColumns`/`documentId`/`displayName`/`clientId`、列スキーマ、
+    `frozenRowCount`/`frozenColumnCount`/`columnBackgrounds`/`rowBackgrounds`/`readOnlyRows`）の変更は
     **自動 remount**（destroy→mount）。配列（`columnOrder` 等）は**値**で比較するので、毎 render 新しい配列リテラルを
     渡しても内容が同じなら remount しない（安定参照が理想だが Facade が吸収する）。
   - **初期値系**（`initialData`/`initialColumnWidths`/`initialRowHeights`）は**初回 mount のみ**有効。mount 後の変更は

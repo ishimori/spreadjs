@@ -234,3 +234,46 @@ export function compileColumnBackgrounds(
     hasAny: () => hasAny,
   };
 }
+
+// ---- DD-045: 行単位の静的背景色（rowBackgrounds）----
+//
+// 行 ID は初期データ到着前に全件を検証できないため、列版と違ってここでは ID の存在を検査しない。
+// 初回描画後の未知 RowId 診断は mount-controller が担い、解決器は RowId → color の O(1) lookup に閉じる。
+
+/** プリコンパイル済みの静的行背景解決器（RowId → CSS color の O(1) lookup）。 */
+export interface CompiledRowBackgrounds {
+  /** RowId の静的背景色（未指定行は undefined）。 */
+  getBackground(rowId: string): string | undefined;
+  /** 静的行背景が 1 行でもあるか（無ければ描画フックを束縛しない）。 */
+  hasAny(): boolean;
+}
+
+/**
+ * rowBackgrounds（mount オプション）から静的行背景の解決器をプリコンパイルする。
+ * 未指定/空なら「背景なし」解決器を返す。不正設定（空/空白のみの色）は FormatRuleConfigError を throw する。
+ * CSS color 自体の妥当性は columnBackgrounds と同じく検査しない。
+ */
+export function compileRowBackgrounds(
+  rowBackgrounds: Readonly<Record<string, string>> | undefined,
+): CompiledRowBackgrounds {
+  const byRow = new Map<string, string>();
+
+  if (rowBackgrounds !== undefined) {
+    for (const [rowId, color] of Object.entries(rowBackgrounds)) {
+      if (typeof color !== 'string' || color.trim() === '') {
+        throw new FormatRuleConfigError(
+          'empty-color',
+          rowId,
+          `rowBackgrounds: 行 "${rowId}" の色が空（CSS color 文字列が必要）`,
+        );
+      }
+      byRow.set(rowId, color);
+    }
+  }
+
+  const hasAny = byRow.size > 0;
+  return {
+    getBackground: (rowId) => byRow.get(rowId),
+    hasAny: () => hasAny,
+  };
+}

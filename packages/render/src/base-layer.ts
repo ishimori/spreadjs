@@ -105,6 +105,11 @@ export interface BaseLayerDeps {
    * 未指定なら列バンド描画そのものを行わない（現行描画と完全一致・コスト増ゼロ）。
    */
   readonly columnBackground?: (colIndex: number) => string | undefined;
+  /**
+   * 行単位の静的背景色フック（DD-045）。行 index → CSS color（未指定行は undefined）。列背景の後に横バンドで塗り、
+   * 行と列の交差では行を優先する。値ベース書式はさらに後から上塗りされる。未指定なら追加描画ゼロ。
+   */
+  readonly rowBackground?: (rowIndex: number) => string | undefined;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -177,6 +182,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   const formatCellText = deps.formatCellText ?? ((_col: number, raw: string) => raw);
   const columnHeaderLabelFn = deps.columnHeaderLabel;
   const columnBackgroundFn = deps.columnBackground;
+  const rowBackgroundFn = deps.rowBackground;
   const frozenColCount = deps.frozenColCount ?? 0;
   const cellFontSizePx = parseFontSizePx(cellFont);
   const lineHeight = deps.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
@@ -491,6 +497,34 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
   };
 
+  /**
+   * 静的行背景（DD-045）: pane 内の指定行を「可視列範囲いっぱいの横バンド」として 1 行 1 回で塗る。
+   * 列背景の後に呼ぶため交差セルでは行背景が勝ち、罫線・値ベース書式は後から上に乗る。
+   */
+  const drawRowBackgrounds = (frame: FrameViewport, pane: PaneRange, paneBackground: string): void => {
+    if (rowBackgroundFn === undefined) {
+      return;
+    }
+    if (pane.rows.end <= pane.rows.start || pane.cols.end <= pane.cols.start) {
+      return;
+    }
+    const { transform } = frame;
+    const left = transform.cellRect(pane.rows.start, pane.cols.start).x;
+    const lastCol = transform.cellRect(pane.rows.start, pane.cols.end - 1);
+    const width = lastCol.x + lastCol.width - left;
+    for (let row = pane.rows.start; row < pane.rows.end; row += 1) {
+      const color = rowBackgroundFn(row);
+      if (color === undefined) {
+        continue;
+      }
+      const rect = transform.cellRect(row, pane.cols.start);
+      // Canvas が不正色を無視して直前行の fillStyle を残しても色漏れしないよう、行ごとに pane 背景へ戻す。
+      ctx.fillStyle = paneBackground;
+      ctx.fillStyle = color;
+      ctx.fillRect(left, rect.y, width, rect.height);
+    }
+  };
+
   const drawPane = (frame: FrameViewport, pane: PaneRange): void => {
     if (pane.clip.width <= 0 || pane.clip.height <= 0) {
       return;
@@ -504,6 +538,8 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.fillRect(pane.clip.x, pane.clip.y, pane.clip.width, pane.clip.height);
     // DD-036 C2: 静的列背景は pane 背景の直後・罫線の前（固定 pane でも frozenBackground より優先して塗る）。
     drawColumnBackgrounds(frame, pane, paneBackground);
+    // DD-045: 静的行背景は列背景の後・罫線の前（交差は行が勝ち、値ベース書式はさらに上に乗る）。
+    drawRowBackgrounds(frame, pane, paneBackground);
     drawPaneGrid(frame, pane);
     drawPaneValues(frame, pane);
     ctx.restore();

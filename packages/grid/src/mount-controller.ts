@@ -36,8 +36,8 @@ import type { PlacementConfig } from './editor-placement';
 import { captureEditStartRevision, draftToScalar, isRowLive } from './commit-bridge';
 import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
-import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules } from './format-rules';
-import type { CompiledColumnBackgrounds, CompiledColumnFormats } from './format-rules';
+import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
+import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackgrounds } from './format-rules';
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
 import { shouldArmLinkCandidate } from './link-column';
@@ -165,6 +165,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // DD-036 C2: 静的列背景（columnBackgrounds）のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
   // hasAny()=false なら base-layer への columnBackground 束縛を省き列バンド描画そのものを行わない（現行描画と一致）。
   let compiledBackgrounds: CompiledColumnBackgrounds | undefined;
+  // DD-045: 静的行背景。hasAny()=false なら rowBackground フックを束縛せず、描画コスト増ゼロ。
+  let compiledRowBackgrounds: CompiledRowBackgrounds | undefined;
   // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
   // hasAny()=false（両オプション未指定）なら base-layer への columnHeaderLabel/formatCellText フック束縛を省く。
   let compiledDisplay: CompiledColumnDisplay | undefined;
@@ -564,6 +566,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       metrics.mark('firstDraw');
       metrics.mark('firstOperable');
       validateReadOnlyRowsOnce(); // DD-036 C3: 未知 rowId の診断 warn（初回描画後に 1 回だけ）
+      validateRowBackgroundsOnce(); // DD-045: 未知 RowId の診断 warn（初回描画後に 1 回だけ）
       syncCellLock(); // DD-036（Codex P2）: 初回データ描画時点の activeCell（0,0）のロックを確定させる
       if (focusRequested) {
         focusRequested = false;
@@ -760,6 +763,24 @@ export function createGridController(target: GridMountTarget, options: GridMount
         'warn',
         'readonly-row-unknown',
         `readOnlyRows: 未知の行 ${unknown.join(', ')}（初回描画時点の文書に存在しない）→ 該当 RowId が現れれば読み取り専用になる`,
+      );
+    }
+  }
+  // DD-045: 行 ID は初期データ到着前に検証できないため、初回描画後に一度だけ未知 RowId を診断する。
+  const rowBackgroundRowSet = new Set<string>(Object.keys(options.rowBackgrounds ?? {}));
+  let rowBackgroundsChecked = false;
+  function validateRowBackgroundsOnce(): void {
+    const backend = sync;
+    if (rowBackgroundsChecked || rowBackgroundRowSet.size === 0 || backend === undefined) {
+      return;
+    }
+    rowBackgroundsChecked = true;
+    const unknown = [...rowBackgroundRowSet].filter((rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0);
+    if (unknown.length > 0) {
+      diag.emit(
+        'warn',
+        'row-background-unknown',
+        `rowBackgrounds: 未知の行 ${unknown.join(', ')}（初回描画時点の文書に存在しない）→ 該当 RowId が現れれば背景色を適用`,
       );
     }
   }
@@ -1376,6 +1397,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       compiledFormats = compileFormatRules(options.columnFormats, columnOrder);
       // DD-036 C2: 静的列背景をプリコンパイル（fail-fast・未知列/空色 → column-types-invalid＝columnFormats と同経路）。
       compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
+      // DD-045: 静的行背景をプリコンパイル（空色は fail-fast、RowId の存在は初回描画後に warn）。
+      compiledRowBackgrounds = compileRowBackgrounds(options.rowBackgrounds);
       // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
       // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
       compiledDisplay = compileDisplayFormats(options.columnDisplayFormats, options.columnCaptions, columnOrder, {
@@ -1832,6 +1855,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
             columnBackground: (colIndex: number) => {
               const id = backend.view.columnIdAt(colIndex);
               return id === undefined ? undefined : compiledBackgrounds?.getBackground(String(id));
+            },
+          }
+        : {}),
+      // DD-045: row index から現在の RowId を毎描画時に解決し、行挿入・削除後も同じ行実体へ追従する。
+      ...(compiledRowBackgrounds?.hasAny() === true
+        ? {
+            rowBackground: (rowIndex: number) => {
+              const id = backend.view.rowIdAt(rowIndex);
+              return id === undefined ? undefined : compiledRowBackgrounds?.getBackground(String(id));
             },
           }
         : {}),
