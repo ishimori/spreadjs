@@ -156,6 +156,11 @@ export interface ServeSetCellsInput {
 export interface ServeSubmitOptions {
   /** 受理 envelope の `actorId`（例: 'system'）。consumer は投影時にこれを見て再評価を抑止できる。 */
   readonly actorId: string;
+  /**
+   * 投入先の文書 ID（DD-043・複数文書 serve）。未指定は既定文書（`ServerInstance.documentId`）。
+   * serve していない ID（未知・起動時の検疫で外された文書）は Promise reject。
+   */
+  readonly documentId?: string;
 }
 
 /** reject コード（protocol-subset §3 と同一語彙）。 */
@@ -173,3 +178,54 @@ export type ServeRejectCode =
 export type ServeSubmitResult =
   | { readonly status: 'accepted'; readonly operationId: string; readonly revision: number }
   | { readonly status: 'rejected'; readonly operationId: string; readonly code: ServeRejectCode };
+
+// ---- D1/D2: 複数文書 serve（DD-043・ADR-0025）----
+
+/**
+ * 1 文書分の構成（DD-043 D1）。単一文書 serve のオプションと同じ意味を文書単位で持つ。
+ * 排他規則も文書ごとに同じ: 保存先は 1 つ（`persistenceDir` か `oplog`＋`snapshotStore`）／初期内容の供給元は 1 つ
+ * （`seedRows` か `initialDocument`）／`oplog` と `snapshotStore` は同時指定。
+ */
+export interface ServeDocumentConfig {
+  /** 列順（この文書の列構成。文書ごとに異なってよい＝年度別 board）。 */
+  readonly columnOrder: readonly string[];
+  /** 初期グリッド行数。`initialDocument` とは併用不可。 */
+  readonly seedRows?: number;
+  /** ファイル永続化ディレクトリ（文書ごとに別ディレクトリ）。`oplog`/`snapshotStore` とは併用不可。 */
+  readonly persistenceDir?: string;
+  /** 独自 operation log ストア（U1）。`snapshotStore` と同時指定が必須。 */
+  readonly oplog?: ServeOpLogStore;
+  /** 独自 snapshot ストア（U1）。`oplog` と同時指定が必須。 */
+  readonly snapshotStore?: ServeSnapshotStore;
+  /** 復旧できる状態が無いときの初期文書（document@0）。 */
+  readonly initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument;
+}
+
+/**
+ * documentId → 文書構成の引き当て（DD-043 D1・ADR-0025 決定1）。`null` は未知＝拒否。
+ * v1 は起動時に `documentIds` の各 ID について 1 回だけ呼ばれる（固定リストを引くだけの実装でよい）。
+ * 無限 Book 化は本関数の中身を「無ければ作る」に入れ替えて到達する（公開 API・protocol は変わらない）。
+ */
+export type ServeDocumentResolver = (
+  documentId: string,
+) => Promise<ServeDocumentConfig | null> | ServeDocumentConfig | null;
+
+/**
+ * 複数文書 serve（DD-043・v1 は起動時に決めた N 枚固定）。指定すると単一文書オプション
+ * （`documentId`/`columnOrder`/`seedRows`/`persistenceDir`/`oplog`/`snapshotStore`/`initialDocument`）とは併用できない。
+ */
+export interface ServeDocuments {
+  /** 起動時に serve する文書 ID（v1 はこの集合で固定・空配列は不可・重複不可）。 */
+  readonly documentIds: readonly string[];
+  /** 文書構成の引き当て。`documentIds` の ID に対して `null` を返すのは構成矛盾＝起動失敗。 */
+  readonly resolve: ServeDocumentResolver;
+  /** documentId 無指定の接続（`/ws`・`/config`）が繋がる文書（既定 `documentIds[0]`）。 */
+  readonly defaultDocumentId?: string;
+}
+
+/** 起動時の検疫で外された文書（DD-043 D3）。 */
+export interface ServeQuarantinedDocument {
+  readonly documentId: string;
+  /** 復旧が失敗した理由（例外メッセージ）。 */
+  readonly reason: string;
+}

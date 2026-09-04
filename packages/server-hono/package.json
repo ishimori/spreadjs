@@ -12,7 +12,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/server.ts",
-    "dev:integration": "tsx src/server.ts --integration"
+    "dev:integration": "tsx src/server.ts --integration",
+    "dev:multi-document": "tsx src/dev-multi-document.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

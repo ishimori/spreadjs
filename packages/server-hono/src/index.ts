@@ -9,10 +9,16 @@
 
 import { adaptOpLogStore, adaptSnapshotStore } from './serve-adapters';
 import { startServer } from './server';
+// 内部の文書構成型（adapter の戻り値にだけ使う局所型）。**公開面へは出さない**（非 export の関数シグネチャのみで使い、
+// index.d.ts に現れない＝R7 型漏洩 0 を維持する）。
+import type { StartDocumentConfig, StartDocumentsOptions } from './server';
 import type {
   ServeAuthenticate,
+  ServeDocumentConfig,
+  ServeDocuments,
   ServeInitialDocument,
   ServeOpLogStore,
+  ServeQuarantinedDocument,
   ServeSetCellsInput,
   ServeSnapshotStore,
   ServeSubmitOptions,
@@ -24,7 +30,10 @@ export type {
   ServeAuthenticate,
   ServeCellScalar,
   ServeDeleteRowsOperation,
+  ServeDocumentConfig,
   ServeDocumentOperation,
+  ServeDocumentResolver,
+  ServeDocuments,
   ServeIdentity,
   ServeInitialDocument,
   ServeInitialRow,
@@ -33,6 +42,7 @@ export type {
   ServeOpLogStore,
   ServeOperationEnvelope,
   ServePersistedSnapshot,
+  ServeQuarantinedDocument,
   ServeRejectCode,
   ServeSetCellsChange,
   ServeSetCellsInput,
@@ -51,7 +61,9 @@ export interface ServeDiagnostic {
   /**
    * 安定した診断イベント識別子。
    * 'serve-started' / 'serve-stopped'（起動・停止）／'auth-rejected'（authenticate が null＝401 拒否・warn）／
-   * 'auth-error'（authenticate が throw＝500 拒否・error）。Cookie・トークン等の値は載せない。
+   * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
+   * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
+   * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）。Cookie・トークン等の値は載せない。
    */
   readonly code: string;
   readonly message: string;
@@ -99,19 +111,40 @@ export interface ServeOptions {
    * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
    */
   readonly onDiagnostic?: ServeDiagnosticHook;
+  /**
+   * 複数文書 serve（DD-043・ADR-0025・v1 は起動時に決めた N 枚固定）。1 プロセスで複数の文書（Book / board）を持てる。
+   * 指定した場合、単一文書オプション（`documentId` / `columnOrder` / `seedRows` / `persistenceDir` / `oplog` /
+   * `snapshotStore` / `initialDocument`）とは**併用できない**（文書構成の供給元は 1 つ）。
+   * - 接続は `/ws?documentId=...`・`/config?documentId=...` で文書を名乗る（無指定は `defaultDocumentId`）。
+   *   serve していない ID は 404 で拒否する。
+   * - 起動時の検疫（D3）: 復旧に失敗した文書だけを外し、残りの文書で立ち上がる（診断 `document-quarantined`・error）。
+   *   外れた文書は `ServerInstance.quarantined` に載り、その文書への接続は 404 になる。
+   */
+  readonly documents?: ServeDocuments;
 }
 
 /** serve が返すハンドル（consumer lifecycle 契約）。 */
 export interface ServerInstance {
   readonly port: number;
   readonly url: string;
+  /** 既定文書の ID（`documentId` 無指定の接続が繋がる先。単一文書構成では唯一の文書）。 */
   readonly documentId: string;
-  /** 現在の接続数（診断用）。 */
-  connectionCount(): number;
+  /**
+   * 実際に serve 中の文書 ID（DD-043）。起動時の検疫で外れた文書は含まない。単一文書構成では `[documentId]`。
+   */
+  readonly documentIds: readonly string[];
+  /**
+   * 起動時の復旧に失敗して serve から外した文書（DD-043 D3・複数文書構成のみ）。単一文書構成の復旧失敗は
+   * 従来どおり `serve()` 自体が reject する（0 文書での起動成功を装わない）。
+   */
+  readonly quarantined: readonly ServeQuarantinedDocument[];
+  /** 現在の接続数（診断用）。`documentId` 指定でその文書のみ、未指定は全文書の合計。 */
+  connectionCount(documentId?: string): number;
   /**
    * サーバー起点の操作（DD-026 U3）。通常の受理経路（revision 付与・全接続へ配信・永続化）を通り、受理は durable 化後に
    * 解決する。envelope は `clientId: 'server'`（予約）・`actorId: options.actorId`。利用者の Undo 対象にならない。
    * reject（OCC 等）は結果で返す。`changes` 空・`actorId` 空・durable 失敗・stop 後は Promise reject（同期 throw しない）。
+   * DD-043: `options.documentId` で投入先の文書を指定する（未指定は既定文書・serve していない ID は Promise reject）。
    */
   submit(operation: ServeSetCellsInput, options: ServeSubmitOptions): Promise<ServeSubmitResult>;
   /** サーバーを停止し接続・永続化ハンドルを解放する。 */
@@ -151,17 +184,46 @@ export async function serve(options: ServeOptions = {}): Promise<ServerInstance>
     initialDocument: options.initialDocument,
     authenticate: options.authenticate,
     diagnostics: onDiagnostic !== undefined ? diag : undefined,
+    documents: options.documents !== undefined ? adaptDocuments(options.documents) : undefined,
   });
   diag('info', 'serve-started', `listening ${running.url} (documentId=${running.documentId})`);
   return {
     port: running.port,
     url: running.url,
     documentId: running.documentId,
-    connectionCount: () => running.connectionCount(),
-    submit: (operation, submitOptions) => running.submit(operation, submitOptions.actorId),
+    documentIds: running.documentIds,
+    quarantined: running.quarantined,
+    connectionCount: (documentId) => running.connectionCount(documentId),
+    submit: (operation, submitOptions) => running.submit(operation, submitOptions.actorId, submitOptions.documentId),
     stop: async () => {
       await running.close();
       diag('info', 'serve-stopped', `stopped ${running.url}`);
     },
+  };
+}
+
+/**
+ * 公開 `ServeDocuments`（consumer 実装のストア）を内部 startServer の形へ写す（DD-043）。
+ * resolver の呼び出しは startServer 側（起動時に documentIds ぶんだけ）で、ここでは 1 件ぶんの構成に adapter を掛ける。
+ */
+function adaptDocuments(documents: ServeDocuments): StartDocumentsOptions {
+  return {
+    documentIds: documents.documentIds,
+    resolve: async (documentId: string) => {
+      const config = await documents.resolve(documentId);
+      return config === null ? null : adaptDocumentConfig(config);
+    },
+    ...(documents.defaultDocumentId !== undefined ? { defaultDocumentId: documents.defaultDocumentId } : {}),
+  };
+}
+
+function adaptDocumentConfig(config: ServeDocumentConfig): StartDocumentConfig {
+  return {
+    columnOrder: [...config.columnOrder],
+    ...(config.seedRows !== undefined ? { seedRows: config.seedRows } : {}),
+    ...(config.persistenceDir !== undefined ? { persistenceDir: config.persistenceDir } : {}),
+    ...(config.oplog !== undefined ? { oplog: adaptOpLogStore(config.oplog) } : {}),
+    ...(config.snapshotStore !== undefined ? { snapshotStore: adaptSnapshotStore(config.snapshotStore) } : {}),
+    ...(config.initialDocument !== undefined ? { initialDocument: config.initialDocument } : {}),
   };
 }

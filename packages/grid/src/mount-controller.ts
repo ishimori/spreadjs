@@ -128,7 +128,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const serverOrigin = collabOptions?.serverUrl ?? '';
   const displayName = collabOptions?.displayName ?? `user-${Math.floor(Math.random() * 1000)}`;
   const clientId = collabOptions?.clientId ?? crypto.randomUUID(); // 再接続で不変（S-J4）
-  const wsUrl = serverOrigin === '' ? '' : `${serverOrigin.replace(/^http/, 'ws')}/ws`;
+  // DD-043: documentId 指定時は `?documentId=` を付けて**接続が文書を名乗る**（複数文書 serve の宛先＝将来の
+  // 複数サーバー振り分けの routing キーも兼ねる・ADR-0025）。未指定はサーバーの既定文書へ繋ぐ（従来どおり）。
+  const documentQuery =
+    collabOptions?.documentId !== undefined ? `?documentId=${encodeURIComponent(collabOptions.documentId)}` : '';
+  const wsUrl = serverOrigin === '' ? '' : `${serverOrigin.replace(/^http/, 'ws')}/ws${documentQuery}`;
 
   const metrics = createLoadMetrics();
 
@@ -1321,7 +1325,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // ---- 起動 ----
   async function fetchConfig(): Promise<ResolvedConfig> {
     // destroy() で abort される（boot 進行中の /config を残さない・P2-2）。
-    const response = await fetch(`${serverOrigin}/config`, { signal });
+    const response = await fetch(`${serverOrigin}/config${documentQuery}`, { signal });
     if (!response.ok) {
       throw new GridBootError('config-unavailable', `/config 取得失敗: ${response.status}`);
     }

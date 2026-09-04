@@ -1,6 +1,6 @@
 # ADR-0025: 複数文書 serve の契約と無限 Book への拡張経路
 
-- **Status**: **Proposed**（2026-09-04・consumer 駆動〔松下 DD-014 段3 = 納入計画の共同編集化〕で起票。松下側セッションが DD-043 起票と同時に草稿を代行作成。DD-043 の Human Spec Gate と実装レビューをもって Accepted 判定）
+- **Status**: **Accepted**（2026-09-04・consumer 駆動〔松下 DD-014 段3 = 納入計画の共同編集化〕で起票。松下側セッションが DD-043 起票と同時に草稿を代行作成。**DD-043 の実装・全回帰 green をもって Accepted**。実装で確定した細目は下の「実装で確定した細目（DD-043）」に追記）
 - **関連**: ADR-0005（server-ordered operation log ＝「文書ごとに順序を決める審判は 1 つ」の前提）／ADR-0023（durable 永続化・snapshot＋tail 復元 ＝ 担当引っ越し可能性の基盤）／松下リポ `doc/DD/DD-014/sdk-requirements.md` §D（要件正本）・松下 `doc/decisions.md` D-008（consumer 側の決定: 年度単位の board 切替）
 
 ## 背景・課題
@@ -43,3 +43,24 @@ WS 接続と `/config` は documentId を指定できる。無指定は単一文
 - v1 の追加面は小さい（resolver・接続の文書指定・起動時の検疫）。既存の単一文書 consumer は無変更で動く
 - 無限 Book・複数台化は、resolver の差し替えと前段の振り分けという**外側への追加**で到達できる。本 ADR の契約が変わらない限り consumer の作りは変わらない
 - 本 ADR に反する変更（例: 接続から documentId を外す、resolver を固定配列契約に狭める）は、無限 Book への経路を壊すため停止して再判定・ユーザー提示
+
+## 実装で確定した細目（DD-043・2026-09-04）
+
+決定 1〜4 は実装でそのまま成立した。実読で追加確定した点だけを残す（DD-043 が倉庫へ沈んでも読めるように）。
+
+- **resolver は「列挙」と対で渡す**: v1 は起動時の検疫（決定3）のために serve する集合を知る必要があるため、
+  公開面は `documents = { documentIds, resolve, defaultDocumentId? }`（1 オプション）にした。**無限 Book 化は
+  `documentIds` を任意化して `resolve` を遅延呼び出しにする追加**で到達でき、`resolve` の契約・protocol・
+  既存 consumer は変わらない（決定1 の一本道は維持）
+- **接続の文書指定は query（`?documentId=`）**: handshake frame 方式は upgrade 完了まで宛先 Room が決まらず、
+  「どの Room にも属さない接続」の TTL/後始末という新しい状態を作る。query なら upgrade 時点で確定し、
+  前段プロキシがそのまま routing キーに使える（決定2 の意図に一致）
+- **評価順序は authenticate → 文書解決**: 未認証の相手へ文書集合の存在（未知 ID か否か）を漏らさない。
+  文書単位の認可は hook が `request.url` から自分で行える
+- **join の申告 documentId 不一致**: 複数文書構成・`?documentId=` 明示の接続では **1008 で切断**する（他文書の
+  envelope を oplog へ混ぜない）。従来の単一文書・無指定接続は後方互換のため受理し警告診断のみ（`document-mismatch`）
+- **検疫は複数文書構成だけ**: 単一文書構成の復旧失敗は従来どおり起動失敗。1 枚しか無い構成で「0 文書で listen」を
+  始めると consumer が起動成功と誤認する。複数文書構成では**全文書が検疫されても listen は続ける**（全接続 404・
+  診断 error）。再起動ループを避けるという決定3 の目的は「立ち上がること」自体にあるため
+- **`/health` は変えない**（本文 `ok` 固定）。死活監視の口の応答形式を変えるとプローブ側の破壊的変更になる。
+  検疫の外形観測は「当該文書への `/config`・`/ws` が 404」＋診断 hook＋`ServerInstance.quarantined` で行う

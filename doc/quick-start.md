@@ -132,6 +132,38 @@ if (result.status === 'rejected') {
 - **Undo**: サーバー起点の操作は利用者の Undo 対象にならない（Undo は自クライアントの操作のみ）。
 - **排他**: `oplog`/`snapshotStore` は同時指定が必須。`persistenceDir` との併用、`initialDocument` と `seedRows` の併用は起動時エラー。
 
+## 3c. 複数文書を 1 プロセスで serve（DD-043・ADR-0025）
+
+年度別の board のように**列構成が違う複数の文書**を 1 プロセスで持てる（v1 は起動時に決めた N 枚固定）。
+
+```ts
+const DOCUMENTS = {
+  'plan-2026': { columnOrder: ['2026-04-01', '2026-04-02'], oplog: db.oplog('plan-2026'), snapshotStore: db.snapshots('plan-2026'), initialDocument: () => db.initialRows('plan-2026') },
+  'plan-2027': { columnOrder: ['2027-04-01', '2027-04-02'], oplog: db.oplog('plan-2027'), snapshotStore: db.snapshots('plan-2027'), initialDocument: () => db.initialRows('plan-2027') },
+};
+const server = await serve({
+  port: 8790,
+  documents: {
+    documentIds: Object.keys(DOCUMENTS),      // v1: 起動時に serve する集合（固定）
+    resolve: (id) => DOCUMENTS[id] ?? null,   // documentId → 文書構成（null=未知＝拒否）
+    // defaultDocumentId: 'plan-2026',        // 省略時は documentIds[0]
+  },
+});
+// server.documentIds … 実際に serve 中の文書／server.quarantined … 起動時の復旧失敗で外した文書
+await server.submit(op, { actorId: 'system', documentId: 'plan-2027' }); // 宛先文書を指定
+```
+
+クライアント側は `mount({ serverUrl, documentId: 'plan-2027' })` と名乗る（`/config?documentId=`・`/ws?documentId=` が付く）。
+
+- **未知 ID は拒否**: serve していない `documentId` への `/config`・WS 接続は 404（grid は config phase のエラーで止まる）。
+- **起動時の検疫**: 復旧に失敗した文書だけを外し、残りの文書で立ち上がる（診断 `document-quarantined`・error／`server.quarantined` に載る）。
+  1 文書のデータ破損で全文書が起動できなくなる再起動ループを防ぐための挙動で、**単一文書構成（`documents` 未指定）の復旧失敗は
+  従来どおり `serve()` が reject する**（0 文書での起動成功を装わない）。
+- **排他**: `documents` と単一文書オプション（`documentId`/`columnOrder`/`seedRows`/`persistenceDir`/`oplog`/`snapshotStore`/
+  `initialDocument`）は併用できない。文書ごとの排他規則は単一文書と同じ。
+- **v1 の範囲**: 文書集合の変更はプロセス再起動で行う（動的な作成・後片付け・実行時の文書単位隔離は未提供）。実行時の恒久失敗は
+  従来どおりプロセス単位の fail-stop。将来の無限 Book・複数台への振り分けは `resolve` の差し替えと前段の routing で到達する（ADR-0025）。
+
 ## 4. mount（グリッド）と日本語入力
 
 **size 済みの container**（幅・高さを持つ要素）へ mount する。`serverUrl` は必須。

@@ -332,7 +332,11 @@ export interface GridCollaborationMountOptions extends GridCommonMountOptions {
     readonly mode?: 'collaboration';
     /** 同期サーバーの HTTP オリジン（例 'http://127.0.0.1:8787'）。ws URL・/config はここから導出する。 */
     readonly serverUrl: string;
-    /** 編集対象ドキュメント ID。未指定なら /config の documentId を使う。 */
+    /**
+     * 編集対象ドキュメント ID。未指定なら /config の documentId（サーバーの既定文書）を使う。
+     * DD-043: 指定すると \`/config?documentId=...\`・\`/ws?documentId=...\` としてサーバーへ**文書を名乗る**
+     * （複数文書 serve の年度別 board 等）。サーバーが serve していない ID なら boot は config error で止まる。
+     */
     readonly documentId?: string;
     /** 列順。未指定なら serverUrl の /config から取得する（server-hono と対で運用・D1）。 */
     readonly columnOrder?: readonly string[];
@@ -873,8 +877,8 @@ export declare const NanairoSheetView: import("react").ForwardRefExoticComponent
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/server-hono の公開宣言 closure 1`] = `
 "// ==== packages/server-hono/src/index.ts ====
-import type { ServeAuthenticate, ServeInitialDocument, ServeOpLogStore, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
-export type { ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentOperation, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
+import type { ServeAuthenticate, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
+export type { ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
 /** 診断エントリの重大度（server-hono 診断 hook）。 */
 export type ServeDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 /** serve 診断エントリ（onDiagnostic opt-in 時のみ生成）。 */
@@ -883,7 +887,9 @@ export interface ServeDiagnostic {
     /**
      * 安定した診断イベント識別子。
      * 'serve-started' / 'serve-stopped'（起動・停止）／'auth-rejected'（authenticate が null＝401 拒否・warn）／
-     * 'auth-error'（authenticate が throw＝500 拒否・error）。Cookie・トークン等の値は載せない。
+     * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
+     * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
+     * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）。Cookie・トークン等の値は載せない。
      */
     readonly code: string;
     readonly message: string;
@@ -929,18 +935,39 @@ export interface ServeOptions {
      * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
      */
     readonly onDiagnostic?: ServeDiagnosticHook;
+    /**
+     * 複数文書 serve（DD-043・ADR-0025・v1 は起動時に決めた N 枚固定）。1 プロセスで複数の文書（Book / board）を持てる。
+     * 指定した場合、単一文書オプション（\`documentId\` / \`columnOrder\` / \`seedRows\` / \`persistenceDir\` / \`oplog\` /
+     * \`snapshotStore\` / \`initialDocument\`）とは**併用できない**（文書構成の供給元は 1 つ）。
+     * - 接続は \`/ws?documentId=...\`・\`/config?documentId=...\` で文書を名乗る（無指定は \`defaultDocumentId\`）。
+     *   serve していない ID は 404 で拒否する。
+     * - 起動時の検疫（D3）: 復旧に失敗した文書だけを外し、残りの文書で立ち上がる（診断 \`document-quarantined\`・error）。
+     *   外れた文書は \`ServerInstance.quarantined\` に載り、その文書への接続は 404 になる。
+     */
+    readonly documents?: ServeDocuments;
 }
 /** serve が返すハンドル（consumer lifecycle 契約）。 */
 export interface ServerInstance {
     readonly port: number;
     readonly url: string;
+    /** 既定文書の ID（\`documentId\` 無指定の接続が繋がる先。単一文書構成では唯一の文書）。 */
     readonly documentId: string;
-    /** 現在の接続数（診断用）。 */
-    connectionCount(): number;
+    /**
+     * 実際に serve 中の文書 ID（DD-043）。起動時の検疫で外れた文書は含まない。単一文書構成では \`[documentId]\`。
+     */
+    readonly documentIds: readonly string[];
+    /**
+     * 起動時の復旧に失敗して serve から外した文書（DD-043 D3・複数文書構成のみ）。単一文書構成の復旧失敗は
+     * 従来どおり \`serve()\` 自体が reject する（0 文書での起動成功を装わない）。
+     */
+    readonly quarantined: readonly ServeQuarantinedDocument[];
+    /** 現在の接続数（診断用）。\`documentId\` 指定でその文書のみ、未指定は全文書の合計。 */
+    connectionCount(documentId?: string): number;
     /**
      * サーバー起点の操作（DD-026 U3）。通常の受理経路（revision 付与・全接続へ配信・永続化）を通り、受理は durable 化後に
      * 解決する。envelope は \`clientId: 'server'\`（予約）・\`actorId: options.actorId\`。利用者の Undo 対象にならない。
      * reject（OCC 等）は結果で返す。\`changes\` 空・\`actorId\` 空・durable 失敗・stop 後は Promise reject（同期 throw しない）。
+     * DD-043: \`options.documentId\` で投入先の文書を指定する（未指定は既定文書・serve していない ID は Promise reject）。
      */
     submit(operation: ServeSetCellsInput, options: ServeSubmitOptions): Promise<ServeSubmitResult>;
     /** サーバーを停止し接続・永続化ハンドルを解放する。 */
@@ -1090,6 +1117,11 @@ export interface ServeSetCellsInput {
 export interface ServeSubmitOptions {
     /** 受理 envelope の \`actorId\`（例: 'system'）。consumer は投影時にこれを見て再評価を抑止できる。 */
     readonly actorId: string;
+    /**
+     * 投入先の文書 ID（DD-043・複数文書 serve）。未指定は既定文書（\`ServerInstance.documentId\`）。
+     * serve していない ID（未知・起動時の検疫で外された文書）は Promise reject。
+     */
+    readonly documentId?: string;
 }
 /** reject コード（protocol-subset §3 と同一語彙）。 */
 export type ServeRejectCode = 'stale-cell-revision' | 'target-row-deleted' | 'unknown-anchor' | 'unknown-row' | 'unknown-column' | 'invalid-base-revision' | 'client-sequence-violation' | 'duplicate-row';
@@ -1103,5 +1135,48 @@ export type ServeSubmitResult = {
     readonly operationId: string;
     readonly code: ServeRejectCode;
 };
+/**
+ * 1 文書分の構成（DD-043 D1）。単一文書 serve のオプションと同じ意味を文書単位で持つ。
+ * 排他規則も文書ごとに同じ: 保存先は 1 つ（\`persistenceDir\` か \`oplog\`＋\`snapshotStore\`）／初期内容の供給元は 1 つ
+ * （\`seedRows\` か \`initialDocument\`）／\`oplog\` と \`snapshotStore\` は同時指定。
+ */
+export interface ServeDocumentConfig {
+    /** 列順（この文書の列構成。文書ごとに異なってよい＝年度別 board）。 */
+    readonly columnOrder: readonly string[];
+    /** 初期グリッド行数。\`initialDocument\` とは併用不可。 */
+    readonly seedRows?: number;
+    /** ファイル永続化ディレクトリ（文書ごとに別ディレクトリ）。\`oplog\`/\`snapshotStore\` とは併用不可。 */
+    readonly persistenceDir?: string;
+    /** 独自 operation log ストア（U1）。\`snapshotStore\` と同時指定が必須。 */
+    readonly oplog?: ServeOpLogStore;
+    /** 独自 snapshot ストア（U1）。\`oplog\` と同時指定が必須。 */
+    readonly snapshotStore?: ServeSnapshotStore;
+    /** 復旧できる状態が無いときの初期文書（document@0）。 */
+    readonly initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument;
+}
+/**
+ * documentId → 文書構成の引き当て（DD-043 D1・ADR-0025 決定1）。\`null\` は未知＝拒否。
+ * v1 は起動時に \`documentIds\` の各 ID について 1 回だけ呼ばれる（固定リストを引くだけの実装でよい）。
+ * 無限 Book 化は本関数の中身を「無ければ作る」に入れ替えて到達する（公開 API・protocol は変わらない）。
+ */
+export type ServeDocumentResolver = (documentId: string) => Promise<ServeDocumentConfig | null> | ServeDocumentConfig | null;
+/**
+ * 複数文書 serve（DD-043・v1 は起動時に決めた N 枚固定）。指定すると単一文書オプション
+ * （\`documentId\`/\`columnOrder\`/\`seedRows\`/\`persistenceDir\`/\`oplog\`/\`snapshotStore\`/\`initialDocument\`）とは併用できない。
+ */
+export interface ServeDocuments {
+    /** 起動時に serve する文書 ID（v1 はこの集合で固定・空配列は不可・重複不可）。 */
+    readonly documentIds: readonly string[];
+    /** 文書構成の引き当て。\`documentIds\` の ID に対して \`null\` を返すのは構成矛盾＝起動失敗。 */
+    readonly resolve: ServeDocumentResolver;
+    /** documentId 無指定の接続（\`/ws\`・\`/config\`）が繋がる文書（既定 \`documentIds[0]\`）。 */
+    readonly defaultDocumentId?: string;
+}
+/** 起動時の検疫で外された文書（DD-043 D3）。 */
+export interface ServeQuarantinedDocument {
+    readonly documentId: string;
+    /** 復旧が失敗した理由（例外メッセージ）。 */
+    readonly reason: string;
+}
 "
 `;

@@ -19,6 +19,25 @@
 
 ### Added
 
+- **server-hono 複数文書 serve（Experimental・DD-043・ADR-0025）**: 1 プロセスで**複数の文書（Book / board）**を serve できる
+  （松下 納入計画 consumer の「年度単位で board を切り替える」要件。v1 は**起動時に決めた N 枚固定**）。
+  - `ServeOptions.documents = { documentIds, resolve, defaultDocumentId? }` を追加。`resolve(documentId)` が
+    「documentId → 文書構成（`columnOrder` / `seedRows` / `persistenceDir` / `oplog` / `snapshotStore` / `initialDocument`）」を
+    引く**引き当て（resolver）契約**で、v1 の実装は起動時の固定リストを引くだけでよい。将来の無限 Book 化は
+    resolver の中身を差し替えるだけで到達する（公開 API・protocol・既存 consumer を変えない・ADR-0025）。
+  - **接続が文書を名乗る**: `/ws?documentId=...`・`/config?documentId=...`。無指定は既定文書（`defaultDocumentId`＝
+    省略時 `documentIds[0]`）。serve していない ID は **404** で拒否する。この documentId は将来の複数サーバー振り分けの
+    routing キーを兼ねる。grid 側は `mount({ documentId })` 指定時に自動でこのクエリを付ける。
+  - **起動時の検疫**: 復旧に失敗した文書だけを serve から外し、残りの文書で立ち上がる（診断 `document-quarantined`・error／
+    `ServerInstance.quarantined` に理由付きで載る）。1 文書のデータ破損で全文書が道連れになる再起動ループを防ぐ。
+    **単一文書構成（`documents` 未指定）の復旧失敗は従来どおり起動失敗**（0 文書での起動成功を装わない）。
+  - `ServerInstance` に `documentIds`（serve 中の文書）・`quarantined`（検疫された文書）を追加。`connectionCount(documentId?)`
+    は文書別／全体合計を返し、`submit(op, { actorId, documentId? })` は宛先文書を選べる（いずれも引数追加＝後方互換）。
+  - 新しい診断コード: `document-quarantined`（error）・`document-unknown`（warn・未知 documentId の接続/設定取得を 404 で拒否）・
+    `document-mismatch`（warn・join の申告 documentId が接続先と不一致）。
+  - **単一文書構成は無変更で動く**（既存 consumer は `documents` を渡さない限り挙動・API とも従来どおり。全回帰 green）。
+  - 公開 `.d.ts` snapshot 差分あり（型の追加のみ・既存シグネチャの破壊的変更なし）。
+
 - **grid 貼り付け後の選択レンジ（Experimental・DD-038）**: 貼り付けが成立した直後に、**貼付範囲がそのまま選択される**
   （Excel 準拠。松下 生産納期 consumer の「どこに貼られたか分からない」指摘の解消）。利用者はどこへ何行×何列貼られたかを
   画面で確認でき、そのまま Delete で取り消す・貼り直すといった後続操作につなげられる。**公開 API の追加・変更はなく**

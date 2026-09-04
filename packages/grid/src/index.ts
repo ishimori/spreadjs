@@ -318,7 +318,11 @@ export interface GridCollaborationMountOptions extends GridCommonMountOptions {
   readonly mode?: 'collaboration';
   /** 同期サーバーの HTTP オリジン（例 'http://127.0.0.1:8787'）。ws URL・/config はここから導出する。 */
   readonly serverUrl: string;
-  /** 編集対象ドキュメント ID。未指定なら /config の documentId を使う。 */
+  /**
+   * 編集対象ドキュメント ID。未指定なら /config の documentId（サーバーの既定文書）を使う。
+   * DD-043: 指定すると `/config?documentId=...`・`/ws?documentId=...` としてサーバーへ**文書を名乗る**
+   * （複数文書 serve の年度別 board 等）。サーバーが serve していない ID なら boot は config error で止まる。
+   */
   readonly documentId?: string;
   /** 列順。未指定なら serverUrl の /config から取得する（server-hono と対で運用・D1）。 */
   readonly columnOrder?: readonly string[];

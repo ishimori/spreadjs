@@ -22,6 +22,10 @@ const BASE_URL = `http://localhost:${PORT}`;
 // integration-scenario.spec.ts の WS_ORIGIN と一致させること（ズレたら接続失敗で即赤くなる）。
 const WS_PORT = 8799;
 
+// DD-043 複数文書 E2E 専用の WS サーバーポート（2 文書を 1 プロセスで serve）。統合 E2E（8799）とは
+// 文書構成が違うため別プロセスで立てる。multi-document.spec.ts の WS_ORIGIN_MULTI と一致させること。
+const MULTI_DOC_WS_PORT = 8801;
+
 // 統合 E2E の WS サーバーは @nanairo-sheet/server-hono（DD-016 で collaboration-server を昇華）。
 const serverHonoDir = fileURLToPath(new URL('../../packages/server-hono', import.meta.url));
 
@@ -65,6 +69,17 @@ export default defineConfig({
       cwd: serverHonoDir,
       env: { PORT: String(WS_PORT), SEED_NONEMPTY: '3000' },
       url: `http://127.0.0.1:${WS_PORT}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
+    {
+      // DD-043 複数文書 E2E 用サーバー（doc-a / doc-b を 1 プロセスで serve）。シードは小さく起動は速い。
+      command: 'npm run dev:multi-document',
+      cwd: serverHonoDir,
+      env: { PORT: String(MULTI_DOC_WS_PORT) },
+      url: `http://127.0.0.1:${MULTI_DOC_WS_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       stdout: 'ignore',

@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-09-03",
+  "updated": "2026-09-04",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -92,6 +92,14 @@
       "summary": "共同編集サーバーの保存先を利用側の DB（Postgres 等）に差し替え、受理した操作を業務テーブルへ同じトランザクションで反映できます。接続は利用側の認証（JWT Cookie 等）で検証し、操作の実行者はサーバーが確定します。補完・算出列はサーバー側から書き込めます。",
       "source": "DD-026・DD-026-1〜3（S2-6）",
       "meta": "SDK 側は自動テスト（durable ACK・復旧・認証・配信）で検証済み。実機統合は松下 生産納期側（DD-012-2）で確認中"
+    },
+    {
+      "id": "multi-document",
+      "title": "複数の文書を1プロセスで（年度別ボード）",
+      "status": "available",
+      "summary": "列構成の違う複数の文書（年度別の納入計画ボード等）を1つのサーバーで同時に編集できます。接続時に文書を指定して繋ぎ、操作も在席表示も文書をまたぎません。1つの文書の復旧に失敗しても、残りの文書はそのまま立ち上がります。",
+      "source": "DD-043・ADR-0025（松下 納入計画 consumer 駆動）",
+      "meta": "v1 は起動時に決めた N 枚固定（動的な文書追加は将来）"
     },
     {
       "id": "reconnect",

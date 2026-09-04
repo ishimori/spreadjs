@@ -114,17 +114,46 @@ export interface StartServerOptions {
   initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
   authenticate?: ServeAuthenticate; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
   diagnostics?: DiagnosticSink; // serve() の onDiagnostic への橋渡し
+  documents?: StartDocumentsOptions; // DD-043: 複数文書 serve（単一文書オプション群とは排他）
+}
+
+/**
+ * 内部の文書構成（DD-043）。公開 `ServeDocumentConfig` の内部ストア版で、index.ts が adapter を掛けて渡す。
+ * 単一文書オプション（documentId/columnOrder/...）と同じ意味を文書単位で持つ。
+ */
+export interface StartDocumentConfig {
+  columnOrder: readonly string[];
+  seedRows?: number;
+  persistenceDir?: string;
+  oplog?: OpLogStore;
+  snapshotStore?: SnapshotStore;
+  initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument;
+}
+
+/** 複数文書 serve の内部オプション（DD-043・v1 は起動時に決めた N 枚固定）。 */
+export interface StartDocumentsOptions {
+  documentIds: readonly string[];
+  resolve: (documentId: string) => Promise<StartDocumentConfig | null> | StartDocumentConfig | null;
+  defaultDocumentId?: string;
+}
+
+/** 起動時の検疫で serve から外された文書（DD-043 D3）。 */
+export interface QuarantinedDocument {
+  documentId: string;
+  reason: string;
 }
 
 export interface RunningServer {
   port: number;
   url: string;
-  documentId: string;
-  hash(): string; // 現在の権威文書 hash（smoke の収束 assert 用）
-  snapshot(): SnapshotData; // 検査用
-  connectionCount(): number; // リーク検査用（後始末後 0）
-  recovery?: RecoveryReport; // DD-014: 永続化有効時の再起動復旧内訳（snapshot revision・tail replay 数）
-  submit(operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult>; // DD-026-3: サーバー起点 SetCells
+  documentId: string; // 既定文書（documentId 無指定の接続の宛先）。DD-043 でも意味は不変
+  documentIds: string[]; // DD-043: 実際に serve 中の文書（起動時の検疫で外れた分は含まない）
+  quarantined: QuarantinedDocument[]; // DD-043: 起動時の復旧失敗で外した文書（多文書構成のみ・単一文書は起動失敗）
+  hash(documentId?: string): string; // 現在の権威文書 hash（smoke の収束 assert 用）。未指定=既定文書
+  snapshot(documentId?: string): SnapshotData; // 検査用。未指定=既定文書
+  connectionCount(documentId?: string): number; // リーク検査用（後始末後 0）。未指定=全文書合計
+  recovery?: RecoveryReport; // DD-014: 永続化有効時の再起動復旧内訳（snapshot revision・tail replay 数。既定文書のもの）
+  submit(operation: ServeSetCellsInput, actorId: string, documentId?: string): Promise<ServeSubmitResult>; // DD-026-3
   close(): Promise<void>; // 全 ws terminate → wss.close → http server.close → clearInterval → oplog/snapshot close
 }
 
@@ -140,6 +169,12 @@ interface RoomController {
   activeConnectionIds(): readonly string[];
 }
 
+/** 接続ごとのメタ（認証済み identity・文書 ID 厳格判定）。ws をキーに保持し、close/sweep で解放する。 */
+interface ConnectionMeta {
+  readonly identity: ServeIdentity | undefined;
+  readonly strictDocument: boolean;
+}
+
 /**
  * connectionId ↔ WebSocket を対応づけ、Room の Outbound[] を fan-out するブリッジ。
  * 接続ライフサイクル（accept → join → 確立 → close/error）と TTL sweep を実装する（phase4-design §2/§3）。
@@ -148,15 +183,22 @@ interface RoomController {
 class RoomBridge {
   private readonly wsByConnection = new Map<string, WebSocket>();
   private readonly connectionByWs = new Map<WebSocket, string>();
-  private readonly identityByWs = new Map<WebSocket, ServeIdentity>();
+  private readonly metaByWs = new Map<WebSocket, ConnectionMeta>();
 
-  constructor(private readonly room: RoomController) {}
+  constructor(
+    private readonly room: RoomController,
+    /** この bridge が担当する文書 ID（join の申告 documentId と突き合わせる・DD-043）。 */
+    private readonly documentId: string,
+    private readonly diagnostics?: DiagnosticSink,
+  ) {}
 
-  /** 新規 WS を受理し、メッセージ・切断を購読する（connectionId は最初の join で確定）。identity は authenticate の結果。 */
-  onConnect(ws: WebSocket, identity?: ServeIdentity): void {
-    if (identity !== undefined) {
-      this.identityByWs.set(ws, identity);
-    }
+  /**
+   * 新規 WS を受理し、メッセージ・切断を購読する（connectionId は最初の join で確定）。identity は authenticate の結果。
+   * `strictDocument`（DD-043）= true の接続は、join の申告 documentId が本 bridge の文書と違えば切断する
+   * （複数文書 serve・`?documentId=` 明示時。他文書の envelope を oplog へ混ぜない）。
+   */
+  onConnect(ws: WebSocket, identity: ServeIdentity | undefined, strictDocument = false): void {
+    this.metaByWs.set(ws, { identity, strictDocument });
     ws.on('message', (data: RawData) => {
       this.onMessage(ws, data);
     });
@@ -180,7 +222,7 @@ class RoomBridge {
       if (!active.has(connectionId)) {
         this.wsByConnection.delete(connectionId);
         this.connectionByWs.delete(ws);
-        this.identityByWs.delete(ws);
+        this.metaByWs.delete(ws);
         ws.close(1000, 'presence ttl expired'); // 続く close イベントは connectionByWs 削除済みゆえ no-op（冪等）
       }
     }
@@ -230,6 +272,9 @@ class RoomBridge {
         this.closeSocket(ws, 1008, 'reserved clientId');
         return;
       }
+      if (!this.acceptDocument(ws, message)) {
+        return;
+      }
       const { connectionId, outbound } = this.room.handleJoin(message);
       this.wsByConnection.set(connectionId, ws);
       this.connectionByWs.set(ws, connectionId);
@@ -240,7 +285,7 @@ class RoomBridge {
       return; // join 前の非 join メッセージは無視（接続は維持）
     }
     // DD-026-2: 認証済み接続は申告の actorId/userId/displayName を信用せず、identity で上書きしてから Room へ渡す。
-    const identity = this.identityByWs.get(ws);
+    const identity = this.metaByWs.get(ws)?.identity;
     const result = this.room.handleMessage(existing, identity !== undefined ? withIdentity(message, identity) : message);
     if (result instanceof Promise) {
       // durable 境界（oplog fsync）解決後に ACK/broadcast を dispatch する（DD-014 durable ACK 契約）。
@@ -254,15 +299,35 @@ class RoomBridge {
     this.dispatch(result);
   }
 
+  /**
+   * join の申告 documentId を検証する（DD-043）。厳格接続（複数文書 serve・`?documentId=` 明示）で不一致なら切断して false。
+   * 従来の単一文書・無指定接続は後方互換のため受理し、警告診断だけ出す（申告の不一致は envelope の documentId 汚染源）。
+   */
+  private acceptDocument(ws: WebSocket, join: JoinMessage): boolean {
+    if (String(join.documentId) === this.documentId) {
+      return true;
+    }
+    if (this.metaByWs.get(ws)?.strictDocument === true) {
+      this.closeSocket(ws, 1008, 'document mismatch');
+      return false;
+    }
+    this.diagnostics?.(
+      'warn',
+      'document-mismatch',
+      `join の documentId '${String(join.documentId)}' が serve 中の '${this.documentId}' と一致しません（単一文書構成のため従来どおり受理）`,
+    );
+    return true;
+  }
+
   private onClose(ws: WebSocket): void {
     const connectionId = this.connectionByWs.get(ws);
     if (connectionId === undefined) {
-      this.identityByWs.delete(ws); // 未 join のまま閉じた認証済み接続の identity を解放
+      this.metaByWs.delete(ws); // 未 join のまま閉じた接続のメタ（identity 等）を解放
       return; // 未 join or 既に削除済み（close/error 両発火・sweep close の冪等・DA D28）
     }
     this.connectionByWs.delete(ws);
     this.wsByConnection.delete(connectionId);
-    this.identityByWs.delete(ws);
+    this.metaByWs.delete(ws);
     this.dispatch(this.room.handleDisconnect(connectionId)); // presenceRemoved（others）即時・§9.3
   }
 
@@ -325,159 +390,432 @@ function submitResultOf(operationId: OperationId, outbound: Outbound[]): ServeSu
   throw new Error('submit: Room が ACK/reject を返しませんでした（内部不整合）');
 }
 
+/** 1 文書分の起動仕様（内部・DD-043）。単一文書構成は N=1 のこの仕様へ写像する。 */
+interface DocumentSpec {
+  documentId: string;
+  columnOrder: string[];
+  /** **明示指定された** 初期グリッド行数（未指定=undefined。既定 DEFAULT_SEED_ROWS の適用は seed 時）。 */
+  seedRows?: number;
+  persistenceDir?: string;
+  oplog?: OpLogStore;
+  snapshotStore?: SnapshotStore;
+  initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument;
+  /** デモ・検査専用（単一文書構成のみ）。 */
+  restoreFrom?: SnapshotData;
+  /** デモ専用（単一文書構成のみ）。 */
+  dataset?: IntegrationDatasetConfig;
+}
+
+/**
+ * 1 文書分のランタイム（Sequencer / Room / PersistentRoom / RoomBridge の組・DD-043）。
+ * 文書間で状態を共有しない＝操作・presence・oplog・snapshot はすべて文書ごとに閉じる。
+ */
+interface DocumentRuntime {
+  readonly documentId: string;
+  readonly columnOrder: string[];
+  readonly bridge: RoomBridge;
+  readonly recovery: RecoveryReport | undefined;
+  hash(): string;
+  snapshot(): SnapshotData;
+  submit(operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult>;
+  close(): Promise<void>;
+}
+
+/**
+ * 1 文書分の構成の排他規則を検証する（保存先は 1 つ・初期内容の供給元は 1 つ・ストアは両方指定）。
+ * `at` は多文書構成で「どの文書の構成が矛盾しているか」を示す挿入句（単一文書構成では空文字）。
+ */
+function validateDocumentSpec(spec: DocumentSpec, at: string): void {
+  // restoreFrom×persistenceDir 排他（DD-018-1 AC3・P2-4）: restoreFrom は in-memory 専用 bootstrap（検査/テスト）、
+  // persistenceDir は durable file 復旧。併用は revision 不連続（空 dir＋revision R の restoreFrom→次 accepted op が R+1 を
+  // 空 oplog 先頭へ書込→次回起動が連番違反で失敗）を生むため、起動時に明示拒否する（黙って壊さない・fail-fast）。
+  if (spec.persistenceDir !== undefined && spec.restoreFrom !== undefined) {
+    throw new Error(
+      `startServer:${at} restoreFrom と persistenceDir は併用できません（restoreFrom=in-memory 専用復元・` +
+        'persistenceDir=durable 復旧。併用は revision 不連続を招くため明示拒否・DD-018-1 P2-4）',
+    );
+  }
+  // DD-026-1 排他: 保存先は 1 つ（persistenceDir=ファイル or 注入ストア）。初期内容の供給元も 1 つ（seed 系 or initialDocument）。
+  if (spec.persistenceDir !== undefined && (spec.oplog !== undefined || spec.snapshotStore !== undefined)) {
+    throw new Error(`serve:${at} persistenceDir と oplog/snapshotStore は併用できません（保存先は 1 つ・DD-026-1）`);
+  }
+  if ((spec.oplog === undefined) !== (spec.snapshotStore === undefined)) {
+    throw new Error(
+      `serve:${at} oplog と snapshotStore は両方指定してください（片方だけでは再起動復旧が成立しません・DD-026-1）`,
+    );
+  }
+  if (spec.initialDocument !== undefined) {
+    if (spec.seedRows !== undefined) {
+      throw new Error(`serve:${at} initialDocument と seedRows は併用できません（初期内容の供給元は 1 つ・DD-026-1）`);
+    }
+    if (spec.restoreFrom !== undefined || spec.dataset !== undefined) {
+      throw new Error(`startServer:${at} initialDocument は restoreFrom / integrationDataset と併用できません（DD-026-1）`);
+    }
+  }
+}
+
+/**
+ * 1 文書分のランタイムを構築する（復旧 → 初期文書 → seed → Room/PersistentRoom/RoomBridge）。
+ * 途中で失敗した場合は開いたストアを閉じてから throw する（起動時の検疫でハンドルを残さない・DD-043 D3）。
+ */
+async function createDocumentRuntime(
+  spec: DocumentSpec,
+  deps: { clock: Clock; ttlMillis: number; snapshotIntervalOps?: number; diagnostics?: DiagnosticSink },
+): Promise<DocumentRuntime> {
+  const { clock, ttlMillis, diagnostics } = deps;
+  const documentId = spec.documentId;
+  const columnOrderStrings = spec.columnOrder;
+  const columnOrder = columnOrderStrings.map((c) => createColumnId(c));
+
+  // 永続化（DD-014 ファイル or DD-026-1 注入ストア）: 再起動復旧＝最新 snapshot（document@R）＋oplog tail（revision>R）で復元。
+  let oplog: OpLogStore | undefined;
+  let snapshotStore: SnapshotStore | undefined;
+  if (spec.persistenceDir !== undefined) {
+    oplog = new FileOpLogStore(join(spec.persistenceDir, 'oplog.jsonl'));
+    snapshotStore = new FileSnapshotStore(join(spec.persistenceDir, 'snapshots'));
+  } else if (spec.oplog !== undefined && spec.snapshotStore !== undefined) {
+    oplog = spec.oplog;
+    snapshotStore = spec.snapshotStore;
+  }
+
+  try {
+    let recovery: RecoveryReport | undefined;
+    let recoveredState: SequencerState | undefined;
+    if (oplog !== undefined && snapshotStore !== undefined) {
+      // documentId 相互検証（DD-018-1 AC1）: 使用済み persistenceDir を別 documentId で起動＝誤公開を fail-fast。
+      const recovered = await recoverSequencerState({ oplog, snapshotStore, columnOrder, documentId });
+      recovery = recovered.report;
+      // snapshot があれば op が 0 件でも復旧扱い（初期文書 snapshot@0 直後の再起動を fresh と誤判定して seed/initialDocument
+      // で上書きしない・DD-026-1）。
+      if (recovered.report.totalOps > 0 || recovered.report.fromSnapshotRevision !== undefined) {
+        recoveredState = recovered.state; // 既存文書を復元（seed しない）
+      }
+    }
+
+    // 初期文書（DD-026-1）: 復旧も restoreFrom も無いときだけ consumer の initialDocument から document@0 を組む。
+    // oplog だけでは初期内容を再構築できないため、ストアがあれば snapshot@0 を durable 化してから listen する（保存失敗は起動失敗）。
+    let initialDocumentState: SequencerState | undefined;
+    if (recoveredState === undefined && spec.restoreFrom === undefined && spec.initialDocument !== undefined) {
+      const input = await spec.initialDocument();
+      const state = freshSequencerState(columnOrder);
+      state.document = buildInitialDocument(columnOrder, input);
+      if (snapshotStore !== undefined) {
+        await snapshotStore.save(
+          createPersistedSnapshot({
+            documentId,
+            revision: 0,
+            createdAt: new Date(clock.now()).toISOString(),
+            snapshot: { ...serializeSnapshot(state), operationLog: [] },
+          }),
+        );
+      }
+      initialDocumentState = state;
+    }
+
+    // 復元起動: restoreFrom（in-memory 検査用）指定時は snapshot＋log から Sequencer 状態を再構築する。
+    // 永続化復元が優先（recoveredState）→初期文書→restoreFrom。いずれも無ければ空＋seed。
+    const initialState =
+      recoveredState ??
+      initialDocumentState ??
+      (spec.restoreFrom !== undefined ? deserializeSnapshot(spec.restoreFrom) : freshSequencerState(columnOrder));
+    const sequencer = new Sequencer(initialState, clock);
+    const room = new Room(sequencer, {
+      clock,
+      idGenerator: { next: () => randomUUID() }, // connectionId は実 UUID
+      ttlMillis,
+    });
+    // fresh（復元でも初期文書でも restoreFrom でもない）ときだけ seed する。永続化有効時は seed op を durable に oplog へ追記し、
+    // 次回再起動の復旧で seed 済み文書を再現できるようにする（seed が oplog に無いと edit の baseRevision が破綻する）。
+    const isFresh = recoveredState === undefined && initialDocumentState === undefined && spec.restoreFrom === undefined;
+    if (isFresh) {
+      if (spec.dataset !== undefined) {
+        seedIntegrationDataset(sequencer, documentId, spec.dataset);
+      } else {
+        seedInitialRows(sequencer, documentId, spec.seedRows ?? DEFAULT_SEED_ROWS);
+      }
+      if (oplog !== undefined) {
+        await oplog.append(sequencer.exportState().operationLog); // seed を durable 化（revision 1..k）
+      }
+    }
+
+    // 永続化有効時は PersistentRoom（durable ACK 境界＋snapshot 生成）で Room を包む。
+    const persistentRoom =
+      oplog !== undefined && snapshotStore !== undefined
+        ? new PersistentRoom(room, sequencer, oplog, snapshotStore, clock, {
+            documentId,
+            snapshotIntervalOps: deps.snapshotIntervalOps,
+          })
+        : undefined;
+    const bridge = new RoomBridge(persistentRoom ?? room, documentId, diagnostics);
+    // 検査/復元用 snapshot: 永続化有効時は durable frontier 以下に制限する（未 fsync revision を `/snapshot`・
+    // RunningServer.snapshot() から観測させない・DD-014-1 P1-3）。無効時は現在状態（全 in-memory が読取可能）。
+    const readSnapshot = (): SnapshotData =>
+      persistentRoom !== undefined ? persistentRoom.durableSnapshot() : serializeSnapshot(room.exportState());
+
+    /**
+     * サーバー起点 SetCells（DD-026-3）。clientSequence の採番と Room 投入の間に await を挟まない（同一 tick の並行 submit でも単調）。
+     * 引数エラーも同期 throw せず reject で返す（`.catch` だけの呼び出しでも取りこぼさない＝常に Promise 契約）。
+     */
+    const submit = (operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult> => {
+      if (actorId.length === 0) {
+        return Promise.reject(new Error('submit: actorId が空です'));
+      }
+      if (operation.changes.length === 0) {
+        return Promise.reject(new Error('submit: changes が空です（SetCells は 1 件以上）'));
+      }
+      let lifted: SetCellsOperation;
+      try {
+        lifted = liftSetCellsInput(operation); // 値検証（有限数・正準 LocalDate）は同期 throw → reject へ写す
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+      const operationId = createOperationId(randomUUID());
+      const envelope: ClientOperationEnvelope = {
+        protocolVersion: PROTOCOL_VERSION,
+        documentId: createDocumentId(documentId),
+        operationId,
+        transactionId: createTransactionId(`tx-${operationId}`),
+        actorId,
+        clientId: SERVER_CLIENT_ID,
+        clientSequence: (sequencer.clientSequenceTable.get(SERVER_CLIENT_ID) ?? 0) + 1,
+        baseRevision: sequencer.currentRevision,
+        operation: lifted,
+      };
+      return bridge.submitFromServer(envelope);
+    };
+
+    return {
+      documentId,
+      columnOrder: columnOrderStrings,
+      bridge,
+      recovery,
+      hash: () => documentHash(sequencer.document),
+      snapshot: readSnapshot,
+      submit,
+      close: async () => {
+        if (persistentRoom !== undefined) {
+          await persistentRoom.close(); // 保留中の durable 書込を確定して oplog/snapshot ハンドルを閉じる
+        }
+      },
+    };
+  } catch (error) {
+    // 起動途中の失敗（復旧失敗・snapshot@0 保存失敗・seed 追記失敗）でストアのハンドルを開いたまま残さない。
+    // 多文書構成では当該文書だけ検疫して残りで立ち上がるため、ここで閉じないとハンドルが漏れる（DD-043 D3）。
+    await closeStoreQuietly(oplog);
+    await closeStoreQuietly(snapshotStore);
+    throw error;
+  }
+}
+
+/** ストアを閉じる（後始末専用。close の失敗は元の失敗を隠さないよう記録だけして飲み込む・P08）。 */
+async function closeStoreQuietly(store: { close(): Promise<void> } | undefined): Promise<void> {
+  if (store === undefined) {
+    return;
+  }
+  try {
+    await store.close();
+  } catch (error) {
+    console.error(`collaboration-server: store close failed during startup cleanup: ${errorMessage(error)}`);
+  }
+}
+
+/** 構築済みランタイムを全て閉じる（起動途中の失敗・stop の後始末）。 */
+async function closeRuntimes(runtimes: Map<string, DocumentRuntime>): Promise<void> {
+  for (const runtime of runtimes.values()) {
+    await runtime.close();
+  }
+}
+
+/** 複数文書オプションを検証し、既定文書 ID を返す（DD-043）。 */
+function validateDocumentsOptions(documents: StartDocumentsOptions): string {
+  const ids = documents.documentIds;
+  if (ids.length === 0) {
+    throw new Error('serve: documents.documentIds が空です（v1 は起動時に serve する文書を 1 つ以上指定する・DD-043）');
+  }
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (id.length === 0) {
+      throw new Error('serve: documents.documentIds に空の documentId が含まれています（DD-043）');
+    }
+    if (seen.has(id)) {
+      throw new Error(`serve: documents.documentIds に重複した documentId '${id}' が含まれています（DD-043）`);
+    }
+    seen.add(id);
+  }
+  const defaultDocumentId = documents.defaultDocumentId ?? ids[0];
+  if (!seen.has(defaultDocumentId)) {
+    throw new Error(
+      `serve: documents.defaultDocumentId '${defaultDocumentId}' が documentIds に含まれていません（DD-043）`,
+    );
+  }
+  return defaultDocumentId;
+}
+
+/** 複数文書構成では単一文書オプションを受け付けない（どちらが効いているのか曖昧な起動を作らない・DD-043）。 */
+function assertNoSingleDocumentOptions(options: StartServerOptions, dataset: IntegrationDatasetConfig | undefined): void {
+  const conflicting: string[] = [];
+  if (options.documentId !== undefined) conflicting.push('documentId');
+  if (options.columnOrder !== undefined) conflicting.push('columnOrder');
+  if (options.seedRows !== undefined) conflicting.push('seedRows');
+  if (options.persistenceDir !== undefined) conflicting.push('persistenceDir');
+  if (options.oplog !== undefined) conflicting.push('oplog');
+  if (options.snapshotStore !== undefined) conflicting.push('snapshotStore');
+  if (options.initialDocument !== undefined) conflicting.push('initialDocument');
+  if (options.restoreFrom !== undefined) conflicting.push('restoreFrom');
+  if (dataset !== undefined) conflicting.push('integrationDataset');
+  if (conflicting.length > 0) {
+    throw new Error(
+      `serve: documents と単一文書オプション（${conflicting.join(' / ')}）は併用できません` +
+        '（文書構成の供給元は 1 つ。単一文書は documents なしの従来指定、複数文書は documents.resolve・DD-043）',
+    );
+  }
+}
+
+/** upgrade / HTTP 要求の `?documentId=` を取り出す（未指定・空は undefined＝既定文書）。 */
+function requestedDocumentId(url: string | undefined): string | undefined {
+  const value = new URL(url ?? '/', 'http://localhost').searchParams.get('documentId');
+  return value === null || value === '' ? undefined : value;
+}
+
 /** 開発用WSサーバーを起動する。listening 後に実ポートを含む RunningServer で resolve する（port 0 対応）。 */
 export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
   const host = options.host ?? '127.0.0.1';
-  const documentId = options.documentId ?? 'demo-doc';
-  // DD-005 統合データセット指定時は列順・シードを 50,000行×200列へ切り替える（既存の小規模デモとは排他）。
-  const datasetConfig = resolveDataset(options.integrationDataset);
-  const columnOrderStrings =
-    datasetConfig !== undefined
-      ? integrationColumnOrder(datasetConfig.cols).map((c) => String(c))
-      : options.columnOrder ?? ['col-a', 'col-b', 'col-c'];
-  const seedRows = options.seedRows ?? DEFAULT_SEED_ROWS;
   const heartbeatMillis = options.heartbeatMillis ?? DEFAULT_HEARTBEAT_MILLIS;
   const ttlMillis = options.ttlMillis ?? DEFAULT_TTL_MILLIS;
   const sweepMillis = options.sweepMillis ?? DEFAULT_SWEEP_MILLIS;
   const port = options.port ?? DEFAULT_PORT;
   const diagnostics = options.diagnostics;
-
-  const columnOrder = columnOrderStrings.map((c) => createColumnId(c));
   const clock: Clock = { now: () => Date.now() }; // アダプター層のみ実クロック（指示 1）
+  // DD-005 統合データセット指定時は列順・シードを 50,000行×200列へ切り替える（既存の小規模デモとは排他）。
+  const datasetConfig = resolveDataset(options.integrationDataset);
+  const runtimeDeps = { clock, ttlMillis, snapshotIntervalOps: options.snapshotIntervalOps, diagnostics };
 
-  // restoreFrom×persistenceDir 排他（DD-018-1 AC3・P2-4）: restoreFrom は in-memory 専用 bootstrap（検査/テスト）、
-  // persistenceDir は durable file 復旧。併用は revision 不連続（空 dir＋revision R の restoreFrom→次 accepted op が R+1 を
-  // 空 oplog 先頭へ書込→次回起動が連番違反で失敗）を生むため、起動時に明示拒否する（黙って壊さない・fail-fast）。
-  if (options.persistenceDir !== undefined && options.restoreFrom !== undefined) {
-    throw new Error(
-      'startServer: restoreFrom と persistenceDir は併用できません（restoreFrom=in-memory 専用復元・' +
-        'persistenceDir=durable 復旧。併用は revision 不連続を招くため明示拒否・DD-018-1 P2-4）',
-    );
-  }
-  // DD-026-1 排他: 保存先は 1 つ（persistenceDir=ファイル or 注入ストア）。初期内容の供給元も 1 つ（seed 系 or initialDocument）。
-  if (options.persistenceDir !== undefined && (options.oplog !== undefined || options.snapshotStore !== undefined)) {
-    throw new Error('serve: persistenceDir と oplog/snapshotStore は併用できません（保存先は 1 つ・DD-026-1）');
-  }
-  if ((options.oplog === undefined) !== (options.snapshotStore === undefined)) {
-    throw new Error('serve: oplog と snapshotStore は両方指定してください（片方だけでは再起動復旧が成立しません・DD-026-1）');
-  }
-  if (options.initialDocument !== undefined) {
-    if (options.seedRows !== undefined) {
-      throw new Error('serve: initialDocument と seedRows は併用できません（初期内容の供給元は 1 つ・DD-026-1）');
+  // 文書レジストリ（DD-043）。単一文書構成は N=1 の同じ経路を通る（分岐は「仕様の作り方」だけ）。
+  const runtimes = new Map<string, DocumentRuntime>();
+  const quarantined: QuarantinedDocument[] = [];
+  const multiDocument = options.documents !== undefined;
+  let defaultDocumentId: string;
+
+  if (options.documents !== undefined) {
+    assertNoSingleDocumentOptions(options, datasetConfig);
+    defaultDocumentId = validateDocumentsOptions(options.documents);
+    for (const documentId of options.documents.documentIds) {
+      let spec: DocumentSpec;
+      try {
+        // resolve の失敗・null は構成矛盾＝起動失敗（データ由来の復旧失敗と違い、再起動でも直らない）。
+        const config = await options.documents.resolve(documentId);
+        if (config === null) {
+          throw new Error(
+            `serve: documents.resolve('${documentId}') が null を返しました（documentIds に載せた文書は必ず引けること・DD-043）`,
+          );
+        }
+        spec = { documentId, columnOrder: [...config.columnOrder], ...omitUndefined(config) };
+        validateDocumentSpec(spec, ` [documentId=${documentId}]`);
+      } catch (error) {
+        await closeRuntimes(runtimes);
+        throw error;
+      }
+      try {
+        runtimes.set(documentId, await createDocumentRuntime(spec, runtimeDeps));
+      } catch (error) {
+        // D3 起動時の検疫: 復旧に失敗した文書だけ外し、残りの文書で立ち上がる（deterministic poison による
+        // 全文書道連れの再起動ループを防ぐ）。診断で大きく警告し、外形上は当該文書への接続が 404 になる。
+        const reason = errorMessage(error);
+        quarantined.push({ documentId, reason });
+        const summary = `document '${documentId}' を起動時の復旧失敗により serve から外しました（検疫・DD-043 D3）: ${reason}`;
+        if (diagnostics !== undefined) {
+          diagnostics('error', 'document-quarantined', summary);
+        }
+        console.error(`collaboration-server: ${summary}`); // 診断 hook 未指定でも黙らせない（P08）
+      }
     }
-    if (options.restoreFrom !== undefined || datasetConfig !== undefined) {
-      throw new Error('startServer: initialDocument は restoreFrom / integrationDataset と併用できません（DD-026-1）');
-    }
+  } else {
+    const documentId = options.documentId ?? 'demo-doc';
+    const spec: DocumentSpec = {
+      documentId,
+      columnOrder:
+        datasetConfig !== undefined
+          ? integrationColumnOrder(datasetConfig.cols).map((c) => String(c))
+          : options.columnOrder ?? ['col-a', 'col-b', 'col-c'],
+      ...(options.seedRows !== undefined ? { seedRows: options.seedRows } : {}),
+      ...(options.persistenceDir !== undefined ? { persistenceDir: options.persistenceDir } : {}),
+      ...(options.oplog !== undefined ? { oplog: options.oplog } : {}),
+      ...(options.snapshotStore !== undefined ? { snapshotStore: options.snapshotStore } : {}),
+      ...(options.initialDocument !== undefined ? { initialDocument: options.initialDocument } : {}),
+      ...(options.restoreFrom !== undefined ? { restoreFrom: options.restoreFrom } : {}),
+      ...(datasetConfig !== undefined ? { dataset: datasetConfig } : {}),
+    };
+    validateDocumentSpec(spec, '');
+    // 単一文書構成の復旧失敗は**従来どおり起動失敗**（検疫しない）。1 枚しか無い構成で 0 文書 listen を始めると
+    // consumer は起動成功と誤認して全接続が 404 になる。後方互換（DD-043 AC2）も兼ねる。
+    runtimes.set(documentId, await createDocumentRuntime(spec, runtimeDeps));
+    defaultDocumentId = documentId;
   }
 
-  // 永続化（DD-014 ファイル or DD-026-1 注入ストア）: 再起動復旧＝最新 snapshot（document@R）＋oplog tail（revision>R）で復元。
-  let oplog: OpLogStore | undefined;
-  let snapshotStore: SnapshotStore | undefined;
-  let recovery: RecoveryReport | undefined;
-  let recoveredState: SequencerState | undefined;
-  if (options.persistenceDir !== undefined) {
-    oplog = new FileOpLogStore(join(options.persistenceDir, 'oplog.jsonl'));
-    snapshotStore = new FileSnapshotStore(join(options.persistenceDir, 'snapshots'));
-  } else if (options.oplog !== undefined && options.snapshotStore !== undefined) {
-    oplog = options.oplog;
-    snapshotStore = options.snapshotStore;
-  }
-  if (oplog !== undefined && snapshotStore !== undefined) {
-    // documentId 相互検証（DD-018-1 AC1）: 使用済み persistenceDir を別 documentId で起動＝誤公開を fail-fast。
-    const recovered = await recoverSequencerState({ oplog, snapshotStore, columnOrder, documentId });
-    recovery = recovered.report;
-    // snapshot があれば op が 0 件でも復旧扱い（初期文書 snapshot@0 直後の再起動を fresh と誤判定して seed/initialDocument
-    // で上書きしない・DD-026-1）。
-    if (recovered.report.totalOps > 0 || recovered.report.fromSnapshotRevision !== undefined) {
-      recoveredState = recovered.state; // 既存文書を復元（seed しない）
-    }
-  }
-
-  // 初期文書（DD-026-1）: 復旧も restoreFrom も無いときだけ consumer の initialDocument から document@0 を組む。
-  // oplog だけでは初期内容を再構築できないため、ストアがあれば snapshot@0 を durable 化してから listen する（保存失敗は起動失敗）。
-  let initialDocumentState: SequencerState | undefined;
-  if (recoveredState === undefined && options.restoreFrom === undefined && options.initialDocument !== undefined) {
-    const input = await options.initialDocument();
-    const state = freshSequencerState(columnOrder);
-    state.document = buildInitialDocument(columnOrder, input);
-    if (snapshotStore !== undefined) {
-      await snapshotStore.save(
-        createPersistedSnapshot({
-          documentId,
-          revision: 0,
-          createdAt: new Date(clock.now()).toISOString(),
-          snapshot: { ...serializeSnapshot(state), operationLog: [] },
-        }),
+  /** `?documentId=` から文書を引く（未指定=既定文書）。未知・検疫済みは undefined＝拒否。 */
+  const lookupRuntime = (documentId: string | undefined): DocumentRuntime | undefined =>
+    runtimes.get(documentId ?? defaultDocumentId);
+  /** in-process API 用（未知は throw）。 */
+  const requireRuntime = (documentId?: string): DocumentRuntime => {
+    const runtime = lookupRuntime(documentId);
+    if (runtime === undefined) {
+      throw new Error(
+        `serve: documentId '${documentId ?? defaultDocumentId}' は serve していません（未知 ID・または起動時の検疫で除外・DD-043）`,
       );
     }
-    initialDocumentState = state;
-  }
+    return runtime;
+  };
 
-  // 復元起動: restoreFrom（in-memory 検査用）指定時は snapshot＋log から Sequencer 状態を再構築する。
-  // 永続化復元が優先（recoveredState）→初期文書→restoreFrom。いずれも無ければ空＋seed。
-  const initialState =
-    recoveredState ??
-    initialDocumentState ??
-    (options.restoreFrom !== undefined ? deserializeSnapshot(options.restoreFrom) : freshSequencerState(columnOrder));
-  const sequencer = new Sequencer(initialState, clock);
-  const room = new Room(sequencer, {
-    clock,
-    idGenerator: { next: () => randomUUID() }, // connectionId は実 UUID
-    ttlMillis,
-  });
-  // fresh（復元でも初期文書でも restoreFrom でもない）ときだけ seed する。永続化有効時は seed op を durable に oplog へ追記し、
-  // 次回再起動の復旧で seed 済み文書を再現できるようにする（seed が oplog に無いと edit の baseRevision が破綻する）。
-  const isFresh = recoveredState === undefined && initialDocumentState === undefined && options.restoreFrom === undefined;
-  if (isFresh) {
-    if (datasetConfig !== undefined) {
-      seedIntegrationDataset(sequencer, documentId, datasetConfig);
-    } else {
-      seedInitialRows(sequencer, documentId, seedRows);
-    }
-    if (oplog !== undefined) {
-      await oplog.append(sequencer.exportState().operationLog); // seed を durable 化（revision 1..k）
-    }
-  }
-
-  // 永続化有効時は PersistentRoom（durable ACK 境界＋snapshot 生成）で Room を包む。
-  const persistentRoom =
-    oplog !== undefined && snapshotStore !== undefined
-      ? new PersistentRoom(room, sequencer, oplog, snapshotStore, clock, {
-          documentId,
-          snapshotIntervalOps: options.snapshotIntervalOps,
-        })
-      : undefined;
-  const bridge = new RoomBridge(persistentRoom ?? room);
   const demoHtml = loadDemoHtml();
-  // 検査/復元用 snapshot: 永続化有効時は durable frontier 以下に制限する（未 fsync revision を `/snapshot`・
-  // RunningServer.snapshot() から観測させない・DD-014-1 P1-3）。無効時は現在状態（全 in-memory が読取可能）。
-  const readSnapshot = (): SnapshotData =>
-    persistentRoom !== undefined ? persistentRoom.durableSnapshot() : serializeSnapshot(room.exportState());
-
   const app = new Hono();
   // dev サーバー: playground 統合ページは別オリジン（Vite dev の別ポート）から /config・/snapshot を fetch するため
   // CORS を許可する（開発用途のみ。DD-005 Phase 2 headed smoke でクロスオリジン fetch のブロックが判明し追加）。
   app.use('*', cors());
   app.get('/', (c) => c.html(demoHtml));
+  // 死活監視の口。複数文書でも本文は 'ok' 固定（プローブ側の破壊的変更を作らない）。検疫の可視化は診断 hook と
+  // 当該文書への /config・/ws が 404 になることで行う（DD-043 論点③）。
   app.get('/health', (c) => c.text('ok'));
   // columnOrder はブラウザークライアント（playground 統合ページ）が ClientSession を同一列順で構築するために配る。
-  app.get('/config', (c) => c.json({ documentId, heartbeatMillis, columnOrder: columnOrderStrings }));
-  app.get('/snapshot', (c) => c.json(readSnapshot()));
+  // DD-043 D2: `?documentId=` で文書を指定できる（無指定は既定文書）。未知 ID は 404。
+  app.get('/config', (c) => {
+    const requested = requestedDocumentId(c.req.url);
+    const runtime = lookupRuntime(requested);
+    if (runtime === undefined) {
+      const missing = requested ?? defaultDocumentId;
+      diagnostics?.('warn', 'document-unknown', `/config: serve していない documentId '${missing}'（404）`);
+      return c.json({ error: 'unknown-document', documentId: missing }, 404);
+    }
+    return c.json({ documentId: runtime.documentId, heartbeatMillis, columnOrder: runtime.columnOrder });
+  });
+  app.get('/snapshot', (c) => {
+    const requested = requestedDocumentId(c.req.url);
+    const runtime = lookupRuntime(requested);
+    if (runtime === undefined) {
+      const missing = requested ?? defaultDocumentId;
+      return c.json({ error: 'unknown-document', documentId: missing }, 404);
+    }
+    return c.json(runtime.snapshot());
+  });
 
-  const { server, boundPort } = await new Promise<{ server: NodeServer; boundPort: number }>(
-    (resolve, reject) => {
+  let listening: { server: NodeServer; boundPort: number };
+  try {
+    listening = await new Promise<{ server: NodeServer; boundPort: number }>((resolve, reject) => {
       const created = serve({ fetch: app.fetch, port, hostname: host }, (info) => {
         resolve({ server: created, boundPort: info.port });
       });
       created.once('error', reject); // listen 失敗（ポート使用中等）は reject
-    },
-  );
+    });
+  } catch (error) {
+    await closeRuntimes(runtimes); // listen 前に構築済みの文書ハンドルを残さない
+    throw error;
+  }
+  const { server, boundPort } = listening;
   server.on('error', (error: Error) => {
     console.error(`collaboration-server: runtime error: ${error.message}`);
   });
 
   if (!(server instanceof HttpServer)) {
-    await closeServer(server, undefined, undefined);
+    await closeServer(server, undefined, undefined, runtimes);
     throw new Error('collaboration-server: expected a Node http.Server for WebSocket upgrade');
   }
 
@@ -486,9 +824,25 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   // 認証待ち（await 中）の raw socket。wss にも RoomBridge にも未登録のため、stop() で明示 destroy しないと server.close が
   // 待ち続ける（hook が settle しない＋peer が接続を保つ場合・Codex P2）。
   const pendingAuthSockets = new Set<Duplex>();
+  /**
+   * upgrade を受理する。DD-043 D2: `?documentId=` で宛先文書を決め（無指定は既定文書）、serve していない ID は 404 で拒否する。
+   * 評価順序は authenticate →文書解決（未認証の相手へ文書集合の存在を漏らさない。文書単位の認可は hook が url から行える）。
+   */
   const acceptUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer, identity: ServeIdentity | undefined): void => {
+    const requested = requestedDocumentId(req.url);
+    const runtime = lookupRuntime(requested);
+    if (runtime === undefined) {
+      const missing = requested ?? defaultDocumentId;
+      diagnostics?.('warn', 'document-unknown', `websocket upgrade rejected (404): serve していない documentId '${missing}'`);
+      socket.on('error', () => {}); // 応答書き込み中の error を listener 無しで放置しない（uncaught 化を防ぐ）
+      rejectUpgrade(socket, 404, 'Not Found');
+      return;
+    }
+    // 文書を明示した接続・複数文書構成の接続は、join の申告 documentId 不一致を切断する（他文書の envelope を混ぜない）。
+    // 判定に runtimes.size を使わないのは、検疫で 1 文書に減った複数文書構成が緩くなるのを避けるため。
+    const strictDocument = requested !== undefined || multiDocument;
     wss.handleUpgrade(req, socket, head, (ws) => {
-      bridge.onConnect(ws, identity);
+      runtime.bridge.onConnect(ws, identity, strictDocument);
     });
   };
   server.on('upgrade', (req, socket, head) => {
@@ -539,60 +893,60 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   });
 
   const sweepTimer = setInterval(() => {
-    bridge.sweep();
+    for (const runtime of runtimes.values()) {
+      runtime.bridge.sweep();
+    }
   }, sweepMillis);
 
   let closed = false;
-  /**
-   * サーバー起点 SetCells（DD-026-3）。clientSequence の採番と Room 投入の間に await を挟まない（同一 tick の並行 submit でも単調）。
-   * 引数エラーも同期 throw せず reject で返す（`.catch` だけの呼び出しでも取りこぼさない＝常に Promise 契約）。
-   */
-  const submit = (operation: ServeSetCellsInput, actorId: string): Promise<ServeSubmitResult> => {
+  /** サーバー起点 SetCells（DD-026-3）。DD-043: `documentId` 未指定は既定文書、serve していない ID は reject。 */
+  const submit = (operation: ServeSetCellsInput, actorId: string, documentId?: string): Promise<ServeSubmitResult> => {
     if (closed) {
       return Promise.reject(new Error('submit: server stopped'));
     }
-    if (actorId.length === 0) {
-      return Promise.reject(new Error('submit: actorId が空です'));
-    }
-    if (operation.changes.length === 0) {
-      return Promise.reject(new Error('submit: changes が空です（SetCells は 1 件以上）'));
-    }
-    let lifted: SetCellsOperation;
+    let runtime: DocumentRuntime;
     try {
-      lifted = liftSetCellsInput(operation); // 値検証（有限数・正準 LocalDate）は同期 throw → reject へ写す
+      runtime = requireRuntime(documentId);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
-    const operationId = createOperationId(randomUUID());
-    const envelope: ClientOperationEnvelope = {
-      protocolVersion: PROTOCOL_VERSION,
-      documentId: createDocumentId(documentId),
-      operationId,
-      transactionId: createTransactionId(`tx-${operationId}`),
-      actorId,
-      clientId: SERVER_CLIENT_ID,
-      clientSequence: (sequencer.clientSequenceTable.get(SERVER_CLIENT_ID) ?? 0) + 1,
-      baseRevision: sequencer.currentRevision,
-      operation: lifted,
-    };
-    return bridge.submitFromServer(envelope);
+    return runtime.submit(operation, actorId);
   };
 
   const url = `http://${host}:${boundPort}`;
   return {
     port: boundPort,
     url,
-    documentId,
-    hash: () => documentHash(sequencer.document),
-    snapshot: () => readSnapshot(),
-    connectionCount: () => bridge.connectionCount(),
-    recovery,
+    documentId: defaultDocumentId,
+    documentIds: [...runtimes.keys()],
+    quarantined,
+    hash: (documentId) => requireRuntime(documentId).hash(),
+    snapshot: (documentId) => requireRuntime(documentId).snapshot(),
+    connectionCount: (documentId) =>
+      documentId === undefined
+        ? [...runtimes.values()].reduce((sum, runtime) => sum + runtime.bridge.connectionCount(), 0)
+        : requireRuntime(documentId).bridge.connectionCount(),
+    recovery: runtimes.get(defaultDocumentId)?.recovery,
     submit,
     close: () => {
       closed = true;
-      return closeServer(server, wss, sweepTimer, persistentRoom, pendingAuthSockets);
+      return closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets);
     },
   };
+}
+
+/**
+ * 文書構成から `columnOrder` 以外を取り出し、`undefined` の値を持つキーを落とす（DD-043）。
+ * spread で `{ seedRows: undefined }` を作ると「明示指定あり」と誤判定され、initialDocument との排他検証が誤爆する。
+ */
+function omitUndefined(config: StartDocumentConfig): Omit<StartDocumentConfig, 'columnOrder'> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (key !== 'columnOrder' && value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return out as Omit<StartDocumentConfig, 'columnOrder'>;
 }
 
 /** 認証フックを実行し結果を検証する（DD-026-2）。不正な戻り値（actorId 空など）は throw＝500 で拒否（通さない）。 */
@@ -667,14 +1021,14 @@ async function closeServer(
   server: NodeServer,
   wss: WebSocketServer | undefined,
   sweepTimer: ReturnType<typeof setInterval> | undefined,
-  persistentRoom?: PersistentRoom,
+  runtimes?: Map<string, DocumentRuntime>,
   pendingAuthSockets?: Set<Duplex>,
 ): Promise<void> {
   if (sweepTimer !== undefined) {
     clearInterval(sweepTimer);
   }
-  if (persistentRoom !== undefined) {
-    await persistentRoom.close(); // 保留中の durable 書込を確定して oplog/snapshot ハンドルを閉じる
+  if (runtimes !== undefined) {
+    await closeRuntimes(runtimes); // 各文書の保留中 durable 書込を確定して oplog/snapshot ハンドルを閉じる
   }
   if (pendingAuthSockets !== undefined) {
     for (const socket of pendingAuthSockets) {
