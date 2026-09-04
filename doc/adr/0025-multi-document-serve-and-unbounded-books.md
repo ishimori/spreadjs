@@ -1,7 +1,7 @@
 # ADR-0025: 複数文書 serve の契約と無限 Book への拡張経路
 
 - **Status**: **Accepted**（2026-09-04・consumer 駆動〔松下 DD-014 段3 = 納入計画の共同編集化〕で起票。松下側セッションが DD-043 起票と同時に草稿を代行作成。**DD-043 の実装・全回帰 green をもって Accepted**。実装で確定した細目は下の「実装で確定した細目（DD-043）」に追記）
-- **関連**: ADR-0005（server-ordered operation log ＝「文書ごとに順序を決める審判は 1 つ」の前提）／ADR-0023（durable 永続化・snapshot＋tail 復元 ＝ 担当引っ越し可能性の基盤）／松下リポ `doc/DD/DD-014/sdk-requirements.md` §D（要件正本）・松下 `doc/decisions.md` D-008（consumer 側の決定: 年度単位の board 切替）
+- **関連**: ADR-0005（server-ordered operation log ＝「文書ごとに順序を決める審判は 1 つ」の前提）／ADR-0023（durable 永続化・snapshot＋tail 復元 ＝ 担当引っ越し可能性の基盤）／松下リポ **アーカイブ済み** `doc/archived/DD/DD-014/sdk-requirements.md` §D（要件正本。松下 DD-014 は 2026-09-04 に完了しアーカイブへ移動した）・松下 `doc/decisions.md` D-008（consumer 側の決定: 年度単位の board 切替）
 
 ## 背景・課題
 
