@@ -6,7 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-043 | 複数文書serve | 完了 | consumer 駆動（松下 納入計画③の共同編集化 = 松下 DD-014-3〔年度単位の board 切替〕）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§D**（DD-012 要件票 §A の U4 を置き換え）。将来制約の正本は **ADR-0025**（**Accepted**・実装で確定した細目を追記）。**実装・全回帰 green。実機検証は松下 DD-014-3 側** |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
 ## 保留・見送り
@@ -18,6 +17,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-043 | 複数文書serve | consumer 駆動（松下 納入計画③の共同編集化 = 松下 DD-014-3〔年度単位の board 切替〕）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§D**（DD-012 要件票 §A の U4 を置き換え）。将来制約の正本は **ADR-0025**（**Accepted**・実装で確定した細目を追記）。**実装・全回帰 green。実機検証は松下 DD-014-3 側** |
 | DD-041 | Presence枠タグのpane clip漏れ | 不具合修正。他ユーザーの activeCell 枠と名前タグを pane ごとの clip へ差し替えた（論点①=(a) で確定）。unit 5 件＋E2E 1 件で固定し、修正前は E2E で固定帯に 1,028 ピクセルの漏れ・修正後 0 を実測。Manual Gate M1 は E2E が自動化したため実機確認不要 |
 | DD-040 | リリースmanifestのgitDirty判定 | manifest に `closureDirty` / `closureDirtyPaths` / `dirtyNote` を追加し、配布再現性を `gitDirty` と読み分けられるようにした。既存 `gitDirty` の意味は不変（後方互換）。AC 1〜7 全て実機で照合 |
 | DD-039 | 固定ペインのヘッダーclip漏れ | consumer 駆動（松下 納入計画・生産納期の実機検証）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§C 追補 C7**。`drawHeaders` の帯 clip の内側に pane 境界の入れ子 clip を張り、固定ペインの見出しにスクロール側の見出しが重なる不具合を解消。AC1〜7 充足・**追加テストが修正前コードで fail することを実証**（unit 3/4・E2E 2/2）・全回帰 green（unit 1216／E2E 154）・frameP95 は修正前後とも 16.8ms・**Codex medium findings 0**。M1 は未実施＝既知の未保証境界へ移送 |

@@ -113,6 +113,7 @@ Evidence Level: standard
 - スコープの決め（consumer との壁打ち 2026-09-04）: v1 は N 枚固定 + 起動時の検疫。動的な部屋の作成・後片付け・実行時隔離は**使う consumer が現れるまで作らない**（③は 1〜2 枚・②は 3 シートで、いずれも起動時に既知）。ただし契約だけは無限 Book に整合させる → ADR-0025 を Proposed で同時起票
 - 検証（松下 DD-014-3 側で実施予定）: 2 ブラウザ収束・同一トランザクション投影・在庫/月計のサーバー起点算出
 - 実装・検証（spreadjs 側セッション・Opus）: Phase 1 の確定 → 実装 → 全回帰 green（`npm test` 1,229 / E2E 157）。ADR-0025 を Accepted 化し、実装で確定した細目（resolver と列挙の対・query 方式の根拠・評価順序・検疫の適用範囲・`/health` 不変）を ADR へ追記
+- 知見昇格: `doc/engineering-patterns.md` #19（サーバー権威フィールドは毎メッセージ検証）・#20（後始末ループは 1 件の失敗で打ち切らない）。仕様書同期は該当なし（`doc/spec/` は未作成）。ADR-0025 が設計の正本
 - **Codex レビュー（high・ユーザー指示）**: 依頼 `DD-043/codex-review-request.md` / 結果 `DD-043/codex-review-result.md`。P1 2 件・P2 2 件を**全て妥当と判断して反映**した
   - **P1 envelope の documentId を毎 op 検証していない**（正しく join した接続が後から別文書を名乗ると oplog が汚染され、次回起動で当該文書が検疫される）→ `RoomBridge.normalizeDocument` を追加（厳格接続は 1008 切断・従来経路は正規化）。裏取り: `recoverSequencerState` は oplog 全 entry の documentId を照合する（`packages/server/src/persistent-room.ts:117`）。回帰 M8/M9 を追加
   - **P1 1 文書の close 失敗で後始末が中断する**（後続文書・認証待ち socket・ws・http server が閉じ残る）→ `closeRuntimes` を「全文書を閉じ切ってから 1 つの Error にまとめる」形へ、`closeServer` は失敗を保持して teardown を完遂してから throw。起動途中の失敗経路は `closeRuntimesQuietly`（元の失敗を隠さない）。回帰 M10 を追加
