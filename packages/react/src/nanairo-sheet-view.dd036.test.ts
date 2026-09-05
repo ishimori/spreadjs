@@ -29,6 +29,34 @@ interface FakeInstance {
 
 const h = vi.hoisted(() => ({ instances: [] as FakeInstance[] }));
 
+describe('DD-048 border lifecycle', () => {
+  it('共通prop写像、solid省略と明示は同値、線種の変更だけremountする', () => {
+    const line = { color: '#123456', width: 1 };
+    const initial = standaloneProps({ defaultRowBorder: line, rowBorders: { r0: { bottom: line } }, columnBorders: { a: { left: line } } });
+    const { rerender } = render(createElement(NanairoSheetView, initial));
+    const instance = h.instances[0]!;
+    expect(instance.options.defaultRowBorder).toEqual(line);
+    rerender(createElement(NanairoSheetView, standaloneProps({ defaultRowBorder: { ...line, style: 'solid' }, columnBorders: { a: { left: { ...line, style: 'solid' } } }, rowBorders: { r0: { bottom: { ...line, style: 'solid' } } } })));
+    expect(h.instances).toHaveLength(1);
+    expect(instance.destroyed).toBe(false);
+    rerender(createElement(NanairoSheetView, { ...initial, defaultRowBorder: { ...line, style: 'dotted' } }));
+    expect(h.instances).toHaveLength(2);
+    expect(instance.destroyed).toBe(true);
+    rerender(createElement(NanairoSheetView, { ...initial, defaultRowBorder: { width: 1, style: 'dotted', color: '#123456' } }));
+    expect(h.instances).toHaveLength(2);
+    rerender(createElement(NanairoSheetView, { ...initial, defaultRowBorder: { ...line, style: 'dashed' } }));
+    expect(h.instances).toHaveLength(3);
+  });
+  it('共同編集でも共通線を渡し、同値再描画は接続instanceを保持する', () => {
+    const props = { serverUrl: 'http://localhost:8799', defaultRowBorder: { color: '#123456', width: 1, style: 'dotted' as const } };
+    const { rerender } = render(createElement(NanairoSheetView, props));
+    expect(h.instances[0]!.options.defaultRowBorder).toEqual(props.defaultRowBorder);
+    rerender(createElement(NanairoSheetView, { ...props, defaultRowBorder: { ...props.defaultRowBorder } }));
+    expect(h.instances).toHaveLength(1);
+    expect(h.instances[0]!.destroyed).toBe(false);
+  });
+});
+
 vi.mock('@nanairo-sheet/grid', () => ({
   mount(_target: { container: HTMLElement }, options: Record<string, unknown>): FakeInstance {
     const inst: FakeInstance = {

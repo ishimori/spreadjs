@@ -6,6 +6,11 @@ import type { IndexRange } from './viewport';
 export interface BoundaryBorder {
   readonly color: string;
   readonly width: number;
+  readonly style?: 'solid' | 'dotted' | 'dashed';
+}
+
+export function isPatternBorder(border: BoundaryBorder | undefined): boolean {
+  return border?.style === 'dotted' || border?.style === 'dashed';
 }
 
 export interface BorderLayerDeps {
@@ -89,12 +94,31 @@ export function drawBorders(
   ctx.clip();
   for (const line of lines) {
     const band = borderBand(line.position, line.border.width, dpr);
-    const start = Math.max(band.start, line.clipStart);
-    const end = Math.min(band.start + band.size, line.clipEnd);
+    // 外周の1device px線もデータ内へ残す（外側だけに位置してclipで消えない）。
+    const axisEnd = line.horizontal ? bottom : right;
+    const d = normalizeDpr(dpr);
+    const bandStart = line.position === axisEnd ? Math.min(band.start, (Math.floor(axisEnd * d) - 1) / d) : band.start;
+    const start = Math.max(bandStart, line.clipStart);
+    const end = Math.min(bandStart + band.size, line.clipEnd);
     if (end <= start) continue;
     ctx.fillStyle = line.border.color; // gridが実Canvasで検証・正規化済み
-    if (line.horizontal) ctx.fillRect(headerWidth, start, right - headerWidth, end - start);
-    else ctx.fillRect(start, headerHeight, end - start, bottom - headerHeight);
+    if (!isPatternBorder(line.border)) {
+      if (line.horizontal) ctx.fillRect(headerWidth, start, right - headerWidth, end - start);
+      else ctx.fillRect(start, headerHeight, end - start, bottom - headerHeight);
+      continue;
+    }
+    // 長軸はデータ領域の画面原点からdevice整数で刻む。pane/scrollで位相を再開しない。
+    // strokeのAAやlineCapに依存せず、最小1 device pxの四角い点を描く。
+    const pixels = Math.round(band.size * d);
+    const on = pixels * (line.border.style === 'dashed' ? 4 : 1);
+    const period = on + pixels * 2;
+    const origin = Math.round((line.horizontal ? headerWidth : headerHeight) * d);
+    const limit = (line.horizontal ? right : bottom) * d;
+    for (let position = origin; position < limit; position += period) {
+      const size = Math.min(on, limit - position) / d;
+      if (line.horizontal) ctx.fillRect(position / d, start, size, end - start);
+      else ctx.fillRect(start, position / d, end - start, size);
+    }
   }
   ctx.restore();
 }

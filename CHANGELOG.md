@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.4`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.5`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.5` | `alpha` | `0.1.0-experimental` | DD-048。点線・破線と defaultRowBorder |
 | `0.1.0-alpha.4` | `alpha` | `0.1.0-experimental` | DD-047。行列罫線 rowBorders / columnBorders |
 | `0.1.0-alpha.3` | `alpha` | `0.1.0-experimental` | DD-046。セル移動先のスクロールバー遮蔽を修正 |
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
@@ -20,6 +21,19 @@
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
 ## [Unreleased]
+
+## [0.1.0-alpha.5] - 2026-09-06
+
+### Added
+
+- **点線・破線と全行共通横罫線（DD-048・Experimental）**: `GridBorder.style`に`solid/dotted/dashed`を追加（省略はsolid）。grid/reactの`defaultRowBorder`で全データ行の下端へ共通線を指定でき、追加・削除・`setData`へ再mountなしで追従する。明示top/bottomが共通線より優先する。
+- 点線はdevice幅wの四角＋隙間2w、破線は長さ4w＋隙間2w。pattern境界の既定格子線を抑止し、列・行・値背景を保持。固定paneをまたいで周期を揃え、見出し・データ外へ延長しない。
+- Reactはstyle省略とsolid明示を同値として扱い、同値再renderでdraft・接続を保持。不正style/default設定は`border-config-invalid`。保存・コピー・共同編集protocolは不変。
+- 配布10 packageを`0.1.0-alpha.5`へ更新。行操作自体のUndo/Redoは既存SDKと同じく未提供（セル値Undo/Redoは利用可能）。
+
+### Fixed
+
+- 最終行下端・最終列右端の1device px罫線がデータ領域のclipで消えるケースを修正し、外周でも最低1device pxを内側へ残す。
 
 ## [0.1.0-alpha.4] - 2026-09-05
 

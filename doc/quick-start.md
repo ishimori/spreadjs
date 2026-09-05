@@ -219,6 +219,29 @@ grid.focus(); // 常駐 textarea へフォーカス → セルをクリック/�
 行挿入/削除後もIDへ追従し、新規行へ自動コピーしない。表示専用・mount時固定で、文書・保存・コピーTSVの値は変えない。
 Reactは同名propと同じ型（`GridBorder` / `GridRowBorders` / `GridColumnBorders`はgridからimport）を使う。
 
+alpha.5（DD-048）から`style?: 'solid' | 'dotted' | 'dashed'`を行・列の罫線へ指定できる。省略はsolid。
+`defaultRowBorder`は全データ行の下端（最終行を含む）へ適用し、挿入・削除・standaloneの`setData`後も再mountなしで追従する。
+明示top/bottomを上の規則で解決し、明示線がない境界だけ共通線を使う（共通線より細い明示線も優先）。
+0行・先頭行上端・見出し・行番号帯・データ外の空白には共通線を描かない。
+
+```tsx
+<NanairoSheetView
+  mode="standalone"
+  columnOrder={columnOrder}
+  initialData={data}
+  defaultRowBorder={{ color: '#cbd5e1', width: 1, style: 'dotted' }}
+  columnBorders={{ quantity: { right: { color: '#94a3b8', width: 1, style: 'dashed' } } }}
+/>
+```
+
+`quantity`は`columnOrder`に含まれる列IDを使う。gridの`mount`も同名オプション。
+線幅w=max(1, round(width×DPR)) device pxに対し、dottedは四角い点w＋隙間2w、dashedは線長4w＋隙間2w。
+横線はデータ領域の画面左端、縦線は画面上端をdevice整数へ丸めた位置が周期の原点で、固定paneやscrollで周期を再開しない。
+点線・破線の境界は既定格子線を抑止するので、隙間に列・行・値ベース背景が残る。外周の細線は最低1device pxを内側に残す。
+任意dash配列・動的setterは提供しない。不正styleも`border-config-invalid`。
+Reactはキー順の違い、style省略とsolid明示を同値として扱う。実際の設定変更は再mountになる。
+Undo/Redoは既存のセル値編集が対象で、行追加・削除自体のUndo/Redoは未提供。
+
 共同編集サーバーを立てられない場合（バックエンドが Node 以外・単独入力画面）は **単独グリッドモード**で mount する。
 `mode: 'standalone'` を渡すと同期サーバー無しで動作し、**確定値の保存は利用側アプリの責務**（認証・保存・DB 書き込みは全面的に利用側）。
 SDK は確定通知（`cell-commit` イベント）と再注入（`setData`）の契約だけを提供する。

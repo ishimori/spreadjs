@@ -1,9 +1,11 @@
 // DD-047: IDベースの表示専用罫線。公開宣言closureなので内部packageをimportしない。
 
-/** 実線。widthはCSS px（有限の0超〜8以下）、colorはCanvasで解釈できるCSS色。 */
+/** widthはCSS px（有限の0超〜8以下）、colorはCanvasで解釈できるCSS色。 */
 export interface GridBorder {
   readonly color: string;
   readonly width: number;
+  /** 省略はsolid。dottedは四角い点、dashedは幅の4倍の線分。間隔はSDK固定。 */
+  readonly style?: 'solid' | 'dotted' | 'dashed';
 }
 
 /** 行全体の上下境界。mount時固定・文書へ保存しない。 */
@@ -46,6 +48,7 @@ export function compileBorders(
   columnBorders: Readonly<Record<string, GridColumnBorders>> | undefined,
   columnOrder: readonly string[],
   normalizeColor: (color: string) => string | undefined,
+  defaultRowBorder?: GridBorder,
 ): CompiledBorders {
   const rows = new Map<string, GridRowBorders>();
   const columns = new Map<string, GridColumnBorders>();
@@ -57,8 +60,13 @@ export function compileBorders(
     }
     const color = typeof value.color === 'string' && value.color.trim() !== '' ? normalizeColor(value.color.trim()) : undefined;
     if (color === undefined) throw new BorderConfigError(`${label}: Canvasが解釈できるCSS colorが必要`);
-    return Object.freeze({ color, width: value.width });
+    if (value.style !== undefined && value.style !== 'solid' && value.style !== 'dotted' && value.style !== 'dashed') {
+      throw new BorderConfigError(`${label}: styleはsolid/dotted/dashedが必要`);
+    }
+    // solid省略は従来の解決結果と同一形状に保つ。
+    return Object.freeze({ color, width: value.width, ...(value.style === undefined || value.style === 'solid' ? {} : { style: value.style }) });
   }
+  const defaultRow = border(defaultRowBorder, 'defaultRowBorder');
   for (const [id, edges] of Object.entries(rowBorders ?? {})) {
     if (edges === null || typeof edges !== 'object') throw new BorderConfigError(`rowBorders.${id}: 辺オブジェクトが必要`);
     const top = border(edges.top, `rowBorders.${id}.top`);
@@ -74,9 +82,10 @@ export function compileBorders(
   }
   return {
     rowIds: Object.freeze([...rows.keys()]),
-    hasRows: rows.size > 0,
+    hasRows: rows.size > 0 || defaultRow !== undefined,
     hasColumns: columns.size > 0,
-    row: (before, after) => resolveBorder(before === undefined ? undefined : rows.get(before)?.bottom, after === undefined ? undefined : rows.get(after)?.top),
+    row: (before, after) => resolveBorder(before === undefined ? undefined : rows.get(before)?.bottom, after === undefined ? undefined : rows.get(after)?.top)
+      ?? (before === undefined ? undefined : defaultRow),
     column: (before, after) => resolveBorder(before === undefined ? undefined : columns.get(before)?.right, after === undefined ? undefined : columns.get(after)?.left),
   };
 }

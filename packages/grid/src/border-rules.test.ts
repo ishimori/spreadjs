@@ -1,9 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { BorderConfigError, compileBorders, resolveBorder, type GridRowBorders } from './border-rules';
+import { BorderConfigError, compileBorders, resolveBorder, type GridBorder, type GridRowBorders } from './border-rules';
 
 const red = { color: '#ff0000', width: 2 };
 const blue = { color: '#0000ff', width: 2 };
 const normalize = (color: string): string | undefined => /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : undefined;
+
+describe('DD-048 default / style', () => {
+  it('共通線は現存行の下だけ、非連続ID・新規ID・最終行にもfallbackする', () => {
+    const line: GridBorder = { ...red, width: 8, style: 'dotted' };
+    const c = compileBorders({ r900: { top: blue }, r2: { bottom: red } }, undefined, ['a'], normalize, line);
+    expect(c.hasRows).toBe(true);
+    expect(c.row(undefined, undefined)).toBeUndefined();
+    expect(c.row(undefined, 'r2')).toBeUndefined();
+    expect(c.row('r2', 'r900')).toEqual(blue); // 同幅後側・共通より細い明示線が優先
+    expect(c.row('r2', 'new')).toEqual(red);
+    expect(c.row('new', 'r900')).toEqual(blue);
+    expect(c.row('new', 'other')).toEqual(line);
+    expect(c.row('other', undefined)).toEqual(line);
+    expect(c.rowIds).toEqual(['r900', 'r2']); // 共通用IDを列挙しない
+  });
+  it.each(['solid', 'dotted', 'dashed'] as const)('style=%sを行列・共通で正規化、設定mutationから独立', (style) => {
+    const value = { ...red, style };
+    const c = compileBorders({ r0: { bottom: value } }, { a: { right: value } }, ['a'], normalize, value);
+    const expected = style === 'solid' ? red : { ...red, style };
+    value.width = 8;
+    expect(c.row('r0', 'r1')).toEqual(expected);
+    expect(c.row('new', undefined)).toEqual(expected);
+    expect(c.column('a', undefined)).toEqual(expected);
+    expect(Object.isFrozen(c.row('new', undefined))).toBe(true);
+  });
+  it.each([null, { ...red, style: 'double' }, { ...red, style: null }, { ...red, width: 0 }, { ...red, color: '' }])('不正共通設定を拒否 %j', (value) => {
+    const invalid = value as unknown as GridBorder;
+    expect(() => compileBorders(undefined, undefined, ['a'], normalize, invalid)).toThrow(BorderConfigError);
+    expect(() => compileBorders({ r0: { bottom: invalid } }, undefined, ['a'], normalize)).toThrow(BorderConfigError);
+    expect(() => compileBorders(undefined, { a: { left: invalid } }, ['a'], normalize)).toThrow(BorderConfigError);
+  });
+});
 
 describe('DD-047 border configuration', () => {
   it('未指定・空・辺なしは描画なし', () => {

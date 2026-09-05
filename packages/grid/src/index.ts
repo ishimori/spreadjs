@@ -28,7 +28,7 @@ import type { GridColumnType } from './column-types';
 export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
 import type { GridColumnFormatRule } from './format-rules';
 export type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
-import type { GridRowBorders, GridColumnBorders } from './border-rules';
+import type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
 
 // 列見出しキャプション＋数値/日付の表示書式（DD-033-2・Experimental 0.x）。Canvas 描画テキストのみを整形する
 // view-local 書式（raw 契約不変）。公開型は grid 自身（display-format.ts）で定義する（R7 に反さない）。
@@ -314,10 +314,12 @@ export interface GridCommonMountOptions {
    * 文書状態・protocol・snapshot・hash・cell-commit・コピー TSV は変更しない。
    */
   readonly rowBackgrounds?: Readonly<Record<string, string>>;
-  /** 行ID→上下の実線（CSS px、0超〜8以下）。未知行はwarn後に遅延解決。mount時固定・表示専用。 */
+  /** 行ID→上下の罫線（CSS px、0超〜8以下）。未知行はwarn後に遅延解決。mount時固定・表示専用。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
-  /** 列ID→左右の実線。隣接指定は太い線、同幅は右列leftが勝つ。文字overflowは指定境界で止まる。 */
+  /** 列ID→左右の罫線。隣接指定は太い線、同幅は右列leftが勝つ。文字overflowは指定境界で止まる。 */
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
+  /** 全データ行の下端（最終行を含む）へ共通罫線。個別top/bottom優先・行増減に追従。mount時固定。 */
+  readonly defaultRowBorder?: GridBorder;
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**

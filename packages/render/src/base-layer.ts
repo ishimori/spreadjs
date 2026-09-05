@@ -6,7 +6,7 @@
 // ここは「与えられた ViewportTransform をどう塗るか」だけを持つ。単体テストは座標側（viewport 等）で行う。
 
 import type { ChunkStore } from './chunk-store';
-import { drawBorders, type BorderLayerDeps } from './border-layer';
+import { drawBorders, isPatternBorder, type BorderLayerDeps } from './border-layer';
 import { deviceLineWidth, snapToDevice } from './dpi';
 import { createTextMetricsCache, type TextMetricsCache } from './text-cache';
 import { MAX_LEFT_INFLOW_SCAN, nearestLeftNonEmpty, overflowRightExtent } from './text-overflow';
@@ -210,6 +210,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     const right = lastRect.x + lastRect.width;
     // 縦罫線（列境界）。
     for (let col = pane.cols.start; col <= pane.cols.end; col += 1) {
+      if (isPatternBorder(deps.columnBorder?.(col))) continue;
       const boundary =
         col === pane.cols.end ? right : transform.cellRect(pane.rows.start, col).x;
       const x = snapToDevice(boundary, dpr);
@@ -218,6 +219,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
     // 横罫線（行境界）。
     for (let row = pane.rows.start; row <= pane.rows.end; row += 1) {
+      if (isPatternBorder(deps.rowBorder?.(row))) continue;
       const boundary =
         row === pane.rows.end ? bottom : transform.cellRect(row, pane.cols.start).y;
       const y = snapToDevice(boundary, dpr);
@@ -335,13 +337,16 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   ): void => {
     const rect = transform.cellRect(row, col);
     const inset = deviceLineWidth(dpr) / dpr; // 罫線 1 device px を CSS px へ（罫線を上書きしないための余白）
-    const w = rect.width - inset;
-    const h = rect.height - inset;
+    // patternの隙間まで値背景を保つ。solid/無指定は従来のinsetを維持する。
+    const left = isPatternBorder(deps.columnBorder?.(col)) ? 0 : inset;
+    const top = isPatternBorder(deps.rowBorder?.(row)) ? 0 : inset;
+    const w = rect.width - left;
+    const h = rect.height - top;
     if (w <= 0 || h <= 0) {
       return;
     }
     ctx.fillStyle = background;
-    ctx.fillRect(rect.x + inset, rect.y + inset, w, h);
+    ctx.fillRect(rect.x + left, rect.y + top, w, h);
   };
 
   /** 丸角矩形のパスを引く（バッジチップ・ctx.roundRect 非依存で決定的に描く）。 */

@@ -6,6 +6,7 @@ import type {
   GridColumnFormatRule,
   GridColumnType,
   GridEvent,
+  GridBorder,
 } from '@nanairo-sheet/grid';
 
 import { SCENARIOS, findScenario } from './scenarios';
@@ -93,6 +94,7 @@ const frozenRowCount = isMatrixViewScenario ? 1 : undefined;
 const frozenColumnCount = isMatrixViewScenario ? 5 : undefined;
 const columnBackgrounds = isMatrixViewScenario ? { 'col-6': '#eef3ff' } : undefined;
 const rowBackgrounds = isMatrixViewScenario ? { 'row-31': '#e5e7eb', 'row-46': '#fef3c7' } : undefined;
+const defaultRowBorder: GridBorder | undefined = isMatrixViewScenario ? { color: '#cbd5e1', width: 1, style: 'dotted' } : undefined;
 const rowBorders = isMatrixViewScenario ? {
   'row-31': { top: { color: '#64748b', width: 2 } },
   'row-46': { top: { color: '#64748b', width: 2 }, bottom: { color: '#64748b', width: 2 } },
@@ -235,6 +237,7 @@ const instance = mount(
     ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
     ...(rowBorders !== undefined ? { rowBorders } : {}),
     ...(columnBorders !== undefined ? { columnBorders } : {}),
+    ...(defaultRowBorder !== undefined ? { defaultRowBorder } : {}),
     onEvent,
   },
 );

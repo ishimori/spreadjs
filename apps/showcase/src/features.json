@@ -182,7 +182,7 @@
       "id": "matrix-view",
       "title": "マトリクス型シート（固定列・行列背景・区切り罫線）",
       "status": "available",
-      "summary": "列が日付で並ぶような横長のシート向けの表示制御。先頭 n 行 / n 列を固定して横スクロールしてもラベル列を画面左に残す（frozenRowCount / frozenColumnCount・既定は 1／1）、非稼働日など特定の列を値によらず網掛けする（columnBackgrounds）ほか、結論行・区切り行を値によらず行全体の帯にする（rowBackgrounds＝RowId→色。空セル・固定 pane・横スクロール先まで連続）ことができます。行背景と列背景の交差は行が優先し、値に応じたセル書式はさらに優先されます。サーバー算出行・見出し行は readOnlyRows で編集不可にでき、「今日へジャンプ」は scrollToColumn で指定列を可視域へ入れられます。すべて宣言的な mount オプション（React では同名 props）で、背景は view-local、読み取り専用行は権限制御ではありません。 月境界・製品ブロック・集計行はrowBorders / columnBordersで実線を指定できます（色とCSS px幅、0超〜8以下）。背景と併用でき、空セルと固定paneにも連続し、縦罫線で文字overflowが止まります。",
+      "summary": "列が日付で並ぶような横長のシート向けの表示制御。先頭 n 行 / n 列を固定して横スクロールしてもラベル列を画面左に残す（frozenRowCount / frozenColumnCount・既定は 1／1）、非稼働日など特定の列を値によらず網掛けする（columnBackgrounds）ほか、結論行・区切り行を値によらず行全体の帯にする（rowBackgrounds＝RowId→色。空セル・固定 pane・横スクロール先まで連続）ことができます。行背景と列背景の交差は行が優先し、値に応じたセル書式はさらに優先されます。サーバー算出行・見出し行は readOnlyRows で編集不可にでき、「今日へジャンプ」は scrollToColumn で指定列を可視域へ入れられます。すべて宣言的な mount オプション（React では同名 props）で、背景は view-local、読み取り専用行は権限制御ではありません。 月境界・製品ブロック・集計行はrowBorders / columnBordersで実線・点線・破線を指定できます（色とCSS px幅、0超〜8以下）。defaultRowBorderで全行の下端に共通の点線などを指定でき、追加・削除後も自動で追従します。個別線が共通線より優先され、点線の隙間に背景が残ります。背景と併用でき、空セルと固定paneにも連続し、縦罫線で文字overflowが止まります。",
       "source": "DD-036・DD-045・DD-047",
       "meta": "60×200 / 70×382 / 50,000×200行列・DPR 1/1.25/2 ／ unit・実ブラウザーE2E・性能検証",
       "demo": "./demo.html?scenario=matrix-view"

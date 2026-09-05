@@ -26,6 +26,7 @@ import {
   type GridColumnDisplayFormat,
   type GridColumnFormatRule,
   type GridRowBorders,
+  type GridBorder,
   type GridColumnBorders,
   type GridColumnType,
   type GridConnectionState,
@@ -82,10 +83,12 @@ export interface NanairoSheetViewCommonProps {
   readonly columnBackgrounds?: Readonly<Record<string, string>>;
   /** 行単位の静的背景色（grid rowBackgrounds・DD-045）。RowId → CSS color。 */
   readonly rowBackgrounds?: Readonly<Record<string, string>>;
-  /** 行ID→上下の実線。grid rowBordersと同じmount時固定の表示設定。 */
+  /** 行ID→上下の罫線。grid rowBordersと同じmount時固定の表示設定。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
-  /** 列ID→左右の実線。grid columnBordersと同じ契約。 */
+  /** 列ID→左右の罫線。grid columnBordersと同じ契約。 */
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
+  /** 全データ行の下端へ共通罫線。個別指定優先・行増減へ追従。mount時固定。 */
+  readonly defaultRowBorder?: GridBorder;
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -181,14 +184,14 @@ function nowMs(): number {
  * オブジェクトはキーをソートして直列化する。配列は順序を保つ（select の候補順・columnOrder は意味を持つ）。
  * `readOnlyColumns` は集合として扱うため呼び出し側でソート済みのコピーを渡す。
  */
-function canonicalJson(value: unknown): string {
+function canonicalJson(value: unknown, borderStyles = false): string {
   if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
+    return `[${value.map((v) => canonicalJson(v, borderStyles)).join(',')}]`;
   }
   if (value !== null && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`).join(',')}}`;
+    const keys = Object.keys(record).filter((k) => !(borderStyles && k === 'style' && (record[k] === 'solid' || record[k] === undefined))).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k], borderStyles)}`).join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';
 }
@@ -219,8 +222,9 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     frozenColumnCount: props.frozenColumnCount ?? null,
     columnBackgrounds: props.columnBackgrounds === undefined ? null : canonicalJson(props.columnBackgrounds),
     rowBackgrounds: props.rowBackgrounds === undefined ? null : canonicalJson(props.rowBackgrounds),
-    rowBorders: props.rowBorders === undefined ? null : canonicalJson(props.rowBorders),
-    columnBorders: props.columnBorders === undefined ? null : canonicalJson(props.columnBorders),
+    rowBorders: props.rowBorders === undefined ? null : canonicalJson(props.rowBorders, true),
+    columnBorders: props.columnBorders === undefined ? null : canonicalJson(props.columnBorders, true),
+    defaultRowBorder: props.defaultRowBorder === undefined ? null : canonicalJson(props.defaultRowBorder, true),
   });
 }
 
@@ -274,6 +278,7 @@ function toMountOptions(
     rowBackgrounds: props.rowBackgrounds,
     rowBorders: props.rowBorders,
     columnBorders: props.columnBorders,
+    defaultRowBorder: props.defaultRowBorder,
     onEvent,
     onDiagnostic,
   };

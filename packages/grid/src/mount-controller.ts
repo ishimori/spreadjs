@@ -1410,7 +1410,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
       // DD-045: 静的行背景をプリコンパイル（空色は fail-fast、RowId の存在は初回描画後に warn）。
       compiledRowBackgrounds = compileRowBackgrounds(options.rowBackgrounds);
-      compiledBorders = compileBorders(options.rowBorders, options.columnBorders, columnOrder, (color) => normalizeCanvasBorderColor(baseCtx, color));
+      compiledBorders = compileBorders(options.rowBorders, options.columnBorders, columnOrder, (color) => normalizeCanvasBorderColor(baseCtx, color), options.defaultRowBorder);
       // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
       // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
       compiledDisplay = compileDisplayFormats(options.columnDisplayFormats, options.columnCaptions, columnOrder, {
