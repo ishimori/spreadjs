@@ -14,6 +14,7 @@
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
 | `0.1.0-alpha.4` | `alpha` | `0.1.0-experimental` | DD-047。行列罫線 rowBorders / columnBorders |
+| `0.1.0-alpha.3` | `alpha` | `0.1.0-experimental` | DD-046。セル移動先のスクロールバー遮蔽を修正 |
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
@@ -29,6 +30,13 @@
 - 空セル・固定pane・resize・行挿入/削除後のID追従に対応。ヘッダーへ延長しない。mount時固定の表示設定で、文書値・保存・protocol・hash・コピーTSV・cell-commitは不変。Reactは同値のネストした設定を再生成してもremountしない。
 - 不正な幅/色・未知列は`border-config-invalid`でmountを失敗させる。未知行は`row-border-unknown` warn 1回、同IDの後着時に解決する。
 - **配布**: 10 packageを`0.1.0-alpha.4`へ更新。API版は既存`0.1.0-experimental`を維持する。任意セル範囲の囲み、破線、書式保存、動的setter、Excel罫線入出力は対象外。
+
+## [0.1.0-alpha.3] - 2026-09-05
+
+### Fixed
+
+- **セル移動先の可視性（DD-046）**: `setActiveCell` / `scrollToRow` / `scrollToColumn` の移動先がネイティブスクロールバーに隠れる問題を修正。スクロールバーを除く可視領域へ収める。公開シグネチャ・文書・保存形式は変更しない。
+- **配布**: 10 package の pack closure を `0.1.0-alpha.3` に更新。
 
 ## [0.1.0-alpha.2] - 2026-09-05
 

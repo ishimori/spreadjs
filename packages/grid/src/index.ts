@@ -402,7 +402,7 @@ export interface GridInstance {
   deleteRows(rowIds: readonly string[]): void;
   /**
    * 指定行を可視域へ入れる（Experimental 0.x・DD-035 R6・両モード）。行が body viewport の外にあれば最小スクロールで
-   * 可視化し（Excel の scroll-follow と同じ）、既に可視なら何もしない（横スクロールは動かさない）。`setData` 再注入・
+   * 可視化し（スクロールバーを除く領域。Excel の scroll-follow と同じ）、既に可視なら何もしない（横スクロールは動かさない）。`setData` 再注入・
    * `insertRows` の**直後**に新 RowId で呼んでも同期で成立する（行 Axis 未再構築なら、その場で再構築してから適用する）。
    * boot 未完了・初回描画前だけは保留して初回描画後に適用する（保留中はキー入力を遮断）。
    * 未知 RowId（tombstone・未注入）は診断 warn（code=`scroll-row-unknown`）のみで no-op

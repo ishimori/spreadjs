@@ -378,18 +378,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const bodyOriginY = HEADER_HEIGHT + transform.frozenHeight();
     // 固定行/列のセルはスクロール非依存ゆえ追従不要（body セルのみ）。
     // DD-036 C4: 軸指定（scrollToRow=縦のみ / scrollToColumn=横のみ）。既定 'both' は従来と同一挙動。
+    // DD-046: stageにはネイティブスクロールバーも含まれる。文字が隠れない可視域へ収める。
+    const visibleHeight = Math.min(viewportHeight, scroller.clientHeight || viewportHeight);
+    const visibleWidth = Math.min(viewportWidth, scroller.clientWidth || viewportWidth);
     if (axes !== 'horizontal' && cell.row >= frozenRowCount) {
       if (rect.y < bodyOriginY) {
         scroller.scrollTop += rect.y - bodyOriginY; // 上へはみ出し → スクロールアップ（負）
-      } else if (rect.y + rect.height > viewportHeight) {
-        scroller.scrollTop += rect.y + rect.height - viewportHeight; // 下へはみ出し → スクロールダウン
+      } else if (rect.y + rect.height > visibleHeight) {
+        scroller.scrollTop += rect.y + rect.height - visibleHeight;
       }
     }
     if (axes !== 'vertical' && cell.col >= frozenColCount) {
       if (rect.x < bodyOriginX) {
         scroller.scrollLeft += rect.x - bodyOriginX;
-      } else if (rect.x + rect.width > viewportWidth) {
-        scroller.scrollLeft += rect.x + rect.width - viewportWidth;
+      } else if (rect.x + rect.width > visibleWidth) {
+        scroller.scrollLeft += rect.x + rect.width - visibleWidth;
       }
     }
   }

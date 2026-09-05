@@ -13,6 +13,31 @@ test.describe.configure({ mode: 'serial' });
 
 const VIEWPORT_H = 800;
 
+test('DD-046: 命令移動のセルはスクロールバーを除く可視域へ収まる', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: VIEWPORT_H } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?extracols=40&seedrows=200');
+    await sa.waitReady(page);
+    // headlessのoverlay scrollbarに依存せず、通常スクロールバー相当の16pxを占有させる。
+    await page.locator('.nsheet-scroller').evaluate((element) => {
+      const scroller = element as HTMLElement;
+      scroller.style.right = '16px';
+      scroller.style.bottom = '16px';
+    });
+    await page.evaluate(() => window.__gridInstance?.setActiveCell('r150', 'col-x35'));
+    await expect.poll(async () => {
+      const active = await api<{ row: number; col: number } | null>(page, 'activeCell');
+      if (active === null || active.row !== 150 || active.col < 35) return false;
+      const rect = await sa.cellRectAt(page, active.row, active.col);
+      const size = await page.locator('.nsheet-scroller').evaluate((el) => ({ width: el.clientWidth, height: el.clientHeight }));
+      return rect !== null && rect.x + rect.width <= size.width && rect.y + rect.height <= size.height;
+    }).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
 async function api<R>(page: Page, method: string, args: unknown[] = []): Promise<R> {
   return page.evaluate(
     (payload: { method: string; args: unknown[] }) => {
@@ -263,4 +288,3 @@ test('Codex P2: 行 0 件の文書（列だけのシート）でも scrollToColu
     await context.close();
   }
 });
-
