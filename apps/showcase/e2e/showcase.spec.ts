@@ -63,3 +63,23 @@ test('デモ: 全シナリオのページが開けてパネルが表示される
     await expect(page.locator('#stage canvas').first()).toBeVisible({ timeout: 30_000 });
   }
 });
+
+test('DD-047: matrix-viewの実シードIDで行帯・行列罫線が描かれる', async ({ page }) => {
+  await page.goto(`/demo.html?scenario=matrix-view&server=${WS_ORIGIN}`);
+  await expect(page.locator('#conn')).toHaveClass(/online/);
+  await expect(page.locator('textarea.int-cell-editor')).toBeAttached();
+  const pixel = (x: number, y: number) => page.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('.nsheet-stage canvas') as HTMLCanvasElement;
+    return Array.from(canvas.getContext('2d')!.getImageData(x, y, 1, 1).data).slice(0, 3).join(',');
+  }, { x, y });
+  await expect.poll(() => pixel(532, 100)).toBe('148,163,184');
+  // onlineは初期replayより先に届く。実データ描画後にscrollが成立したことを確認する。
+  await expect.poll(() => page.evaluate(() => {
+    const s = document.querySelector('.nsheet-scroller');
+    if (!(s instanceof HTMLElement)) return -1;
+    s.scrollTop = 500;
+    return s.scrollTop;
+  })).toBe(500);
+  await expect.poll(() => pixel(600, 184)).toBe('100,116,139');
+  expect(await pixel(600, 190)).toBe('229,231,235');
+});

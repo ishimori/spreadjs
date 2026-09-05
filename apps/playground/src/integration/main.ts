@@ -8,6 +8,7 @@
 // のみを行う。内部パッケージ（core/collab/render/...）は一切 import しない（R1・Facade 経由に一本化）。
 
 import { mount } from '@nanairo-sheet/grid';
+import { borderOptions } from './border-options';
 import type {
   GridColumnDisplayFormat,
   GridColumnFormatRule,
@@ -393,6 +394,7 @@ const instance = mount(
     ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
     ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
     ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
+    ...borderOptions(params),
     onEvent: renderStatus,
   },
 );

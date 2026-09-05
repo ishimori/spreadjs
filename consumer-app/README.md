@@ -6,6 +6,9 @@ Stage 1 SDK Alpha の公開 Facade（`@nanairo-sheet/grid`・`@nanairo-sheet/rea
 利用者と同じ経路**（`npm pack` した tarball を install）で取り込み、**実挙動**（serve→mount→日本語入力→共同編集反映→
 destroy→再mount で leak なし）まで実証する vanilla TS アプリ。
 
+DD-047から罫線のReactサンプルも含む。`?borders&facade=grid|react&mode=standalone|collaboration`で4経路を確認する。
+ホスト側の`react` / `react-dom`はconsumer自身の依存として同時に導入し、SDKのReact peerと同じruntimeを使う。
+
 `consumer-harness/`（型疎通どまりの雛形）とは別物で、**実アプリ相当の実行**まで行う点が違う。
 
 ## S1-3（独立性）の担保

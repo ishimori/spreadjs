@@ -187,6 +187,8 @@ const grid = mount(
     displayName: 'alice',
     // RowId → 色。値によらず空セルを含む行全体を塗る（view-local・DD-045）。
     rowBackgrounds: { r30: '#e5e7eb' },
+    rowBorders: { r30: { top: { color: '#64748b', width: 2 } } },
+    columnBorders: { 'col-1': { right: { color: '#94a3b8', width: 2 } } },
     onEvent: (event: GridEvent) => {
       // connection / pending / rejected / divergence / error
       if (event.type === 'error') {
@@ -208,6 +210,14 @@ grid.focus(); // 常駐 textarea へフォーカス → セルをクリック/�
   交差は行が優先し、`columnFormats` の値ベース背景はさらに優先される。描画のみで、文書値・保存・コピー TSV は変わらない。
 
 ## 4b. 単独グリッドモード（サーバー不要・DD-024）
+
+`rowBorders` / `columnBorders`（alpha.4・DD-047）は行の`top/bottom`、列の`left/right`へ
+`{ color: CSS色, width: CSS px }`の実線を指定する。有限の`0 < width <= 8`を受理し、DPRに合わせてdevice pxへ丸める。
+同じ境界は太い線、同幅なら下側行のtop／右側列のleftを優先。交点は太い線、同幅なら横線を優先する。
+背景・値の上、選択・Presenceの下へ描画し、縦罫線で文字overflowを止める。空セル・固定paneを含むデータ領域に適用し、見出しへは延長しない。
+不正な色/幅・未知列は`border-config-invalid`でmount失敗。未知行は`row-border-unknown` warn 1回後、同ID到着時に適用する。
+行挿入/削除後もIDへ追従し、新規行へ自動コピーしない。表示専用・mount時固定で、文書・保存・コピーTSVの値は変えない。
+Reactは同名propと同じ型（`GridBorder` / `GridRowBorders` / `GridColumnBorders`はgridからimport）を使う。
 
 共同編集サーバーを立てられない場合（バックエンドが Node 以外・単独入力画面）は **単独グリッドモード**で mount する。
 `mode: 'standalone'` を渡すと同期サーバー無しで動作し、**確定値の保存は利用側アプリの責務**（認証・保存・DB 書き込みは全面的に利用側）。
@@ -306,6 +316,8 @@ export function OrderGrid() {
         mode="standalone"
         columnOrder={['col-a', 'col-b', 'col-c']}
         rowBackgrounds={{ r30: '#e5e7eb' }}
+        rowBorders={{ r30: { top: { color: '#64748b', width: 2 } } }}
+        columnBorders={{ 'col-b': { right: { color: '#94a3b8', width: 2 } } }}
         onCellCommit={handleCommit}
         style={{ position: 'absolute', inset: 0 }}
       />
@@ -316,7 +328,7 @@ export function OrderGrid() {
 
 - **props の変更契約（3 分類）**:
   - **識別系**（`mode`/`serverUrl`/`columnOrder`/`wrapColumns`/`documentId`/`displayName`/`clientId`、列スキーマ、
-    `frozenRowCount`/`frozenColumnCount`/`columnBackgrounds`/`rowBackgrounds`/`readOnlyRows`）の変更は
+    `frozenRowCount`/`frozenColumnCount`/`columnBackgrounds`/`rowBackgrounds`/`rowBorders`/`columnBorders`/`readOnlyRows`）の変更は
     **自動 remount**（destroy→mount）。配列（`columnOrder` 等）は**値**で比較するので、毎 render 新しい配列リテラルを
     渡しても内容が同じなら remount しない（安定参照が理想だが Facade が吸収する）。
   - **初期値系**（`initialData`/`initialColumnWidths`/`initialRowHeights`）は**初回 mount のみ**有効。mount 後の変更は

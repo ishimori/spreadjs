@@ -17,6 +17,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-047 | 行列の区切り罫線 | rowBorders/columnBorders実装・全回帰・alpha.4の10 tarball作成 |
 | DD-045 | 行単位の静的背景色 | rowBackgroundsをalpha.2で配布し、松下consumerへ統合・検証済み |
 | DD-044 | Tarball同梱物の健全化 | alpha.1の10 package配布セットへ更新し、開発用設定・テストの同梱を機械防止 |
 | DD-043 | 複数文書serve | consumer 駆動（松下 納入計画③の共同編集化 = 松下 DD-014-3〔年度単位の board 切替〕）。要件正本は松下リポ `doc/DD/DD-014/sdk-requirements.md` **§D**（DD-012 要件票 §A の U4 を置き換え）。将来制約の正本は **ADR-0025**（**Accepted**・実装で確定した細目を追記）。**実装・全回帰 green。実機検証は松下 DD-014-3 側** |

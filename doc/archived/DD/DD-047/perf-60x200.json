@@ -1,0 +1,19 @@
+{
+  "measuredAt": "2026-09-05T12:26:52.862Z",
+  "browser": "Chromium / Windows / DPR 1",
+  "baseline": {
+    "rows": 60,
+    "cols": 200,
+    "frameCount": 88,
+    "frameP95Ms": 16.799999999999955,
+    "worstMs": 16.800000000000068
+  },
+  "borders": {
+    "rows": 60,
+    "cols": 200,
+    "frameCount": 88,
+    "frameP95Ms": 16.700000000000045,
+    "worstMs": 16.800000000000068
+  },
+  "deltaMs": -0.09999999999990905
+}

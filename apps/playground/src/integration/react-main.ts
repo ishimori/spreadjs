@@ -11,6 +11,7 @@
 
 import { createElement, createRef, StrictMode, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { borderOptions } from './border-options';
 
 import {
   NanairoSheetView,
@@ -110,6 +111,7 @@ interface ReactStandaloneHandle {
   commitCount(): number;
   lastCommit(): readonly GridCellCommitChange[] | null;
   mount(): void;
+  rerender(): void;
   unmount(): void;
   reinject(data: GridStandaloneData): void;
   connectionState(): string;
@@ -140,6 +142,7 @@ function tree(): ReactNode {
       mode: 'standalone',
       columnOrder: COLUMN_ORDER,
       initialData: buildInitialData(),
+      ...borderOptions(new URLSearchParams(location.search)),
       onEvent,
       onCellCommit,
       style: { position: 'absolute', inset: '0', width: '100%', height: '100%' },
@@ -163,6 +166,9 @@ const handle: ReactStandaloneHandle = {
     root = createRoot(rootEl);
     root.render(tree());
     renderBar('standalone');
+  },
+  rerender(): void {
+    root?.render(tree());
   },
   unmount(): void {
     root?.unmount();

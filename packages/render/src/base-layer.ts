@@ -6,6 +6,7 @@
 // ここは「与えられた ViewportTransform をどう塗るか」だけを持つ。単体テストは座標側（viewport 等）で行う。
 
 import type { ChunkStore } from './chunk-store';
+import { drawBorders, type BorderLayerDeps } from './border-layer';
 import { deviceLineWidth, snapToDevice } from './dpi';
 import { createTextMetricsCache, type TextMetricsCache } from './text-cache';
 import { MAX_LEFT_INFLOW_SCAN, nearestLeftNonEmpty, overflowRightExtent } from './text-overflow';
@@ -58,7 +59,7 @@ export const DEFAULT_BASE_COLORS: BaseLayerColors = {
   linkText: '#1a73e8',
 };
 
-export interface BaseLayerDeps {
+export interface BaseLayerDeps extends BorderLayerDeps {
   readonly ctx: CanvasRenderingContext2D;
   readonly store: ChunkStore;
   readonly headerWidth: number;
@@ -276,7 +277,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       ctx.fillText(value, rect.x + CELL_PADDING, rect.y + rect.height / 2);
       return;
     }
-    const ext = overflowRightExtent(col, maxColExclusive, isEmptyAt);
+    const ext = overflowRightExtent(col, maxColExclusive, isEmptyAt, deps.columnBorder === undefined ? undefined : (index) => deps.columnBorder?.(index) !== undefined);
     let rightEdge = rect.x + rect.width;
     if (ext.endColExclusive > col + 1) {
       const lastRect = transform.cellRect(row, ext.endColExclusive - 1);
@@ -443,7 +444,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
           continue;
         }
         const isEmpty = isEmptyAt(row);
-        const originCol = nearestLeftNonEmpty(pane.cols.start, frozenColCount, MAX_LEFT_INFLOW_SCAN, isEmpty);
+        const originCol = nearestLeftNonEmpty(pane.cols.start, frozenColCount, MAX_LEFT_INFLOW_SCAN, isEmpty, deps.columnBorder === undefined ? undefined : (index) => deps.columnBorder?.(index) !== undefined);
         if (originCol === null) {
           continue;
         }
@@ -672,6 +673,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       drawPane(frame, findPane(panes, 'top'));
       drawPane(frame, findPane(panes, 'corner'));
       drawHeaders(frame);
+      drawBorders(ctx, frame, headerWidth, headerHeight, deps);
     },
   };
 }

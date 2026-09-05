@@ -11,6 +11,7 @@
 
 | code | phase | 意味 | consumer の対応目安 |
 |------|-------|------|------------------|
+| `border-config-invalid` | `config` | `rowBorders` / `columnBorders` の幅・CSS色・辺オブジェクト・列IDが不正（DD-047） | Canvasが解釈できる色、有限の`0 < width <= 8`、columnOrder内の列IDを渡す |
 | `config-unavailable` | `config` | `/config` の取得に失敗（ネットワーク/HTTP エラー） | serverUrl・サーバー起動・到達性を確認 |
 | `config-invalid` | `config` | `/config` の応答形式が不正（documentId/columnOrder 欠落等） | server-hono の版・応答を確認 |
 | `connect-failed` | `connect` | 初回 WS 接続の確立に失敗（接続確立前のトランスポートエラー） | ws 到達性・ポート・プロキシを確認 |

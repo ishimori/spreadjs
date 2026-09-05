@@ -38,6 +38,7 @@ import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } fr
 import type { ColumnTypeRegistry } from './column-types';
 import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
 import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackgrounds } from './format-rules';
+import { BorderConfigError, compileBorders, normalizeCanvasBorderColor, type CompiledBorders } from './border-rules';
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
 import { shouldArmLinkCandidate } from './link-column';
@@ -167,6 +168,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledBackgrounds: CompiledColumnBackgrounds | undefined;
   // DD-045: 静的行背景。hasAny()=false なら rowBackground フックを束縛せず、描画コスト増ゼロ。
   let compiledRowBackgrounds: CompiledRowBackgrounds | undefined;
+  let compiledBorders: CompiledBorders | undefined;
+  let rowBordersChecked = false;
   // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
   // hasAny()=false（両オプション未指定）なら base-layer への columnHeaderLabel/formatCellText フック束縛を省く。
   let compiledDisplay: CompiledColumnDisplay | undefined;
@@ -567,6 +570,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
       metrics.mark('firstOperable');
       validateReadOnlyRowsOnce(); // DD-036 C3: 未知 rowId の診断 warn（初回描画後に 1 回だけ）
       validateRowBackgroundsOnce(); // DD-045: 未知 RowId の診断 warn（初回描画後に 1 回だけ）
+      if (!rowBordersChecked && compiledBorders !== undefined && sync !== undefined) {
+        rowBordersChecked = true;
+        const unknown = compiledBorders.rowIds.filter((id) => sync?.view.rowIndexOf(createRowId(id)) === -1);
+        if (unknown.length > 0) diag.emit('warn', 'row-border-unknown', `rowBorders: 未知の行 ${unknown.join(', ')} → 到着後に適用`);
+      }
       syncCellLock(); // DD-036（Codex P2）: 初回データ描画時点の activeCell（0,0）のロックを確定させる
       if (focusRequested) {
         focusRequested = false;
@@ -1399,6 +1407,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
       // DD-045: 静的行背景をプリコンパイル（空色は fail-fast、RowId の存在は初回描画後に warn）。
       compiledRowBackgrounds = compileRowBackgrounds(options.rowBackgrounds);
+      compiledBorders = compileBorders(options.rowBorders, options.columnBorders, columnOrder, (color) => normalizeCanvasBorderColor(baseCtx, color));
       // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
       // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
       compiledDisplay = compileDisplayFormats(options.columnDisplayFormats, options.columnCaptions, columnOrder, {
@@ -1409,6 +1418,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     } catch (error) {
       // DD-027-1/2: columnTypes 不正 ／ DD-027-3: columnFormats 不正 は column-types-invalid へ、
       // DD-033-2: columnCaptions/columnDisplayFormats 不正 は column-display-invalid へ（意味を分けて障害切り分けを濁さない）。
+      if (error instanceof BorderConfigError) {
+        diag.emit('error', 'config-error', `border-config-invalid: ${error.message}`);
+        emit({ type: 'error', phase: 'config', code: 'border-config-invalid', message: error.message });
+        return false;
+      }
       if (error instanceof ColumnTypeConfigError || error instanceof FormatRuleConfigError) {
         diag.emit('error', 'config-error', `column-types-invalid: ${error.message}`);
         emit({ type: 'error', phase: 'config', code: 'column-types-invalid', message: error.message });
@@ -1859,6 +1873,18 @@ export function createGridController(target: GridMountTarget, options: GridMount
           }
         : {}),
       // DD-045: row index から現在の RowId を毎描画時に解決し、行挿入・削除後も同じ行実体へ追従する。
+      ...(compiledBorders?.hasRows === true ? {
+        rowBorder: (index: number) => compiledBorders?.row(
+          index > 0 ? backend.view.rowIdAt(index - 1) : undefined,
+          backend.view.rowIdAt(index),
+        ),
+      } : {}),
+      ...(compiledBorders?.hasColumns === true ? {
+        columnBorder: (index: number) => compiledBorders?.column(
+          index > 0 ? backend.view.columnIdAt(index - 1) : undefined,
+          backend.view.columnIdAt(index),
+        ),
+      } : {}),
       ...(compiledRowBackgrounds?.hasAny() === true
         ? {
             rowBackground: (rowIndex: number) => {

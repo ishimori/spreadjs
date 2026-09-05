@@ -104,4 +104,8 @@ declare global {
 
 window.__consumer = handle;
 renderBar();
-handle.mount();
+if (params.has('borders')) {
+  void import('./borders').then(({ mountBorderExample }) => mountBorderExample(container, params)).catch((error: unknown) => {
+    statusEl.textContent = `error: ${String(error)}`;
+  });
+} else handle.mount();

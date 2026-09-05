@@ -90,6 +90,7 @@
 |------|------|
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
+| `doc/archived/DD/DD-047/` | 行列罫線の確定契約・受け入れシナリオ・描画/性能/配布検証証跡 |
 | `doc/archived/DD/` | 完了済みDD（アーカイブ） |
 
 ## テンプレート

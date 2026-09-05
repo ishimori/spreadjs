@@ -173,6 +173,22 @@ describe('DD-036/DD-045 props の写像（AC8/AC10）', () => {
   });
 });
 
+describe('DD-047 罫線prop', () => {
+  it('両モードへ写像し、ネストしたキー順だけの変更ではremountせず、幅変更時だけ再作成', () => {
+    const border = { color: '#123456', width: 2 };
+    const { rerender } = render(createElement(NanairoSheetView, standaloneProps({ rowBorders: { r0: { top: border, bottom: border } }, columnBorders: { a: { right: border } } })));
+    expect(h.instances[0]!.options.columnBorders).toEqual({ a: { right: border } });
+    rerender(createElement(NanairoSheetView, standaloneProps({ columnBorders: { a: { right: { width: 2, color: '#123456' } } }, rowBorders: { r0: { bottom: border, top: border } } })));
+    expect(h.instances).toHaveLength(1);
+    rerender(createElement(NanairoSheetView, standaloneProps({ rowBorders: { r0: { top: { ...border, width: 3 } } } })));
+    expect(h.instances).toHaveLength(2);
+    expect(h.instances[0]!.destroyed).toBe(true);
+    rerender(createElement(NanairoSheetView, { serverUrl: 'http://localhost:8799', rowBorders: { r0: { top: border } }, columnBorders: { a: { left: border } } }));
+    expect(h.instances[2]!.options.rowBorders).toEqual({ r0: { top: border } });
+    expect(h.instances[2]!.options.columnBorders).toEqual({ a: { left: border } });
+  });
+});
+
 describe('DD-036 handle.scrollToColumn（契約 §4/§5）', () => {
   it('GridInstance.scrollToColumn へ直結する', () => {
     const ref = createRef<NanairoSheetViewHandle>();

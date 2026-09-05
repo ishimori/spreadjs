@@ -26,13 +26,14 @@ export function overflowRightExtent(
   originCol: number,
   maxColExclusive: number,
   isEmpty: (col: number) => boolean,
+  isBoundaryBlocked?: (boundaryIndex: number) => boolean,
 ): OverflowExtent {
   let c = originCol + 1;
-  while (c < maxColExclusive && isEmpty(c)) {
+  while (c < maxColExclusive && !isBoundaryBlocked?.(c) && isEmpty(c)) {
     c += 1;
   }
   // c < maxColExclusive なら非空セルで止まった（blocked）。c === maxColExclusive なら可視端まで空。
-  return { endColExclusive: c, blocked: c < maxColExclusive };
+  return { endColExclusive: c, blocked: c < maxColExclusive || isBoundaryBlocked?.(c) === true };
 }
 
 /**
@@ -44,9 +45,11 @@ export function nearestLeftNonEmpty(
   minCol: number,
   maxScan: number,
   isEmpty: (col: number) => boolean,
+  isBoundaryBlocked?: (boundaryIndex: number) => boolean,
 ): number | null {
   let steps = 0;
   for (let c = startColExclusive - 1; c >= minCol && steps < maxScan; c -= 1, steps += 1) {
+    if (isBoundaryBlocked?.(c + 1)) return null;
     if (!isEmpty(c)) {
       return c;
     }

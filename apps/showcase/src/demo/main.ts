@@ -92,7 +92,14 @@ const columnFormats: Record<string, readonly GridColumnFormatRule[]> | undefined
 const frozenRowCount = isMatrixViewScenario ? 1 : undefined;
 const frozenColumnCount = isMatrixViewScenario ? 5 : undefined;
 const columnBackgrounds = isMatrixViewScenario ? { 'col-6': '#eef3ff' } : undefined;
-const rowBackgrounds = isMatrixViewScenario ? { r30: '#e5e7eb', r45: '#fef3c7' } : undefined;
+const rowBackgrounds = isMatrixViewScenario ? { 'row-31': '#e5e7eb', 'row-46': '#fef3c7' } : undefined;
+const rowBorders = isMatrixViewScenario ? {
+  'row-31': { top: { color: '#64748b', width: 2 } },
+  'row-46': { top: { color: '#64748b', width: 2 }, bottom: { color: '#64748b', width: 2 } },
+} : undefined;
+const columnBorders = isMatrixViewScenario ? Object.fromEntries(
+  Array.from({ length: 20 }, (_, i) => [`col-${5 + i * 2}`, { right: { color: '#94a3b8', width: 2 } }]),
+) : undefined;
 
 // --- シナリオパネル ---------------------------------------------------------
 
@@ -226,6 +233,8 @@ const instance = mount(
     ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
     ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
     ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
+    ...(rowBorders !== undefined ? { rowBorders } : {}),
+    ...(columnBorders !== undefined ? { columnBorders } : {}),
     onEvent,
   },
 );

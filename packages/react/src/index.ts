@@ -25,6 +25,8 @@ import {
   type GridCellCommitChange,
   type GridColumnDisplayFormat,
   type GridColumnFormatRule,
+  type GridRowBorders,
+  type GridColumnBorders,
   type GridColumnType,
   type GridConnectionState,
   type GridDiagnosticHook,
@@ -80,6 +82,10 @@ export interface NanairoSheetViewCommonProps {
   readonly columnBackgrounds?: Readonly<Record<string, string>>;
   /** 行単位の静的背景色（grid rowBackgrounds・DD-045）。RowId → CSS color。 */
   readonly rowBackgrounds?: Readonly<Record<string, string>>;
+  /** 行ID→上下の実線。grid rowBordersと同じmount時固定の表示設定。 */
+  readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
+  /** 列ID→左右の実線。grid columnBordersと同じ契約。 */
+  readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -213,6 +219,8 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     frozenColumnCount: props.frozenColumnCount ?? null,
     columnBackgrounds: props.columnBackgrounds === undefined ? null : canonicalJson(props.columnBackgrounds),
     rowBackgrounds: props.rowBackgrounds === undefined ? null : canonicalJson(props.rowBackgrounds),
+    rowBorders: props.rowBorders === undefined ? null : canonicalJson(props.rowBorders),
+    columnBorders: props.columnBorders === undefined ? null : canonicalJson(props.columnBorders),
   });
 }
 
@@ -264,6 +272,8 @@ function toMountOptions(
     frozenColumnCount: props.frozenColumnCount,
     columnBackgrounds: props.columnBackgrounds,
     rowBackgrounds: props.rowBackgrounds,
+    rowBorders: props.rowBorders,
+    columnBorders: props.columnBorders,
     onEvent,
     onDiagnostic,
   };

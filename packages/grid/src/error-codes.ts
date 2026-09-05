@@ -6,6 +6,7 @@
 
 /** error イベント（boot/transport 失敗）の安定コード。phase と対で consumer の障害切り分けに使う。 */
 export const GRID_ERROR_CODES = [
+  'border-config-invalid', // 行列罫線の未知列・不正な幅/色（DD-047・config phase）
   'config-unavailable', // /config 取得に失敗（ネットワーク/HTTP エラー・config phase）
   'config-invalid', // /config の形式が不正（config phase）
   'connect-failed', // 初回 WS 接続の確立に失敗（connect phase）

@@ -6,18 +6,29 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.2`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.4`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.4` | `alpha` | `0.1.0-experimental` | DD-047。行列罫線 rowBorders / columnBorders |
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
 ## [Unreleased]
+
+## [0.1.0-alpha.4] - 2026-09-05
+
+### Added
+
+- **行列の区切り罫線（DD-047・Experimental）**: grid/reactの`rowBorders`（RowId→top/bottom）と`columnBorders`（ColumnId→left/right）で、月境界・製品ブロック・集計行へ色と幅を指定した実線を描ける。型`GridBorder` / `GridRowBorders` / `GridColumnBorders`をgridから公開。
+- 幅はCSS pxで`0 < width <= 8`、DPRに合わせてdevice pxへ丸める。同じ境界は太い線、同幅なら下行top／右列leftが勝つ。交点は太い線、同幅は横線を優先。行列背景・値ベース背景の上、選択・Presenceの下へ描画し、縦罫線では文字overflowを停止する。
+- 空セル・固定pane・resize・行挿入/削除後のID追従に対応。ヘッダーへ延長しない。mount時固定の表示設定で、文書値・保存・protocol・hash・コピーTSV・cell-commitは不変。Reactは同値のネストした設定を再生成してもremountしない。
+- 不正な幅/色・未知列は`border-config-invalid`でmountを失敗させる。未知行は`row-border-unknown` warn 1回、同IDの後着時に解決する。
+- **配布**: 10 packageを`0.1.0-alpha.4`へ更新。API版は既存`0.1.0-experimental`を維持する。任意セル範囲の囲み、破線、書式保存、動的setter、Excel罫線入出力は対象外。
 
 ## [0.1.0-alpha.2] - 2026-09-05
 

@@ -3,5 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
   "description": "独立 consumer 実アプリ相当（DD-016-2・要確認B=リポジトリ内 consumer-app/・npm workspaces 非登録＝boundary 検査対象外）。pack 済み tarball 経由で @nanairo-sheet/grid（描画/共同編集）と @nanairo-sheet/server-hono（serve）だけを使う vanilla TS アプリ。内部 package 直接 import・@nanairo-sheet/*/test-support import・workspace link・source path 参照・未公開依存は S1-3 不合格として scripts/consumer-app.sh が機械検査する。ビルド/テストの dev ツール（vite/playwright/tsx/tsc）はリポジトリルートのものを流用し、consumer-app/node_modules には SDK tarball のみを置く（＝SDK への依存面を Facade tarball だけに絞る）。"
 }

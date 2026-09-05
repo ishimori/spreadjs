@@ -6,6 +6,7 @@
 // 内部パッケージ（core/collab/...）は一切 import しない（R1・Facade 経由に一本化）。
 
 import { mount, GRID_API_VERSION } from '@nanairo-sheet/grid';
+import { borderOptions } from './border-options';
 import type {
   GridColumnDisplayFormat,
   GridColumnFormatRule,
@@ -371,6 +372,8 @@ const handle: StandaloneHandle = {
         ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
         ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
+        ...borderOptions(searchParams),
+        ...(searchParams.has('wrap') ? { wrapColumns: searchParams.get('wrap')!.split(',').filter(Boolean) } : {}),
         onEvent,
         onDiagnostic: (entry) => {
           diagnostics.push(entry);
