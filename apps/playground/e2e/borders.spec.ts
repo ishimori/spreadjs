@@ -143,8 +143,11 @@ test('DD-048 S3 2クライアントのinsert/delete/Undo/RedoとPresence・文�
     await expect.poll(() => collab.committedCell(b.page, editId!, editCol!)).toBe('点線を保つ');
     await a.page.keyboard.press('Control+z');
     await expect.poll(() => collab.committedCell(b.page, editId!, editCol!)).toBe('');
+    // undoの補償opがACKされる前にredoを打つと取りこぼす（undo-redo-collab.spec.tsと同じゲート）。
+    await expect.poll(async () => (await collab.snapshot(a.page)).pendingCount, { message: 'A の undo が ACK 済み' }).toBe(0);
     await a.page.keyboard.press('Control+y');
     await expect.poll(() => collab.committedCell(b.page, editId!, editCol!)).toBe('点線を保つ');
+    await expect.poll(async () => (await collab.snapshot(a.page)).pendingCount, { message: 'A の redo が ACK 済み' }).toBe(0);
     const newRow = (await sa.cellRectAt(b.page, 4, 2))!;
     await expect.poll(async () => (await patternPixels(b.page, true, newRow.y + newRow.height, 250, 'dotted'))[0]?.[0]).toBe('255,0,0,255');
     await collab.selectCell(a.page, 5, 2);
@@ -349,8 +352,19 @@ test('文字overflowは縦境界を越えず、左外からの流入も止まる
     return count;
   });
   expect(await countText()).toBe(0);
-  await page.evaluate(() => { const s = document.querySelector('.nsheet-scroller'); if (s instanceof HTMLElement) s.scrollLeft = 200; });
-  await expect.poll(async () => (await sa.cellRectAt(page, 5, 2))!.x).toBe(12);
+  // reinject直後はscrollLeftへの代入が捨てられたり、載ってもgrid側のscrollハンドラが
+  // 取りこぼして viewport が古いままになることがある（どちらもリトライされない）。
+  // rectが実際に動くまで代入をやり直す。
+  await expect.poll(async () => {
+    await page.evaluate(() => {
+      const s = document.querySelector('.nsheet-scroller');
+      if (s instanceof HTMLElement && s.scrollLeft !== 200) {
+        s.scrollLeft = 200;
+        s.dispatchEvent(new Event('scroll'));
+      }
+    });
+    return (await sa.cellRectAt(page, 5, 2))?.x;
+  }).toBe(12);
   expect(await countText()).toBe(0);
   await page.screenshot({ path: evidence('overflow.png') });
 });
@@ -367,7 +381,13 @@ test('wrapの自動行高と背景・罫線・選択を合成', async ({ page })
 });
 
 test('共同編集の同一設定でhash不変・Presenceと選択は罫線の上', async ({ browser }) => {
-  const query = { colborder: 'col-1:right:2:ff0000', rowborder: 'row-6:top:2:00aa00' };
+  // 共有文書は先行specのinsertでindexがずれる（row-6固定は index 5 と一致しない）。
+  // 実際に index 5 に居る RowId を引いてから mount 用queryを組み立てる。
+  const probe = await collab.openClient(browser, 'border-probe');
+  const rowAt5 = await collab.rowIdAt(probe.page, 5);
+  await probe.context.close();
+  expect(rowAt5).toBeDefined();
+  const query = { colborder: 'col-1:right:2:ff0000', rowborder: `${rowAt5!}:top:2:00aa00` };
   const a = await collab.openClient(browser, 'border-A', query);
   const b = await collab.openClient(browser, 'border-B', query);
   try {

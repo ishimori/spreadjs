@@ -165,12 +165,14 @@ test('CL-3: 下端はみ出し paste → 実行前拒否（AC6・paste-out-of-bo
       });
     });
 
-    // 最下行付近へスクロールして (49999,1) を選択。2 行 TSV を貼ると行末を越える。
-    await scrollTo(page, 49_999 * 22, 0);
-    await expect
-      .poll(async () => selectCell(page, 49_999, 1).then(() => true).catch(() => false), { message: '最下行可視' })
-      .toBe(true);
+    // 最下行へスクロールして選択。2 行 TSV を貼ると行末を越える。
+    // 共有文書は先行specのinsertで行数が増えるため、49,999固定ではなく実際の最終indexを使う。
     const before = await snapshot(page);
+    const lastRow = before.rowCount - 1;
+    await scrollTo(page, lastRow * 22, 0);
+    await expect
+      .poll(async () => selectCell(page, lastRow, 1).then(() => true).catch(() => false), { message: '最下行可視' })
+      .toBe(true);
     await writeClipboard(page, 'x\ny'); // 2 行（parseClipboardText→[['x'],['y']]）
     await page.keyboard.press('Control+v');
 
