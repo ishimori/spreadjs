@@ -2,6 +2,7 @@
 // 実ブラウザーの 2 クライアント（別コンテキスト＝別ユーザー）で確認する。
 //   E1 B の確定 → A に origin=remote・actorId=B の userId・前後値付きで届き、値は A の committed と一致。B 自身には origin=local。
 //   E3 B の参加・セル移動・切断が A の presence イベントに順に反映され、presences() と最後のイベントが一致。自分は先頭で self=true。
+//      DD-053（H10）拡張: B がセルを選ぶ**前**（join 完了時点）でも activeCell:null で A の一覧に載ることを含む。
 //   E2 単独ページでは確定で cell-commit が出るが remote-change / presence は出ず、presences() は []。
 // 共有 WS 文書（demo-doc・50,000 行）は直列の全 collab spec が共有するため、行 index は実行時に RowId を引き、
 // 書き込む値と表示名は実行ごとに一意にする（DD-048 の分離方針）。
@@ -70,6 +71,20 @@ test('DD-049: B の確定が A（remote）と B 自身（local）の remote-chan
     await expect
       .poll(async () => (await presenceState(a.page)).current[0], { message: 'A の presences() 先頭が自分' })
       .toMatchObject({ displayName: aliceName, self: true });
+
+    // DD-053（H10）: B はまだセルを選んでいない → それでも join 完了時点で A の参加者一覧に B が載る
+    // （activeCell: null。名前タグ・枠はこの時点では描かれない＝presence-adapter.test.ts が別途保証）。
+    await expect
+      .poll(async () => (await presenceState(a.page)).current.find((u) => u.displayName === bobName), {
+        message: 'DD-053: セルを選ぶ前の B も A の presences() に載る',
+      })
+      .toMatchObject({ displayName: bobName, self: false, activeCell: null });
+    // B 側からも A が見える（相互）。
+    await expect
+      .poll(async () => (await presenceState(b.page)).current.find((u) => u.displayName === aliceName), {
+        message: 'DD-053: B の presences() にも A が載る',
+      })
+      .toMatchObject({ displayName: aliceName, self: false });
 
     // B がセルを選ぶ → A の参加者一覧に B のアクティブセルが載る（RowId/ColumnId は実行時に引く）。
     const rowId = await ih.rowIdAt(b.page, 3);

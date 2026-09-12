@@ -131,6 +131,9 @@ export type GridEvent =
    * TTL 失効・自分のアクティブセル移動＝editor の処理後のマイクロタスクでまとめて）だけ発火する。現在値は
    * `GridInstance.presences()`。自分が切断中は最後に知っていた
    * 一覧を保持する（オンライン判定は connection イベントと併用する）。
+   * **「参加」＝join 完了時点**（DD-053 H10）: セルを選ばずに開いただけの利用者も一覧に載る
+   * （`activeCell: null`。名前タグ等の描画は既存どおり `activeCell` が付くまで出ない）。再接続でも同様に、
+   * 選択前後を問わず一覧から消えない。
    */
   | { readonly type: 'presence'; readonly users: readonly GridPresenceUser[] }
   /**
@@ -544,6 +547,7 @@ export interface GridInstance {
   /**
    * 現在の参加者一覧（Experimental 0.x・DD-049 H5）。直近の `presence` イベントの `users` と一致する（先頭に自分・続いて
    * 他者をサーバーから届いた順）。単独グリッドモード・初回 join 前・destroy 後は `[]`。
+   * セルを選ばずに参加しただけの利用者も `activeCell: null` で載る（DD-053 H10・「参加」＝join 完了時点）。
    */
   presences(): readonly GridPresenceUser[];
   /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */

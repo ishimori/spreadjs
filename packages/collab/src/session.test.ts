@@ -328,16 +328,18 @@ describe('Presence 送信・識別伝搬・welcome.colorKey（指示 3）', () =
 
   it('sendPresence は userId/displayName を充填し connection 単位・単調 sequence で送る', () => {
     const h = createSession();
-    startAndWelcome(h);
+    startAndWelcome(h); // DD-053: welcome 直後に activeCell なしの presence を1回送る（sequence=1）
     h.session.sendPresence({ activeCell: { rowId: row('row-1'), columnId: col('col-a') }, selectionRanges: [] });
     h.session.sendPresence({ activeCell: { rowId: row('row-2'), columnId: col('col-a') }, selectionRanges: [] });
     const presences = h.transport.sentOfType('presence');
-    expect(presences).toHaveLength(2);
+    expect(presences).toHaveLength(3);
     expect(presences[0].sequence).toBe(1);
-    expect(presences[1].sequence).toBe(2); // 単調
-    expect(presences[0].payload.userId).toBe('user-a');
-    expect(presences[0].payload.displayName).toBe('Alice');
-    expect(presences[0].payload.activeCell).toEqual({ rowId: row('row-1'), columnId: col('col-a') });
+    expect(presences[1].sequence).toBe(2);
+    expect(presences[2].sequence).toBe(3); // 単調
+    expect(presences[0].payload.activeCell).toBeUndefined(); // welcome 直後は選択前＝activeCell なし
+    expect(presences[1].payload.userId).toBe('user-a');
+    expect(presences[1].payload.displayName).toBe('Alice');
+    expect(presences[1].payload.activeCell).toEqual({ rowId: row('row-1'), columnId: col('col-a') });
   });
 
   it('presenceDelta/presenceRemoved で他タブの Presence を保持/削除（Phase 4 デモ経路）', () => {

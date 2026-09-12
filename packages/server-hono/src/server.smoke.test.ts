@@ -120,9 +120,11 @@ describe('server.smoke — 実 WS サーバー（ランダムポート）＋ ws-
     b.session.sendPresence({ activeCell: { rowId: row('row-2'), columnId: col('col-a') }, selectionRanges: [] });
     c.session.sendPresence({ activeCell: { rowId: row('row-3'), columnId: col('col-a') }, selectionRanges: [] });
 
+    // DD-053: welcome 直後にも activeCell なしの presence を送るため、knownPresences().length は接続確立時点で
+    // 既に 2 になりうる。ここで待つべきは「明示 sendPresence（activeCell 付き）が他接続へ届いたか」。
     await waitFor(
-      () => sessions.every((s) => s.knownPresences().length === 2),
-      'each client sees the other two presences',
+      () => sessions.every((s) => s.knownPresences().every((p) => p.activeCell !== undefined)),
+      'each client sees the other two presences with activeCell',
     );
     const seenByA = a.session.knownPresences().find((p) => p.userId === 'user-b');
     expect(seenByA).toBeDefined();

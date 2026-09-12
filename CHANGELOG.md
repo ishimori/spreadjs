@@ -50,6 +50,12 @@
 
 ### Fixed
 
+- **grid 参加しただけの利用者が参加者一覧に載らない（DD-053・広島空港 H10）**: セルを一度も選ばずにグリッドを
+  開いただけの利用者が、他の利用者の `presence` イベント／`presences()` に載っていなかった（join 完了後、
+  自分がアクティブセルを動かすまで presence を一切送っていなかったため）。join 完了（welcome 受信）のたびに
+  presence を送るよう修正し、選択前の利用者も `activeCell: null` で一覧に載るようにした（再接続時も同様）。
+  名前タグ・枠の描画は従来どおり `activeCell` が付くまで出ない。契約 §4「参加＝join 完了時点で載る」の明確化と
+  位置づける（wire メッセージの種別・payload の形は変更なし。公開 .d.ts snapshot の差分は JSDoc のみ）。
 - **grid Undo の幽霊エントリ（DD-052-4・ReadyCrew RC13）**: 単独グリッドモードで `onCellCommit` 内から consumer が
   同期的に `setData` を呼ぶと、`setData` の Undo 全消去より**後**に元の確定操作の Undo エントリが記録されてしまい、
   消去済みスタックへ実体のない「幽霊エントリ」が残っていた（`canUndo()` が誤って `true` のままになる）。Undo 記録を

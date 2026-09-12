@@ -138,8 +138,8 @@
       "id": "presence",
       "title": "他ユーザーの編集位置表示",
       "status": "available",
-      "summary": "誰がどのセルを見て・編集しているかをリアルタイムに表示（他ユーザーのアクティブセル・選択範囲を色枠と名前タグで表示。編集中はそのセル）。参加者一覧（表示名・アクティブセル・自分かどうか）を presences() と presence イベント（React は onPresenceChange）で受け取れ、アプリ側の「この表を開いている人」表示に使えます。",
-      "source": "DD-005・DD-041・DD-049（stage2-backlog §1 DD-019 の Presence 公開面を consumer 駆動で回収）",
+      "summary": "誰がどのセルを見て・編集しているかをリアルタイムに表示（他ユーザーのアクティブセル・選択範囲を色枠と名前タグで表示。編集中はそのセル）。参加者一覧（表示名・アクティブセル・自分かどうか）を presences() と presence イベント（React は onPresenceChange）で受け取れ、アプリ側の「この表を開いている人」表示に使えます。セルを一度も選ばずに開いただけの利用者も一覧に載ります（activeCell:null。名前タグ・枠は選択後に表示）。",
+      "source": "DD-005・DD-041・DD-049（stage2-backlog §1 DD-019 の Presence 公開面を consumer 駆動で回収）・DD-053",
       "meta": "unit＋実ブラウザー2クライアントE2E 検証済み（参加・セル移動・切断の反映）"
     },
     {

@@ -778,9 +778,11 @@ export class ClientSession implements TransportListener {
     }
     this.awaitingSync = false;
     this.resendAllPending(); // 生存 pending を再送（stale は既に Conflict Queue へ・S-J2/J3）
-    if (this.lastPresence !== undefined) {
-      this.sendPresence(this.lastPresence); // 新 connectionId で Presence 再登録（デモ再表示）
-    }
+    // DD-053: welcome（join完了）のたびに presence を送る。直前の presence があればそれを再送し（新 connectionId で
+    // Presence 再登録・デモ再表示）、一度も送っていなければ activeCell なしの空 presence を送る（H10: セルを選ばずに
+    // 参加しただけの利用者も他者の presences()/presence イベントに載るようにする）。wire メッセージの種別・
+    // payload の形は変えない（activeCell は元々 optional）。
+    this.sendPresence(this.lastPresence ?? { selectionRanges: [] });
   }
 
   private checkOfflineLimits(): void {
