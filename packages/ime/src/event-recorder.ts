@@ -35,10 +35,10 @@ export interface ImeEventTrace {
   readonly ime: string;
   readonly state: string;
   readonly eventType: string;
-  readonly key?: string;
-  readonly code?: string;
-  readonly isComposing?: boolean;
-  readonly inputType?: string;
+  readonly key?: string | undefined;
+  readonly code?: string | undefined;
+  readonly isComposing?: boolean | undefined;
+  readonly inputType?: string | undefined;
   readonly data?: string | null;
   readonly value: string;
   readonly selectionStart: number | null;

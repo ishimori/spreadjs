@@ -195,7 +195,7 @@ export function createRecoveredSequencer(state: SequencerState, clock: Clock): S
 
 export interface PersistentRoomOptions {
   documentId: string;
-  snapshotIntervalOps?: number; // 既定 1,000（要確認③）
+  snapshotIntervalOps?: number | undefined; // 既定 1,000（要確認③）
 }
 
 const DEFAULT_SNAPSHOT_INTERVAL = 1_000;

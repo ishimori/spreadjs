@@ -34,7 +34,7 @@ export interface SelectController {
    * `highlight:false`（DD-037 の suggest モード）はハイライト無しで開く＝Enter は候補でなく入力文字列を確定する
    * （決定④「ハイライトなしなら入力文字列をそのまま確定」）。
    */
-  open(params: { readonly options: readonly string[]; readonly currentValue: string; readonly highlight?: boolean }): void;
+  open(params: { readonly options: readonly string[]; readonly currentValue: string; readonly highlight?: boolean | undefined }): void;
   /**
    * 開いたまま候補を差し替える（DD-037 決定③の絞り込み）。ハイライトは解除する
    * （絞り込み結果を勝手に選ばせない＝入力文字列の確定を邪魔しない）。

@@ -159,7 +159,7 @@ export class FileOpLogStore implements OpLogStore {
     }
     const entries: ServerOperationEnvelope[] = [];
     let discardedTornRecords = 0;
-    for (let i = 0; i < lines.length; i += 1) {
+    for (const [i, line] of lines.entries()) {
       const isLastLine = i === lines.length - 1;
       if (isLastLine && !hasTrailingNewline) {
         // 末尾の改行なし行＝fsync 未完了の途中書き（未 ACK）。JSON として完全でも改行（commit マーカー）が無い＝
@@ -168,7 +168,7 @@ export class FileOpLogStore implements OpLogStore {
         continue;
       }
       try {
-        entries.push(JSON.parse(lines[i]) as ServerOperationEnvelope);
+        entries.push(JSON.parse(line) as ServerOperationEnvelope);
       } catch (error) {
         // 改行付き＝commit 済みレコードの破損＝既 ACK 済みデータの破損。fail-fast（AC6）。
         throw new Error(

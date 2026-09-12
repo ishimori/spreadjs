@@ -85,14 +85,14 @@ export interface ImeEditingSessionConfig {
   /** 状態機械の navigation 境界（rowCount/columnCount のみ使用。pixel は未使用）。 */
   readonly layout: GridLayout;
   /** activeCell/editingCell/selection が変わったら Presence を送る。 */
-  readonly onPresenceChange?: (update: PresenceUpdate) => void;
+  readonly onPresenceChange?: ((update: PresenceUpdate) => void) | undefined;
   /** 描画/配置の再要求（selection・編集状態・競合が変わったとき）。 */
-  readonly onChange?: () => void;
+  readonly onChange?: (() => void) | undefined;
   /**
    * K4（DD-021-2）: commit 時に対象行が削除済みで draft を退避したときの通知（Fable P2: サイレント退避の可視化）。
    * 呼び出し側（mount-controller）が公開 rejected イベント（row-unavailable）・診断へ写像する。
    */
-  readonly onDivert?: (draft: DivertedDraft) => void;
+  readonly onDivert?: ((draft: DivertedDraft) => void) | undefined;
 }
 
 export interface ImeEditingSession {

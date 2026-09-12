@@ -19,6 +19,7 @@
     "test:e2e:showcase": "playwright test --config apps/showcase/playwright.config.ts",
     "test:invariants": "vitest run tests/invariants",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck:consumer-strict": "tsc -p tsconfig.consumer-strict.json",
     "lint": "eslint . && npm run lint:boundary",
     "lint:boundary": "node scripts/boundary/check.mjs",
     "consumer-harness": "bash scripts/consumer-harness.sh"

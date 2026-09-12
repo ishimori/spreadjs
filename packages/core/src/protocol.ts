@@ -50,9 +50,9 @@ export interface SelectionById {
 export interface PresencePayload {
   userId: string;
   displayName: string;
-  activeCell?: CellAddressById;
+  activeCell?: CellAddressById | undefined;
   selectionRanges: SelectionById[];
-  editingCell?: CellAddressById;
+  editingCell?: CellAddressById | undefined;
 }
 
 /** サーバーが配信する Presence（connectionId/colorKey/sequence をサーバー付与）。 */

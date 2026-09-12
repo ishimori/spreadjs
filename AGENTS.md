@@ -24,6 +24,7 @@ spreadjs — 業務Webアプリへ組み込む TypeScript製リアルタイム�
 | `npm run build` | playground を本番ビルド |
 | `npm run test` | 全 workspace の Vitest を一括実行 |
 | `npm run typecheck` | 全 workspace の `tsc --noEmit`（`types` パッケージは DOM lib なしで型検査） |
+| `npm run typecheck:consumer-strict` | consumer の厳格な tsconfig（`exactOptionalPropertyTypes`・`noUncheckedIndexedAccess`）で、Facade 3 つの入口から辿れる SDK ソースを型検査（DD-050。CI の checks にも入っている） |
 | `npm run lint` | ESLint（flat config・typescript-eslint recommended）を一括実行 |
 | `bash scripts/dev-start.sh` | playground(Vite :5885)＋collaboration-server(:9499) を同時起動（ポートは標準+712で他プロジェクトと非衝突。`--integration` で統合PoCシード付き） |
 | `bash scripts/dev-start.sh --showcase` | SDK紹介サイト・機能カタログ＋動作デモ(:5886)＋server(:9499・50k行シード＋永続化) を起動（DD-017-2。台本: `apps/showcase/README.md`。`--server-only` で server のみ） |

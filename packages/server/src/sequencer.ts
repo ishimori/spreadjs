@@ -202,7 +202,12 @@ function primaryRejectCode(violations: OperationViolation[]): RejectCode {
       return code;
     }
   }
-  return violations[0].code;
+  // 呼び出し側は violations が 1 件以上のときだけ呼ぶ（空なら accepted 経路）。空は内部不変条件の破れとして止める（DD-050）。
+  const first = violations[0];
+  if (first === undefined) {
+    throw new Error('primaryRejectCode: violations が空です（内部不変条件違反）');
+  }
+  return first.code;
 }
 
 function ackMessage(operationId: OperationId, revision: number): OperationAckMessage {

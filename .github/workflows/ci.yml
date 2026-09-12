@@ -43,6 +43,7 @@ jobs:
       - run: npm ci
       - run: npm run lint # eslint ＋ boundary lint（R1〜R7）
       - run: npm run typecheck
+      - run: npm run typecheck:consumer-strict # DD-050: consumer の厳格な tsconfig（exactOptionalPropertyTypes・noUncheckedIndexedAccess）でも SDK ソースが通る
       - run: npm test # vitest 全件（tests/invariants・tests/contract 込み）
 
   e2e:

@@ -50,8 +50,9 @@ export function compileBorders(
   normalizeColor: (color: string) => string | undefined,
   defaultRowBorder?: GridBorder,
 ): CompiledBorders {
-  const rows = new Map<string, GridRowBorders>();
-  const columns = new Map<string, GridColumnBorders>();
+  // 解決済みの辺（無い辺は undefined）。公開型 GridRowBorders/GridColumnBorders の optional は変えない（DD-050）。
+  const rows = new Map<string, Readonly<{ top: GridBorder | undefined; bottom: GridBorder | undefined }>>();
+  const columns = new Map<string, Readonly<{ left: GridBorder | undefined; right: GridBorder | undefined }>>();
   const columnIds = new Set(columnOrder);
   function border(value: GridBorder | undefined, label: string): GridBorder | undefined {
     if (value === undefined) return undefined;

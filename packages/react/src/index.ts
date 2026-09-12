@@ -266,24 +266,38 @@ function sameInitialSnapshot(a: InitialSnapshot, b: InitialSnapshot): boolean {
   );
 }
 
+/**
+ * 値が undefined のキーを落としたコピー（DD-050）。未指定の props を grid の optional オプションへ undefined として
+ * 明示せず、キーごと渡さない（grid 側の扱いは未指定と同じ。consumer が exactOptionalPropertyTypes を使っても型が通る）。
+ */
+function omitUndefined<T extends object>(value: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) {
+      out[key] = entry;
+    }
+  }
+  return out as { [K in keyof T]?: Exclude<T[K], undefined> };
+}
+
 /** props → GridMountOptions（判別 union 写像・契約 §1）。onEvent/onDiagnostic は Facade が張る安定口。 */
 function toMountOptions(
   props: NanairoSheetViewProps,
   onEvent: (event: GridEvent) => void,
   onDiagnostic: GridDiagnosticHook | undefined,
 ): GridMountOptions {
-  const common = {
+  const common = omitUndefined({
     columnWidths: props.initialColumnWidths,
     rowHeights: props.initialRowHeights,
     wrapColumns: props.wrapColumns,
-    // DD-035: 列スキーマ系（grid 同名オプションへ 1:1）。undefined はそのまま渡す（grid 側で未指定＝現行挙動）。
+    // DD-035: 列スキーマ系（grid 同名オプションへ 1:1）。未指定は渡さない（grid 側で未指定＝現行挙動）。
     columnTypes: props.columnTypes,
     columnFormats: props.columnFormats,
     columnCaptions: props.columnCaptions,
     columnDisplayFormats: props.columnDisplayFormats,
     readOnly: props.readOnly,
     readOnlyColumns: props.readOnlyColumns,
-    // DD-036: 固定行列数・列背景・行 readOnly（undefined はそのまま渡す＝grid 側で未指定＝現行挙動）。
+    // DD-036: 固定行列数・列背景・行 readOnly（未指定は渡さない＝grid 側で未指定＝現行挙動）。
     readOnlyRows: props.readOnlyRows,
     frozenRowCount: props.frozenRowCount,
     frozenColumnCount: props.frozenColumnCount,
@@ -294,24 +308,25 @@ function toMountOptions(
     defaultRowBorder: props.defaultRowBorder,
     onEvent,
     onDiagnostic,
-  };
+  });
   if (props.mode === 'standalone') {
     return {
       ...common,
+      ...omitUndefined({ documentId: props.documentId, initialData: props.initialData }),
       mode: 'standalone',
       columnOrder: props.columnOrder,
-      documentId: props.documentId,
-      initialData: props.initialData,
     };
   }
   return {
     ...common,
-    mode: props.mode,
+    ...omitUndefined({
+      mode: props.mode,
+      columnOrder: props.columnOrder,
+      documentId: props.documentId,
+      displayName: props.displayName,
+      clientId: props.clientId,
+    }),
     serverUrl: props.serverUrl,
-    columnOrder: props.columnOrder,
-    documentId: props.documentId,
-    displayName: props.displayName,
-    clientId: props.clientId,
   };
 }
 

@@ -325,10 +325,16 @@ export class Room {
 }
 
 function operationsMessage(operations: ServerOperationEnvelope[]): ServerMessage {
+  // 呼び出し側（join の tail 送信・accepted の配信）は 1 件以上で呼ぶ。空は内部不変条件の破れとして止める（DD-050）。
+  const first = operations[0];
+  const last = operations[operations.length - 1];
+  if (first === undefined || last === undefined) {
+    throw new Error('operationsMessage: operations が空です（内部不変条件違反）');
+  }
   return {
     type: 'operations',
-    fromRevision: operations[0].revision,
-    toRevision: operations[operations.length - 1].revision,
+    fromRevision: first.revision,
+    toRevision: last.revision,
     operations,
   };
 }

@@ -113,9 +113,9 @@ export interface ConflictQueueEntry {
   clientSequence: number;
   baseRevision: number;
   reason: ConflictReason;
-  code?: RejectCode; // reason==='rejected'（server 判定）
-  violations?: OperationViolation[]; // reason==='revalidation-failed' or server details.violations
-  details?: RejectDetails; // server reject の現在値/現在revision（解決 UI 材料・PoC-A/Phase 4）
+  code?: RejectCode | undefined; // reason==='rejected'（server 判定）
+  violations?: OperationViolation[] | undefined; // reason==='revalidation-failed' or server details.violations
+  details?: RejectDetails | undefined; // server reject の現在値/現在revision（解決 UI 材料・PoC-A/Phase 4）
 }
 
 // ---- pending エントリー ----
@@ -130,9 +130,9 @@ interface PendingEntry {
 
 /** sendPresence が受け取る 3 種フィールド（userId/displayName は session が充填）。 */
 export interface PresenceUpdate {
-  activeCell?: CellAddressById;
+  activeCell?: CellAddressById | undefined;
   selectionRanges: SelectionById[];
-  editingCell?: CellAddressById;
+  editingCell?: CellAddressById | undefined;
 }
 
 export interface SessionConfig {
@@ -611,10 +611,10 @@ export class ClientSession implements TransportListener {
       return;
     }
     const index = this.pending.findIndex((e) => e.envelope.operationId === message.operationId);
-    if (index === -1) {
+    const entry = this.pending[index]; // index === -1 なら undefined
+    if (entry === undefined) {
       return; // 既に除去済み（reject は二重適用を起こさない）
     }
-    const entry = this.pending[index];
     this.pending.splice(index, 1);
     this.pushConflict(
       this.makeConflictEntry(entry, 'rejected', message.details?.violations, message.code, message.details),
@@ -949,11 +949,8 @@ export class ClientSession implements TransportListener {
    * 非厳密（D22）。ゆえに committed は本メソッドから導出せず権威管理する（収束担保）。
    */
   rollbackBaselineHash(): string {
-    let doc = this.view;
-    for (let i = this.pending.length - 1; i >= 0; i -= 1) {
-      doc = applyInverseSeed(doc, this.pending[i].inverseSeed);
-    }
-    return documentHash(doc);
+    const baseline = this.pending.reduceRight((doc, entry) => applyInverseSeed(doc, entry.inverseSeed), this.view);
+    return documentHash(baseline);
   }
 }
 
@@ -983,8 +980,7 @@ export function applyInverseSeed(doc: SheetDocument, seed: InverseSeed): SheetDo
       meta.lastChangedRevision = deleted.meta.lastChangedRevision;
     }
   }
-  for (let i = seed.cells.length - 1; i >= 0; i -= 1) {
-    const change = seed.cells[i];
+  for (const change of [...seed.cells].reverse()) {
     const before = change.value;
     if (before === undefined || before.kind === 'blank') {
       deleteCell(next, change.rowId, change.columnId); // 前値=空 → 不在へ（hash 上等価・S-B3）

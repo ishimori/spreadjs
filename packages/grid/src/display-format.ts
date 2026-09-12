@@ -226,7 +226,7 @@ function formatNumber(raw: string, fmt: GridNumberDisplayFormat): string {
 
 /** date 表示書式を適用する（受理形のみ整形・非受理/時刻欠落＋時刻トークンは raw 素通し）。 */
 function formatDate(raw: string, parts: readonly DatePatternPart[]): string {
-  let fields: Partial<Record<DateToken, string>>;
+  let fields: Partial<Record<DateToken, string | undefined>>;
   const dt = DATE_TIME_RE.exec(raw);
   if (dt !== null) {
     fields = { YYYY: dt[1], MM: dt[2], DD: dt[3], HH: dt[4], mm: dt[5], ss: dt[6] };

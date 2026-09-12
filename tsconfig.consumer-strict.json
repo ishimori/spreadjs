@@ -1,0 +1,21 @@
+{
+  // 厳格な consumer 設定での型検査（DD-050・広島空港 H9）。`npm run typecheck:consumer-strict` が使う。
+  // SDK は TS ソースのまま配る（package.json の types: ./src/index.ts）ため、consumer の tsc は SDK のソースも consumer の
+  // tsconfig で型検査する（skipLibCheck は .d.ts にしか効かない）。consumer が exactOptionalPropertyTypes・
+  // noUncheckedIndexedAccess を有効にしていても SDK 内で型エラーを出さないことを、ここで守る。
+  // 対象は Facade 3 つ（grid・react・server-hono）の入口から import で辿れるソースだけ（consumer が実際に読む範囲）。
+  // テスト・apps・test-support は含めない。lib/types は consumer の構成（ブラウザー＋Node）に合わせる。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "files": [
+    "packages/grid/src/index.ts",
+    "packages/react/src/index.ts",
+    "packages/server-hono/src/index.ts"
+  ]
+}

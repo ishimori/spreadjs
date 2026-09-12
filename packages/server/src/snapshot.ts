@@ -128,12 +128,12 @@ function structuralMatch(a: SheetDocument, b: SheetDocument): boolean {
   if (a.rowOrder.length !== b.rowOrder.length) {
     return false;
   }
-  for (let i = 0; i < a.rowOrder.length; i += 1) {
-    const rowId = a.rowOrder[i];
-    if (String(rowId) !== String(b.rowOrder[i])) {
+  for (const [i, rowId] of a.rowOrder.entries()) {
+    const otherRowId = b.rowOrder[i]; // 長さは上で一致を確認済み（undefined は検証関数として不一致に倒す）
+    if (otherRowId === undefined || String(rowId) !== String(otherRowId)) {
       return false;
     }
-    if ((a.rowMeta.get(rowId)?.tombstone ?? true) !== (b.rowMeta.get(b.rowOrder[i])?.tombstone ?? true)) {
+    if ((a.rowMeta.get(rowId)?.tombstone ?? true) !== (b.rowMeta.get(otherRowId)?.tombstone ?? true)) {
       return false;
     }
   }

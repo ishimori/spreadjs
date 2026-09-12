@@ -21,6 +21,19 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [Unreleased]
+
+### Fixed
+
+- **厳格な consumer 設定での型エラー（DD-050・広島空港 H9）**: consumer の tsconfig が `exactOptionalPropertyTypes`・`noUncheckedIndexedAccess` を
+  有効にしていると、SDK のソース（各 package の `types: ./src/index.ts`）が consumer 側の型検査で 38 件の型エラーになっていた
+  （`skipLibCheck` は .d.ts にしか効かないため consumer 側で回避できない）。SDK のソースを直し、Facade 3 つの入口から辿れるソースを
+  2 フラグ付きで検査する `npm run typecheck:consumer-strict` を CI の checks に足した。
+  - 公開 API・公開型の変更なし（公開 `.d.ts` snapshot の差分なし）。直したのは内部型の optional（`?: T | undefined`）、実行時に同値な
+    書き換え、内部不変条件のガード。
+  - react は、未指定の props を grid の mount オプションへ `undefined` のキーとして渡さず、キーごと省くようにした（grid 側の扱いは未指定と同じ）。
+  - 他の厳格フラグ（`noPropertyAccessFromIndexSignature` 等）は対象外。
+
 ## [0.1.0-alpha.6] - 2026-09-12
 
 ### Added

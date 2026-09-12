@@ -106,26 +106,27 @@ type NodeServer = ReturnType<typeof serve>;
 /** 診断の受け口（serve() の onDiagnostic へ橋渡し・未指定なら無出力）。 */
 export type DiagnosticSink = (level: 'debug' | 'info' | 'warn' | 'error', code: string, message: string) => void;
 
+// 各項目の `| undefined` は、serve() が ServeOptions の未指定を undefined のまま渡す実態に合わせたもの（DD-050）。
 export interface StartServerOptions {
-  port?: number; // 既定 8787。0 = OS 任せのランダムポート（テスト・指示 3）
-  host?: string; // 既定 '127.0.0.1'
-  documentId?: string; // 既定 'demo-doc'
-  columnOrder?: string[]; // 既定 ['col-a','col-b','col-c']
-  seedRows?: number; // 既定 5（初期グリッド row-1..row-N）。initialDocument とは排他
-  heartbeatMillis?: number; // 既定 5000（/config でデモへ伝える）
-  ttlMillis?: number; // 既定 15000（Room presence TTL）
-  sweepMillis?: number; // 既定 5000（sweep 実タイマー間隔）
-  restoreFrom?: SnapshotData; // 指定時: snapshot＋log から復元起動（seed をスキップ・revision 継続・S-K2/K4）
-  integrationDataset?: IntegrationDatasetConfig | boolean; // DD-005 Phase 2: 50,000行×200列・非空約10万を投入（true=既定規模）
-  persistenceDir?: string; // DD-014: 指定時にファイル永続化（oplog＋snapshot）を有効化。再起動で snapshot＋tail から復旧する
-  snapshotIntervalOps?: number; // DD-014: N op ごとに非同期 snapshot 生成（既定 1,000）
-  oplog?: OpLogStore; // DD-026-1: 注入 oplog（snapshotStore と同時指定・persistenceDir と排他）
-  snapshotStore?: SnapshotStore; // DD-026-1: 注入 snapshot ストア（oplog と同時指定・persistenceDir と排他）
-  initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
-  authenticate?: ServeAuthenticate; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
-  onAccepted?: ServeAcceptedHook; // DD-049 H2: 受理通知（durable・配信の後に fire-and-forget・失敗は診断 on-accepted-error）
-  diagnostics?: DiagnosticSink; // serve() の onDiagnostic への橋渡し
-  documents?: StartDocumentsOptions; // DD-043: 複数文書 serve（単一文書オプション群とは排他）
+  port?: number | undefined; // 既定 8787。0 = OS 任せのランダムポート（テスト・指示 3）
+  host?: string | undefined; // 既定 '127.0.0.1'
+  documentId?: string | undefined; // 既定 'demo-doc'
+  columnOrder?: string[] | undefined; // 既定 ['col-a','col-b','col-c']
+  seedRows?: number | undefined; // 既定 5（初期グリッド row-1..row-N）。initialDocument とは排他
+  heartbeatMillis?: number | undefined; // 既定 5000（/config でデモへ伝える）
+  ttlMillis?: number | undefined; // 既定 15000（Room presence TTL）
+  sweepMillis?: number | undefined; // 既定 5000（sweep 実タイマー間隔）
+  restoreFrom?: SnapshotData | undefined; // 指定時: snapshot＋log から復元起動（seed をスキップ・revision 継続・S-K2/K4）
+  integrationDataset?: IntegrationDatasetConfig | boolean | undefined; // DD-005 Phase 2: 50,000行×200列・非空約10万を投入（true=既定規模）
+  persistenceDir?: string | undefined; // DD-014: 指定時にファイル永続化（oplog＋snapshot）を有効化。再起動で snapshot＋tail から復旧する
+  snapshotIntervalOps?: number | undefined; // DD-014: N op ごとに非同期 snapshot 生成（既定 1,000）
+  oplog?: OpLogStore | undefined; // DD-026-1: 注入 oplog（snapshotStore と同時指定・persistenceDir と排他）
+  snapshotStore?: SnapshotStore | undefined; // DD-026-1: 注入 snapshot ストア（oplog と同時指定・persistenceDir と排他）
+  initialDocument?: (() => Promise<ServeInitialDocument> | ServeInitialDocument) | undefined; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
+  authenticate?: ServeAuthenticate | undefined; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
+  onAccepted?: ServeAcceptedHook | undefined; // DD-049 H2: 受理通知（durable・配信の後に fire-and-forget・失敗は診断 on-accepted-error）
+  diagnostics?: DiagnosticSink | undefined; // serve() の onDiagnostic への橋渡し
+  documents?: StartDocumentsOptions | undefined; // DD-043: 複数文書 serve（単一文書オプション群とは排他）
 }
 
 /**
@@ -163,7 +164,7 @@ export interface RunningServer {
   hash(documentId?: string): string; // 現在の権威文書 hash（smoke の収束 assert 用）。未指定=既定文書
   snapshot(documentId?: string): SnapshotData; // 検査用。未指定=既定文書
   connectionCount(documentId?: string): number; // リーク検査用（後始末後 0）。未指定=全文書合計
-  recovery?: RecoveryReport; // DD-014: 永続化有効時の再起動復旧内訳（snapshot revision・tail replay 数。既定文書のもの）
+  recovery?: RecoveryReport | undefined; // DD-014: 永続化有効時の再起動復旧内訳（snapshot revision・tail replay 数。既定文書のもの）
   submit(operation: ServeSetCellsInput, actorId: string, documentId?: string): Promise<ServeSubmitResult>; // DD-026-3
   close(): Promise<void>; // 全 ws terminate → wss.close → http server.close → clearInterval → oplog/snapshot close
 }
@@ -509,8 +510,7 @@ class RoomBridge {
    */
   private takeDeliverableSubmit(): SubmitDelivery | undefined {
     let pendingAhead = false;
-    for (let index = 0; index < this.submitDeliveries.length; index += 1) {
-      const delivery = this.submitDeliveries[index];
+    for (const [index, delivery] of this.submitDeliveries.entries()) {
       if (delivery.state === 'pending') {
         pendingAhead = true;
         continue;
@@ -806,9 +806,9 @@ async function createDocumentRuntime(
   deps: {
     clock: Clock;
     ttlMillis: number;
-    snapshotIntervalOps?: number;
-    diagnostics?: DiagnosticSink;
-    onAccepted?: ServeAcceptedHook;
+    snapshotIntervalOps?: number | undefined;
+    diagnostics?: DiagnosticSink | undefined;
+    onAccepted?: ServeAcceptedHook | undefined;
     /** serve 全体で共有する submitOperation の配信ループ（DD-049 Codex 第 2 回 P2）。 */
     deliveryLoop: SubmitDeliveryLoop;
   },
@@ -1017,8 +1017,9 @@ function validateDocumentsOptions(documents: StartDocumentsOptions): string {
     }
     seen.add(id);
   }
+  // ids は先頭で非空を確認済みゆえ ids[0] は必ずある（undefined は下の構成エラーに倒す・DD-050）。
   const defaultDocumentId = documents.defaultDocumentId ?? ids[0];
-  if (!seen.has(defaultDocumentId)) {
+  if (defaultDocumentId === undefined || !seen.has(defaultDocumentId)) {
     throw new Error(
       `serve: documents.defaultDocumentId '${defaultDocumentId}' が documentIds に含まれていません（DD-043）`,
     );
