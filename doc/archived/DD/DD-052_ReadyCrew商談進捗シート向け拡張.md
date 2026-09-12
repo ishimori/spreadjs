@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-12 | 2026-09-12 | 進行中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。Human Spec Gate完了・子DD-052-1〜5起票済み。子DD実装中 |
+| 2026-09-12 | 2026-09-13 | 完了 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。子DD-052-1〜5・DD-053を実装・Codexレビュー（xhigh・7件全採用）・0.1.0-alpha.8で配布完了 |
 
 > アプローチ: 標準（アンブレラ。要件の範囲・API の形・子DD分割を決め、実装は子DDで行う）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -101,13 +101,13 @@ Evidence Level: standard
 - [x] 🔬 機械検証: `bash scripts/dd-index-gen.sh`・`bash scripts/doc-check.sh` → エラー0
 
 ### Phase 3: 子DDの完了と引き渡し
-- [ ] 子DDの完了・配布を確認し、本DDのログへ版と対応 RC を1行ずつ記録
-- [ ] 🔬 機械検証: `ls doc/DD/ | grep DD-052-` → 0件（子DDがすべてアーカイブ済み）
+- [x] 子DDの完了・配布を確認し、本DDのログへ版と対応 RC を1行ずつ記録
+- [x] 🔬 機械検証: `ls doc/DD/ | grep DD-052-` → 0件（子DDがすべてアーカイブ済み・本コミットで一括実施）
 
 ### 完了前チェック
-- [ ] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
-- [ ] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ。深掘りが要る場合の手法: doc/da-method.md）
-- [ ] 🔬 全回帰1回（コード変更は子DDで回帰済みのため、本DDは `bash scripts/doc-check.sh` → パス）
+- [x] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
+- [x] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ。深掘りが要る場合の手法: doc/da-method.md）
+- [x] 🔬 全回帰1回（コード変更は子DDで回帰済みのため、本DDは `bash scripts/doc-check.sh` → パス）
 
 ## ログ
 
@@ -129,3 +129,7 @@ Evidence Level: standard
   7. [P2・DD-052-5] 範囲選択ドラッグ開始時に hover 終了（null）が発火せず開始セルの `cell-hover` が残留 → ドラッグ開始時に `updateCellHover(null)` を追加
 - 全7件に対し回帰テスト（unit: `standalone-session.test.ts`・`undo-stack.test.ts`／E2E: `cell-readonly-row-operations.spec.ts`・`string-columns.spec.ts`・`set-rows.spec.ts`・`header-click-cell-hover.spec.ts`）を追加し、フル回帰（unit 1360件・typecheck・consumer-strict・lint）を再確認した（E2E フルスイートは別途確認）
 - DD-053 が発見した既存バグ（K5・message storm）についても、独立した視点での確認を Codex へ依頼済み。結果: 「presence変更を戻した状態でも再現し、既存不具合という診断と整合」と確認（診断の妥当性を追認。修正は本レビューの対象外のまま `doc/plan/stage2-backlog.md` K5 に記録済み）
+- **alpha配布**: 10 package を `0.1.0-alpha.8` へ更新（`cea4a31`）。`bash scripts/release/build-release.sh --out release/0.1.0-alpha.8` → unit 1356件・typecheck・lint green → 10 tarball生成 → `verify-manifest.mjs`（sha256一致）・pack内容検査（111 files）PASS → `RELEASE_VENDOR_DIR=... bash scripts/consumer-app.sh`（S1-3不合格条件0・型解決green・server lifecycle・実挙動E2E 10/10）PASS → ZIP化（`nanairo-sheet-0.1.0-alpha.8.zip`・367,150 bytes / 12 entries・consumer向けREADME同梱）。配布先（ready_crew_db・hiroshima-airport）への実際の引き渡しは本セッションに両リポジトリへの直接アクセスがないため、配布物（release/0.1.0-alpha.8/ と ZIP）をユーザーへ引き渡し、以降の統合は各consumer側セッションの担当とする
+- 受け入れ基準の照合: #1〜#3は達成。#4「子DDが完了するたびにalpha配布」は文言どおりではなく、5子DD＋DD-053の実装完了を待ってからCodexレビュー・修正を経て**まとめて1回**alpha.8で配布した（各子DDのログに「親DD-052でまとめて実施」と明記済みの計画どおり）。「版・変更点」は本ログ・CHANGELOG・release READMEに記録済みで実質を満たすが、AC文言の「都度」とは異なる運用だったことを明記する。「つなぎの外し方」は該当なし（RC1〜14はいずれも新規機能でconsumer側の暫定回避コードの解消を伴わない）
+- 😈 セルフレビュー: (1) 上記AC4の文言と実運用の乖離以外に実害のある齟齬は見当たらない。(2) 7件のCodex指摘はいずれも「値は確定時ガードで守られるが入口/履歴/順序に穴がある」という同系統の見落とし（既存の判定関数・キュー・記録経路を新機能から呼び忘れる／新旧2系統を素朴に直列結合して順序が壊れる）で、個別のロジックミスというより「既存の共有関数を拡張する設計は安全だが、その関数を呼ぶべき**全呼び出し元**を洗い出す網羅性」が甘かったことが根本傾向。次回以降、新規readOnly/hover等の軸を追加する際は、既存の同種軸（列/行）の呼び出し元を`grep`で全列挙してから対称に配線する、という手順を明示的に踏むとよい
+- 完了処理: 子DD-052-1〜5・DD-053を含む6DDのステータスを完了へ更新し、本コミットでまとめてアーカイブする

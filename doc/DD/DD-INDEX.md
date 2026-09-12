@@ -6,13 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-053 | 参加しただけの利用者を参加者一覧に載せる | 検討中 | 広島 DD-005-3 で発見。セルを選ばずに開いた人が他者の presence 一覧・名前タグに出ない（DD-049 契約 §4 との食い違い） |
-| DD-052 | ReadyCrew商談進捗シート向け拡張 | 検討中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。範囲と子DD分割は Human Spec Gate 待ち |
-| DD-052-1 | 長文セル編集 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC1・RC2）。Alt+Enter＝セル内改行＋長文編集欄の自動伸長 |
-| DD-052-2 | 文字列として保つ列 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC12）。列オプション `stringColumns` で型自動変換を止める |
-| DD-052-3 | 編集の制限 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC3・RC14） |
-| DD-052-4 | 再注入と元に戻す履歴 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC4・RC13） |
-| DD-052-5 | 見出しクリックとホバーの通知 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC5・RC6） |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
@@ -26,6 +19,13 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-053 | 参加しただけの利用者を参加者一覧に載せる | 広島 DD-005-3 で発見。実装・全検証green・Codexレビュー（DD-052一式とまとめて実施・本DD該当分の指摘なし）済み。0.1.0-alpha.8で配布済み |
+| DD-052 | ReadyCrew商談進捗シート向け拡張 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。子DD-052-1〜5・DD-053を実装・Codexレビュー（xhigh・7件全採用）・0.1.0-alpha.8で配布完了 |
+| DD-052-1 | 長文セル編集 | 親=DD-052（consumer 駆動: ReadyCrew RC1・RC2）。実装・全検証green・Codexレビュー（親DD-052でまとめて実施・本DD該当分の指摘なし）済み。0.1.0-alpha.8で配布済み |
+| DD-052-2 | 文字列として保つ列 | 親=DD-052（consumer 駆動: ReadyCrew RC12）。実装・全検証green・Codexレビュー指摘1件（P2・confirmSelect/confirmDate）を修正済み。0.1.0-alpha.8で配布済み |
+| DD-052-3 | 編集の制限 | 親=DD-052（consumer 駆動: ReadyCrew RC3・RC14）。実装・全検証green・Codexレビュー指摘2件（P1・P2）を修正済み。0.1.0-alpha.8で配布済み |
+| DD-052-4 | 再注入と元に戻す履歴 | 親=DD-052（consumer 駆動: ReadyCrew RC4・RC13）。実装・全検証green・Codexレビュー指摘3件（P1×1・P2×2）を修正済み。0.1.0-alpha.8で配布済み |
+| DD-052-5 | 見出しクリックとホバーの通知 | 親=DD-052（consumer 駆動: ReadyCrew RC5・RC6）。実装・全検証green・Codexレビュー指摘1件（P2・ドラッグ開始時のhover終了）を修正済み。0.1.0-alpha.8で配布済み |
 | DD-050 | 厳格なconsumer設定での型検査 | 厳格な consumer 設定（2フラグ）での SDK 内の型エラー 38件→0件・CI に検査を追加。alpha.7（882a56d）を生成し独立 consumer 検証 PASS・広島 DD-005-3 へ引き渡し |
 | DD-049 | 共同編集の受理通知とPresence公開 | server-hono onAccepted・grid remote-change／presence／presences()・React 写像を提供。alpha.6 の 10 tarball と独立 consumer 検証完了・広島 DD-005-3 へ引き渡し |
 | DD-048 | 点線・破線と全行共通の横罫線 | 点線・破線と共通横線を提供。alpha.5の10tarballと独立consumer検証完了 |
