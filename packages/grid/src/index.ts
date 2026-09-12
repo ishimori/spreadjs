@@ -115,7 +115,24 @@ export type GridEvent =
    * 本イベントに加えて SDK が絶対 http/https URL を `window.open(value,'_blank','noopener,noreferrer')` で開く
    * （不正 URL は open せず診断 warn・本イベントは常に発火）。rowId/columnId/value は文字列（内部型は露出しない・R7）。
    */
-  | { readonly type: 'link-open'; readonly rowId: string; readonly columnId: string; readonly value: string };
+  | { readonly type: 'link-open'; readonly rowId: string; readonly columnId: string; readonly value: string }
+  /**
+   * サーバー確定（受理済み）のセル変更の通知（Experimental 0.x・DD-049 H4・**共同編集モード専用**）。SetCells が committed に
+   * 入るたび 1 op＝1 イベント（revision 昇順）。他クライアント（`origin:'remote'`）・サーバー起点操作（`'server'`）に加え、
+   * 自分の確定もサーバーの確定後に `'local'` で届く（利用側の「変更履歴」を 1 経路で作れる）。楽観適用のまま rollback/reject
+   * された op、snapshot bootstrap（初回接続・1,000 revision 超の差分がある再接続）で確立した状態、行の挿入・削除は通知しない。
+   * 1 サーバーメッセージの処理（適用・描画の dirty 立て）が終わってから配るため、listener から命令 API を呼んでよい。
+   * 単独グリッドモードでは発火しない（確定は従来どおり cell-commit）。
+   */
+  | { readonly type: 'remote-change'; readonly change: GridRemoteChange }
+  /**
+   * 参加者一覧の変化通知（Experimental 0.x・DD-049 H5・**共同編集モード専用**）。先頭に自分（`self:true`）、続いて他者を
+   * サーバーから届いた順に並べた一覧が、直前に配った一覧と変わったとき（初回 join・他者の参加/アクティブセル移動/切断/
+   * TTL 失効・自分のアクティブセル移動＝editor の処理後のマイクロタスクでまとめて）だけ発火する。現在値は
+   * `GridInstance.presences()`。自分が切断中は最後に知っていた
+   * 一覧を保持する（オンライン判定は connection イベントと併用する）。
+   */
+  | { readonly type: 'presence'; readonly users: readonly GridPresenceUser[] };
 
 /**
  * 行構造変更の内容（DD-021-1）。insert は挿入アンカー（`afterRowId`・null=先頭）と新規 RowId 列（表示順・
@@ -134,6 +151,44 @@ export interface GridCellCommitChange {
   readonly value: string;
   /** 確定前の表示文字列。 */
   readonly previousValue: string;
+}
+
+/** セル番地（RowId/ColumnId 文字列・DD-049）。内部の CellAddressById は露出しない（R7）。 */
+export interface GridCellAddress {
+  readonly rowId: string;
+  readonly columnId: string;
+}
+
+/**
+ * remote-change の起点（DD-049 H4）。`'local'`＝この grid が送った op（サーバー確定後の echo）／`'remote'`＝他クライアント
+ * （同じ利用者の別タブを含む）／`'server'`＝サーバー起点操作（server-hono の `ServerInstance.submit`）。
+ */
+export type GridRemoteChangeOrigin = 'local' | 'remote' | 'server';
+
+/** サーバー確定（受理済み）のセル変更 1 op 分（DD-049 H4）。 */
+export interface GridRemoteChange {
+  readonly origin: GridRemoteChangeOrigin;
+  /** サーバー付与の revision（文書内で一意・昇順に届く）。 */
+  readonly revision: number;
+  /** 受理 envelope の actorId（サーバーの authenticate 指定時はサーバーが確定した利用者 ID）。 */
+  readonly actorId: string;
+  /** セル変更（cell-commit と同じ形＝表示文字列の前後値・op の changes 順）。 */
+  readonly changes: readonly GridCellCommitChange[];
+}
+
+/** 参加者 1 件（DD-049 H5）。1 接続 1 件（同じ利用者の複数タブは別エントリ）。 */
+export interface GridPresenceUser {
+  /**
+   * 利用者 ID。他者は presence の userId（サーバーの authenticate 指定時はサーバーが確定した actorId）。自分は grid の
+   * clientId（authenticate でサーバーが上書きする構成では他者から見た値と一致しない＝自分の判定は `self` を使う）。
+   */
+  readonly userId: string;
+  /** 表示名（他者はサーバーの authenticate 指定時はサーバー確定値・自分は mount の displayName）。 */
+  readonly displayName: string;
+  /** アクティブセル（編集中は編集セル）。presence 未送信なら null。 */
+  readonly activeCell: GridCellAddress | null;
+  /** この grid インスタンス自身なら true（一覧の先頭に 1 件）。 */
+  readonly self: boolean;
 }
 
 export type GridEventListener = (event: GridEvent) => void;
@@ -426,6 +481,11 @@ export interface GridInstance {
    * （code=`active-cell-unknown`）のみで no-op。readOnly でも動く（閲覧系）。
    */
   setActiveCell(rowId: string, columnId: string): void;
+  /**
+   * 現在の参加者一覧（Experimental 0.x・DD-049 H5）。直近の `presence` イベントの `users` と一致する（先頭に自分・続いて
+   * 他者をサーバーから届いた順）。単独グリッドモード・初回 join 前・destroy 後は `[]`。
+   */
+  presences(): readonly GridPresenceUser[];
   /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */
   destroy(): void;
 }

@@ -7,10 +7,10 @@
 // （再mountで leak しない・AC2）④E2E 用 introspection は debugRegistry 経由（test-support）で露出する。
 
 import { SETCELLS_MAX_CELLS, cloneCellScalar, documentHash, displayRowOrder, getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
-import type { DeleteRowsOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
+import type { CellAddressById, DeleteRowsOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
-import type { Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
+import type { ClientSession, Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
 import {
   BADGE_TEXT_PADDING,
   CELL_TEXT_LINE_HEIGHT,
@@ -51,6 +51,8 @@ import { createIntegrationEditor } from './integration-editor';
 import type { IntegrationEditor } from './integration-editor';
 import { createLoadMetrics } from './initial-load-metrics';
 import { toPresenceUsers } from './presence-adapter';
+import { buildPresenceUsers, samePresenceUsers } from './presence-list';
+import { toGridRemoteChange } from './remote-change';
 import { createSessionSync } from './session-sync';
 import { buildScaffold } from './dom-scaffold';
 import { buildRangeClear } from './range-ops';
@@ -89,6 +91,8 @@ import type {
   GridInstance,
   GridMountOptions,
   GridMountTarget,
+  GridPresenceUser,
+  GridRemoteChange,
   GridRowStructureChange,
   GridStandaloneData,
   GridStandaloneMountOptions,
@@ -111,6 +115,8 @@ const HEADER_FONT = '12px system-ui, sans-serif';
 const AUTO_FIT_MAX_SCAN = 10_000;
 // DD-035 R6: 命令 API（scrollToRow/setActiveCell）の保留上限（構造 flush 待ち・初回描画待ち）。
 const PENDING_COMMANDS_MAX = 64;
+// DD-049 H5: 参加者なし（単独モード・初回 join 前・destroy 後）の共有空一覧。
+const NO_PRESENCE_USERS: readonly GridPresenceUser[] = Object.freeze([]);
 
 interface ResolvedConfig {
   documentId: string;
@@ -205,6 +211,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // scroll anchor 補正が直後に scrollTop を上書きするため、次の構造 flush（補正の後）まで保留して適用する。
   // これにより `setData(...)` → 直後の `scrollToRow(newId)` が成立する（松下 DD-012-1 の実測課題）。
   let pendingCommands: Array<() => void> = [];
+  // DD-049 H4/H5: 共同編集モードの ClientSession（参加者一覧の join 判定・他者 presence の読取に使う）。単独モードは undefined。
+  let collabSession: ClientSession | undefined;
+  // DD-049 H4: committed へ入った受理済み SetCells の公開形。1 サーバーメッセージの処理が終わってから（settle で）配る。
+  let remoteChangeQueue: GridRemoteChange[] = [];
+  // DD-049 H5: 自分が直近に送った presence の activeCell と、直前に配った参加者一覧（変化時だけ presence を発火する）。
+  let selfActiveCell: CellAddressById | undefined;
+  let lastPresenceUsers: readonly GridPresenceUser[] = NO_PRESENCE_USERS;
+  let presenceRefreshScheduled = false;
 
   // ---- 購読・後始末 ----
   const listeners = new Set<(event: GridEvent) => void>();
@@ -284,6 +298,58 @@ export function createGridController(target: GridMountTarget, options: GridMount
           committedRevision: event.committedRevision,
         };
     }
+  }
+
+  /** DD-049 H4: settle 時にキューの remote-change を到着順（revision 昇順）で配る。listener が destroy したら打ち切る。 */
+  function flushRemoteChanges(): void {
+    if (remoteChangeQueue.length === 0) {
+      return;
+    }
+    const queued = remoteChangeQueue;
+    remoteChangeQueue = [];
+    for (const change of queued) {
+      if (destroyed) {
+        return;
+      }
+      emit({ type: 'remote-change', change });
+    }
+  }
+
+  /** DD-049 H5: 現在の参加者一覧（共同編集モードで初回 join 後のみ。先頭に自分・続いて他者をサーバーから届いた順）。 */
+  function currentPresenceUsers(): readonly GridPresenceUser[] {
+    const session = collabSession;
+    if (destroyed || session === undefined || session.connectionId === undefined) {
+      return NO_PRESENCE_USERS;
+    }
+    return buildPresenceUsers({ userId: clientId, displayName, activeCell: selfActiveCell }, session.knownPresences());
+  }
+
+  /** DD-049 H5: 参加者一覧が直前に配った一覧と変わっていれば presence を発火する（変化時のみ）。 */
+  function refreshPresence(): void {
+    const users = currentPresenceUsers();
+    if (samePresenceUsers(users, lastPresenceUsers)) {
+      return;
+    }
+    lastPresenceUsers = users;
+    emit({ type: 'presence', users });
+  }
+
+  /**
+   * DD-049 H5: 自分のアクティブセル移動に伴う再計算はマイクロタスクへ遅らせて 1 回にまとめる。editor の presence 通知は
+   * IME 状態機械のイベント処理（DOM ハンドラ）やサーバー更新の反映の途中から呼ばれるため、そこで利用側の listener を同期で
+   * 呼ぶと、listener からの命令 API（setActiveCell 等）が処理途中の editor 状態と競合しうる（DD-038 の cell-commit 再入と同じ懸念）。
+   */
+  function schedulePresenceRefresh(): void {
+    if (presenceRefreshScheduled) {
+      return;
+    }
+    presenceRefreshScheduled = true;
+    queueMicrotask(() => {
+      presenceRefreshScheduled = false;
+      if (!destroyed) {
+        refreshPresence();
+      }
+    });
   }
 
   // ---- 描画層（overlay は即時・base は接続後の DocumentView へ束縛するため遅延生成）----
@@ -1485,7 +1551,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     });
     browserTransport = transport;
 
-    sync = createSessionSync({
+    const collabSync = createSessionSync({
       innerTransport: transport,
       sessionConfig: {
         clientId,
@@ -1526,6 +1592,17 @@ export function createGridController(target: GridMountTarget, options: GridMount
           }
           emit(gridEvent);
         },
+        // DD-049 H4: committed へ入った受理済み op を公開形へ写してキューに積む（配るのは settle＝描画の dirty 立ての後）。
+        // 購読者が居なければ写像しない（未使用の consumer に表示文字列変換のコストを足さない）。
+        onCommittedOperation: (event) => {
+          if (listeners.size === 0) {
+            return;
+          }
+          const change = toGridRemoteChange(event.envelope, event.changeSet, clientId);
+          if (change !== undefined) {
+            remoteChangeQueue.push(change);
+          }
+        },
       },
       rowHeight: ROW_HEIGHT,
       colWidth: COL_WIDTH,
@@ -1547,7 +1624,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
       onOwnSetCellsCommitted: (operationId, revision) => {
         undoCtrl.onCommitted(operationId, revision);
       },
+      // DD-049: 1 サーバーメッセージの処理（適用・rollback/replay・描画の dirty 立て）が終わった時点で利用者向けイベントを配る
+      // （listener から命令 API を呼んでも整合した状態を読む）。presence は一覧が変わりうるメッセージのときだけ再計算する。
+      onServerMessageSettled: (message) => {
+        flushRemoteChanges();
+        if (
+          message.type === 'welcome' ||
+          message.type === 'presenceSnapshot' ||
+          message.type === 'presenceDelta' ||
+          message.type === 'presenceRemoved'
+        ) {
+          refreshPresence();
+        }
+      },
     });
+    sync = collabSync;
+    collabSession = collabSync.session;
 
     attachBackendRendering();
   }
@@ -2688,6 +2780,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       layout: editorLayout,
       onPresenceChange: (update: PresenceUpdate) => {
         backend.session.sendPresence(update);
+        // DD-049 H5: 自分のエントリは送った presence の activeCell を映す（単独モードは collabSession 無し＝一覧は常に空）。
+        // 発火は editor の処理が終わった後（マイクロタスク）に遅らせる（理由は schedulePresenceRefresh を参照）。
+        selfActiveCell = update.activeCell;
+        if (collabSession !== undefined) {
+          schedulePresenceRefresh();
+        }
       },
       // K4（DD-021-2・Fable P2）: 削除行への commit で draft を退避したことを利用側へ可視化する。
       // 公開語彙は既存 row-unavailable（=target-row-deleted の写像・error-codes.md）を使い、未 submit ゆえ
@@ -3105,12 +3203,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
     setActiveCell(rowId: string, columnId: string) {
       runOrDefer(() => performSetActiveCell(rowId, columnId));
     },
+    presences(): readonly GridPresenceUser[] {
+      return currentPresenceUsers(); // DD-049 H5（単独モード・初回 join 前・destroy 後は空）
+    },
     destroy() {
       if (destroyed) {
         return;
       }
       destroyed = true;
       pendingCommands = []; // DD-035 R6: 保留中の命令は破棄（rAF ループ停止後に走らせない）
+      remoteChangeQueue = []; // DD-049 H4: 未配布の remote-change は破棄（listener も下で解除する）
       diag.emit('info', 'destroy', 'grid を破棄しリソースを解放');
       cancelAnimationFrame(rafId);
       window.clearInterval(intervalId);

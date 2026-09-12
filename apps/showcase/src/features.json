@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-09-05",
+  "updated": "2026-09-12",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -55,8 +55,8 @@
       "id": "collab",
       "title": "リアルタイム共同編集",
       "status": "available",
-      "summary": "複数人の同時編集をサーバーが一列に整列。競合は検出して通知し、他の人の入力を黙って上書きすることがありません。",
-      "source": "DD-003・DD-005・DD-013",
+      "summary": "複数人の同時編集をサーバーが一列に整列。競合は検出して通知し、他の人の入力を黙って上書きすることがありません。確定した変更はアプリ側でも受け取れます（各クライアントの remote-change イベント＝誰が・どのセルを・何から何へ変えたか。自分の確定もサーバー確定後に同じ経路で届くため、変更履歴を 1 経路で作れます）。",
+      "source": "DD-003・DD-005・DD-013・DD-049",
       "meta": "9セッション同時 検証済み",
       "demo": "./demo.html?scenario=collab"
     },
@@ -72,8 +72,8 @@
       "id": "react",
       "title": "React 組み込み（<NanairoSheetView>）",
       "status": "available",
-      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。StrictMode・再mountでリークしません（react は peer 依存）。",
-      "source": "DD-025・DD-035・DD-036",
+      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。共同編集の確定変更は onRemoteChange、参加者一覧は onPresenceChange / ref.presences() で受け取れます。StrictMode・再mountでリークしません（react は peer 依存）。",
+      "source": "DD-025・DD-035・DD-036・DD-049",
       "meta": "peer: react ^19 ／ unit＋実ブラウザーE2E（StrictMode・leak）検証済み"
     },
     {
@@ -89,8 +89,8 @@
       "id": "integration-adapters",
       "title": "利用側の保存先・認証との接続（共同編集）",
       "status": "available",
-      "summary": "共同編集サーバーの保存先を利用側の DB（Postgres 等）に差し替え、受理した操作を業務テーブルへ同じトランザクションで反映できます。接続は利用側の認証（JWT Cookie 等）で検証し、操作の実行者はサーバーが確定します。補完・算出列はサーバー側から書き込めます。",
-      "source": "DD-026・DD-026-1〜3（S2-6）",
+      "summary": "共同編集サーバーの保存先を利用側の DB（Postgres 等）に差し替え、受理した操作を業務テーブルへ同じトランザクションで反映できます。接続は利用側の認証（JWT Cookie 等）で検証し、操作の実行者はサーバーが確定します。補完・算出列はサーバー側から書き込めます。保存先を持たない構成でも、受理した操作の通知（onAccepted＝前後値付き）で集計の再計算などを起動できます。",
+      "source": "DD-026・DD-026-1〜3（S2-6）・DD-049（受理通知）",
       "meta": "SDK 側は自動テスト（durable ACK・復旧・認証・配信）で検証済み。実機統合は松下 生産納期側（DD-012-2）で確認中"
     },
     {
@@ -137,10 +137,10 @@
     {
       "id": "presence",
       "title": "他ユーザーの編集位置表示",
-      "status": "planned",
-      "summary": "誰がどのセルを見て・編集しているかをリアルタイムに表示（カーソル・選択範囲の共有）。",
-      "source": "DD-019（stage2-backlog §1）",
-      "meta": "Stage 2"
+      "status": "available",
+      "summary": "誰がどのセルを見て・編集しているかをリアルタイムに表示（他ユーザーのアクティブセル・選択範囲を色枠と名前タグで表示。編集中はそのセル）。参加者一覧（表示名・アクティブセル・自分かどうか）を presences() と presence イベント（React は onPresenceChange）で受け取れ、アプリ側の「この表を開いている人」表示に使えます。",
+      "source": "DD-005・DD-041・DD-049（stage2-backlog §1 DD-019 の Presence 公開面を consumer 駆動で回収）",
+      "meta": "unit＋実ブラウザー2クライアントE2E 検証済み（参加・セル移動・切断の反映）"
     },
     {
       "id": "clipboard",

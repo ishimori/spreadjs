@@ -170,6 +170,42 @@ await server.submit(op, { actorId: 'system', documentId: 'plan-2027' }); // 宛�
 - **v1 の範囲**: 文書集合の変更はプロセス再起動で行う（動的な作成・後片付け・実行時の文書単位隔離は未提供）。実行時の恒久失敗は
   従来どおりプロセス単位の fail-stop。将来の無限 Book・複数台への振り分けは `resolve` の差し替えと前段の routing で到達する（ADR-0025）。
 
+## 3d. 受理通知で集計を再計算する（`onAccepted`・DD-049）
+
+保存先を持たない構成（in-memory の `serve()`）でも、**受理した操作を 1 件ずつ受け取って**集計の再計算などを起動できる
+（通知のためだけに偽の `oplog` を渡す必要はない）。以下は擬似コード（`sumRow` は利用側の実装）。
+
+```ts
+import { serve } from '@nanairo-sheet/server-hono';
+import type { ServeAcceptedEvent, ServerInstance } from '@nanairo-sheet/server-hono';
+
+let server: ServerInstance | undefined;
+server = await serve({
+  port: 8790,
+  columnOrder: ['item', 'm04', 'm05', 'total'],
+  onAccepted: (event) => recalc(event),
+});
+
+async function recalc(event: ServeAcceptedEvent): Promise<void> {
+  // 自分（server.submit）の書き戻しでは再計算しない＝無限ループの防止は利用側の責務。
+  if (event.origin === 'server' || server === undefined) return;
+  for (const rowId of new Set(event.changes.map((c) => c.rowId))) {
+    // event.changes[i].value / previousValue（前後値）から差分で集計してもよい。
+    await server.submit(
+      { type: 'setCells', changes: [{ rowId, columnId: 'total', value: { kind: 'number', value: sumRow(rowId) } }] },
+      { actorId: 'system' },
+    );
+  }
+}
+```
+
+- **呼ばれる時期**: revision を消費した受理 1 件につき 1 回。永続化ありでは `append` 解決（durable）と ACK・配信の**後**に、
+  文書ごとに revision 昇順で呼ばれる。reject・noop・再送の重複・seed/`initialDocument`・durable 失敗では呼ばれない。
+- **中身**: `documentId`／`revision`／`actorId`（`authenticate` 指定時はサーバー確定値）／`origin`（`'client'`＝接続クライアント・
+  `'server'`＝`server.submit`）／`envelope`（oplog と同形・複製）／`changes`（SetCells の前後値。insertRows/deleteRows は空配列）。
+- **失敗と待ち合わせ**: hook の戻り値は待たれない（fire-and-forget）。throw・reject は診断 `on-accepted-error`（warn）になり、
+  受理・配信・永続化には影響しない。`server.submit` の起点では hook の後に submit の Promise が解決する。
+
 ## 4. mount（グリッド）と日本語入力
 
 **size 済みの container**（幅・高さを持つ要素）へ mount する。`serverUrl` は必須。
@@ -190,9 +226,14 @@ const grid = mount(
     rowBorders: { r30: { top: { color: '#64748b', width: 2 } } },
     columnBorders: { 'col-1': { right: { color: '#94a3b8', width: 2 } } },
     onEvent: (event: GridEvent) => {
-      // connection / pending / rejected / divergence / error
+      // connection / pending / rejected / divergence / error / remote-change / presence …
       if (event.type === 'error') {
         console.error(`[grid] ${event.code} (${event.phase}): ${event.message}`);
+      }
+      if (event.type === 'remote-change') {
+        // サーバー確定のセル変更（origin: 'remote'＝他者 / 'local'＝自分 / 'server'＝server.submit）。前後値は表示文字列。
+        const { revision, origin, actorId, changes } = event.change;
+        console.info(`[grid] r${revision} ${origin} ${actorId}`, changes);
       }
     },
     // debug logging hook（opt-in・既定無出力）
@@ -206,6 +247,9 @@ grid.focus(); // 常駐 textarea へフォーカス → セルをクリック/�
 - **セル編集**: セルをクリック（アクティブ化）またはダブルクリック（編集開始）し、日本語 IME で変換・確定。
 - **共同編集**: 同じ `serverUrl` へ別 client を mount すると変更が相互反映される。
 - **接続状態**: `grid.connectionState()`（`online`/`offline`/`stopped`）または `onEvent` の `connection` イベント。
+- **確定変更・参加者（DD-049）**: `remote-change` はサーバー確定の SetCells を 1 op＝1 回で届ける（自分の確定もサーバー確定後に
+  `origin: 'local'`）。`presence` は参加者一覧（先頭に自分・`self: true`）が変わったときだけ届き、現在値は `grid.presences()`。
+  行の挿入・削除、初回接続時（snapshot で読み込んだ状態）は `remote-change` に含まれない。単独グリッドモードではどちらも発火しない。
 - **静的な行背景**: `rowBackgrounds` は RowId に追従し、固定 pane と横スクロール先を含む行全体を塗る。行/列背景の
   交差は行が優先し、`columnFormats` の値ベース背景はさらに優先される。描画のみで、文書値・保存・コピー TSV は変わらない。
 
@@ -356,9 +400,11 @@ export function OrderGrid() {
     渡しても内容が同じなら remount しない（安定参照が理想だが Facade が吸収する）。
   - **初期値系**（`initialData`/`initialColumnWidths`/`initialRowHeights`）は**初回 mount のみ**有効。mount 後の変更は
     無視され診断 warn が出る。**データ再注入は `ref.setData`**、レイアウト保存は `onLayout`→次回 mount の初期値へ。
-  - **callback 系**（`onCellCommit`/`onLayout`/`onConnectionChange`/`onError`/`onEvent`/`onDiagnostic`）は
-    remount せず最新参照へ差し替わる（毎 render 新しい関数を渡してよい）。
-- **命令 API（ref）**: `setData(data)`（standalone 再注入）／`focus()`／`connectionState()`。`GridInstance` 本体は出さない。
+  - **callback 系**（`onCellCommit`/`onLayout`/`onConnectionChange`/`onRemoteChange`/`onPresenceChange`/`onError`/`onEvent`/
+    `onDiagnostic`）は remount せず最新参照へ差し替わる（毎 render 新しい関数を渡してよい）。
+- **命令 API（ref）**: `setData(data)`（standalone 再注入）／`focus()`／`connectionState()`／行操作・視点移動
+  （`insertRows`/`deleteRows`/`scrollToRow`/`scrollToColumn`/`setActiveCell`）／`presences()`（参加者一覧・未 mount は `[]`・DD-049）。
+  `GridInstance` 本体は出さない。
 - **共同編集モード**: `mode="collaboration"`（省略時の既定）＋`serverUrl` を渡す。standalone props に `serverUrl` を
   書くと**型エラー**（型で排他）。
 - **StrictMode**: `<StrictMode>` 配下の二重 mount/cleanup でもリークしない（内部で mount↔destroy が対で走る）。

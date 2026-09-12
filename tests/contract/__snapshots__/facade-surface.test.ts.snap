@@ -132,6 +132,29 @@ export type GridEvent = {
     readonly rowId: string;
     readonly columnId: string;
     readonly value: string;
+}
+/**
+ * サーバー確定（受理済み）のセル変更の通知（Experimental 0.x・DD-049 H4・**共同編集モード専用**）。SetCells が committed に
+ * 入るたび 1 op＝1 イベント（revision 昇順）。他クライアント（\`origin:'remote'\`）・サーバー起点操作（\`'server'\`）に加え、
+ * 自分の確定もサーバーの確定後に \`'local'\` で届く（利用側の「変更履歴」を 1 経路で作れる）。楽観適用のまま rollback/reject
+ * された op、snapshot bootstrap（初回接続・1,000 revision 超の差分がある再接続）で確立した状態、行の挿入・削除は通知しない。
+ * 1 サーバーメッセージの処理（適用・描画の dirty 立て）が終わってから配るため、listener から命令 API を呼んでよい。
+ * 単独グリッドモードでは発火しない（確定は従来どおり cell-commit）。
+ */
+ | {
+    readonly type: 'remote-change';
+    readonly change: GridRemoteChange;
+}
+/**
+ * 参加者一覧の変化通知（Experimental 0.x・DD-049 H5・**共同編集モード専用**）。先頭に自分（\`self:true\`）、続いて他者を
+ * サーバーから届いた順に並べた一覧が、直前に配った一覧と変わったとき（初回 join・他者の参加/アクティブセル移動/切断/
+ * TTL 失効・自分のアクティブセル移動＝editor の処理後のマイクロタスクでまとめて）だけ発火する。現在値は
+ * \`GridInstance.presences()\`。自分が切断中は最後に知っていた
+ * 一覧を保持する（オンライン判定は connection イベントと併用する）。
+ */
+ | {
+    readonly type: 'presence';
+    readonly users: readonly GridPresenceUser[];
 };
 /**
  * 行構造変更の内容（DD-021-1）。insert は挿入アンカー（\`afterRowId\`・null=先頭）と新規 RowId 列（表示順・
@@ -154,6 +177,40 @@ export interface GridCellCommitChange {
     readonly value: string;
     /** 確定前の表示文字列。 */
     readonly previousValue: string;
+}
+/** セル番地（RowId/ColumnId 文字列・DD-049）。内部の CellAddressById は露出しない（R7）。 */
+export interface GridCellAddress {
+    readonly rowId: string;
+    readonly columnId: string;
+}
+/**
+ * remote-change の起点（DD-049 H4）。\`'local'\`＝この grid が送った op（サーバー確定後の echo）／\`'remote'\`＝他クライアント
+ * （同じ利用者の別タブを含む）／\`'server'\`＝サーバー起点操作（server-hono の \`ServerInstance.submit\`）。
+ */
+export type GridRemoteChangeOrigin = 'local' | 'remote' | 'server';
+/** サーバー確定（受理済み）のセル変更 1 op 分（DD-049 H4）。 */
+export interface GridRemoteChange {
+    readonly origin: GridRemoteChangeOrigin;
+    /** サーバー付与の revision（文書内で一意・昇順に届く）。 */
+    readonly revision: number;
+    /** 受理 envelope の actorId（サーバーの authenticate 指定時はサーバーが確定した利用者 ID）。 */
+    readonly actorId: string;
+    /** セル変更（cell-commit と同じ形＝表示文字列の前後値・op の changes 順）。 */
+    readonly changes: readonly GridCellCommitChange[];
+}
+/** 参加者 1 件（DD-049 H5）。1 接続 1 件（同じ利用者の複数タブは別エントリ）。 */
+export interface GridPresenceUser {
+    /**
+     * 利用者 ID。他者は presence の userId（サーバーの authenticate 指定時はサーバーが確定した actorId）。自分は grid の
+     * clientId（authenticate でサーバーが上書きする構成では他者から見た値と一致しない＝自分の判定は \`self\` を使う）。
+     */
+    readonly userId: string;
+    /** 表示名（他者はサーバーの authenticate 指定時はサーバー確定値・自分は mount の displayName）。 */
+    readonly displayName: string;
+    /** アクティブセル（編集中は編集セル）。presence 未送信なら null。 */
+    readonly activeCell: GridCellAddress | null;
+    /** この grid インスタンス自身なら true（一覧の先頭に 1 件）。 */
+    readonly self: boolean;
 }
 export type GridEventListener = (event: GridEvent) => void;
 /** 単独グリッドモードの 1 行（DD-024）。cells は ColumnId 文字列→値文字列（未指定列は空セル）。 */
@@ -440,6 +497,11 @@ export interface GridInstance {
      * （code=\`active-cell-unknown\`）のみで no-op。readOnly でも動く（閲覧系）。
      */
     setActiveCell(rowId: string, columnId: string): void;
+    /**
+     * 現在の参加者一覧（Experimental 0.x・DD-049 H5）。直近の \`presence\` イベントの \`users\` と一致する（先頭に自分・続いて
+     * 他者をサーバーから届いた順）。単独グリッドモード・初回 join 前・destroy 後は \`[]\`。
+     */
+    presences(): readonly GridPresenceUser[];
     /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */
     destroy(): void;
 }
@@ -834,7 +896,7 @@ export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<st
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridStandaloneData } from '@nanairo-sheet/grid';
+import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -887,6 +949,13 @@ export interface NanairoSheetViewCommonProps {
     readonly onLayout?: (columnWidths: Record<string, number>, rowHeights: Record<string, number>) => void;
     /** 接続状態変化（GridEvent 'connection'/'pending' の写像・collaboration のみ発火）。 */
     readonly onConnectionChange?: (state: GridConnectionState, pendingCount: number) => void;
+    /**
+     * サーバー確定のセル変更（GridEvent 'remote-change' の写像・DD-049 H4・collaboration のみ発火）。他クライアント
+     * （origin 'remote'）・サーバー起点（'server'）・自分の確定（サーバー確定後に 'local'）を 1 op＝1 回で受け取る。
+     */
+    readonly onRemoteChange?: (change: GridRemoteChange) => void;
+    /** 参加者一覧の変化（GridEvent 'presence' の写像・DD-049 H5・collaboration のみ発火）。現在値は ref.presences()。 */
+    readonly onPresenceChange?: (users: readonly GridPresenceUser[]) => void;
     /** エラー通知（GridEvent 'error' の写像）。 */
     readonly onError?: (error: NanairoSheetViewError) => void;
     /** 全 GridEvent の素通し（診断・将来種別・rejected/divergence 用）。 */
@@ -939,6 +1008,8 @@ export interface NanairoSheetViewHandle {
     scrollToColumn(columnId: string): void;
     /** アクティブセルを移して可視化＋focus（grid GridInstance.setActiveCell 直結・DD-035 R6）。 */
     setActiveCell(rowId: string, columnId: string): void;
+    /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
+    presences(): readonly GridPresenceUser[];
 }
 /**
  * Nanairo Sheet を React から使うコンポーネント（憲章 §11.2）。lifecycle と props/event 変換のみを担当し、
@@ -950,8 +1021,8 @@ export declare const NanairoSheetView: import("react").ForwardRefExoticComponent
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/server-hono の公開宣言 closure 1`] = `
 "// ==== packages/server-hono/src/index.ts ====
-import type { ServeAuthenticate, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
-export type { ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
+import type { ServeAcceptedHook, ServeAuthenticate, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
+export type { ServeAcceptedCellChange, ServeAcceptedEvent, ServeAcceptedHook, ServeAcceptedOrigin, ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
 /** 診断エントリの重大度（server-hono 診断 hook）。 */
 export type ServeDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 /** serve 診断エントリ（onDiagnostic opt-in 時のみ生成）。 */
@@ -962,7 +1033,8 @@ export interface ServeDiagnostic {
      * 'serve-started' / 'serve-stopped'（起動・停止）／'auth-rejected'（authenticate が null＝401 拒否・warn）／
      * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
      * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
-     * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）。Cookie・トークン等の値は載せない。
+     * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）／'on-accepted-error'（onAccepted が throw、
+     * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）。Cookie・トークン等の値は載せない。
      */
     readonly code: string;
     readonly message: string;
@@ -1003,6 +1075,18 @@ export interface ServeOptions {
      * 再接続の同一性のため申告を維持）。未指定なら従来どおり申告値（trusted internal）。
      */
     readonly authenticate?: ServeAuthenticate;
+    /**
+     * 受理通知フック（DD-049 H2）。revision を消費した受理 1 件につき 1 回、**durable 化（永続化あり）と ACK・配信の後**に
+     * 呼ばれる（文書ごとに revision 昇順）。WebSocket 接続の操作は \`origin: 'client'\`、\`ServerInstance.submit\` は
+     * \`origin: 'server'\`（hook の後に submit の Promise が解決する）。reject・noop・再送の重複・seed/initialDocument・
+     * durable 失敗では呼ばれない。DB を持たない構成でも、偽の oplog を渡さずに集計の再計算などを起動できる。
+     * - \`changes\` は SetCells の前後値（insertRows / deleteRows は空配列）。\`envelope\` は複製（書き換えても SDK に影響しない）。
+     * - 戻り値の Promise は待たない。同期 throw・reject は診断 \`on-accepted-error\`（warn）になり、受理・配信・永続化には
+     *   影響しない（\`onDiagnostic\` 未指定なら console.error）。
+     * - hook 内で \`submit\` を呼んでよい（別 revision で受理され、実行中の hook が戻った後に revision 順で \`origin: 'server'\` として
+     *   通知される＝hook は入れ子に呼ばれない）。**無限ループの防止は利用側責務**（\`origin === 'server'\` を再評価しない等）。
+     */
+    readonly onAccepted?: ServeAcceptedHook;
     /**
      * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止・認証拒否の診断エントリが配信される。
      * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
@@ -1251,5 +1335,41 @@ export interface ServeQuarantinedDocument {
     /** 復旧が失敗した理由（例外メッセージ）。 */
     readonly reason: string;
 }
+/** 受理した SetCells の 1 セル分（前後値付き・DD-049）。 */
+export interface ServeAcceptedCellChange {
+    readonly rowId: string;
+    readonly columnId: string;
+    /** この変更で書き込まれた値。 */
+    readonly value: ServeCellScalar;
+    /**
+     * この変更を適用する直前の値（未書込セルは \`{ kind: 'blank' }\`）。同じ op 内で同一セルを複数回書いた場合は、
+     * 直前の書込後の値（op 内で逐次）。
+     */
+    readonly previousValue: ServeCellScalar;
+}
+/** 受理した操作の起点（DD-049）。\`'client'\`＝WebSocket 接続のクライアント／\`'server'\`＝\`ServerInstance.submit\`。 */
+export type ServeAcceptedOrigin = 'client' | 'server';
+/**
+ * \`onAccepted\` に渡る受理通知（DD-049 H2）。revision を消費した受理 1 件につき 1 回、durable 化（永続化あり）と
+ * ACK・配信の後に届く（文書ごとに revision 昇順）。
+ */
+export interface ServeAcceptedEvent {
+    /** 受理した文書（複数文書 serve では文書ごとに正しい ID）。 */
+    readonly documentId: string;
+    /** サーバー付与の revision。 */
+    readonly revision: number;
+    /** 受理 envelope の actorId（\`authenticate\` 指定時はサーバーが確定した利用者 ID・\`submit\` は \`options.actorId\`）。 */
+    readonly actorId: string;
+    readonly origin: ServeAcceptedOrigin;
+    /** 受理 envelope（oplog へ追記される形と同じ・複製＝書き換えても SDK に影響しない）。 */
+    readonly envelope: ServeOperationEnvelope;
+    /** SetCells のセル変更（\`envelope.operation.changes\` と同順・前後値付き）。insertRows / deleteRows は空配列。 */
+    readonly changes: readonly ServeAcceptedCellChange[];
+}
+/**
+ * 受理通知フック（DD-049 H2）。戻り値の Promise は待たない（fire-and-forget）。同期 throw・Promise の reject は
+ * 診断 \`on-accepted-error\`（warn）になり、受理・配信・永続化には影響しない。
+ */
+export type ServeAcceptedHook = (event: ServeAcceptedEvent) => void | Promise<void>;
 "
 `;

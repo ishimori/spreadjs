@@ -35,6 +35,8 @@ import {
   type GridEvent,
   type GridInstance,
   type GridMountOptions,
+  type GridPresenceUser,
+  type GridRemoteChange,
   type GridStandaloneData,
 } from '@nanairo-sheet/grid';
 
@@ -99,6 +101,13 @@ export interface NanairoSheetViewCommonProps {
   ) => void;
   /** 接続状態変化（GridEvent 'connection'/'pending' の写像・collaboration のみ発火）。 */
   readonly onConnectionChange?: (state: GridConnectionState, pendingCount: number) => void;
+  /**
+   * サーバー確定のセル変更（GridEvent 'remote-change' の写像・DD-049 H4・collaboration のみ発火）。他クライアント
+   * （origin 'remote'）・サーバー起点（'server'）・自分の確定（サーバー確定後に 'local'）を 1 op＝1 回で受け取る。
+   */
+  readonly onRemoteChange?: (change: GridRemoteChange) => void;
+  /** 参加者一覧の変化（GridEvent 'presence' の写像・DD-049 H5・collaboration のみ発火）。現在値は ref.presences()。 */
+  readonly onPresenceChange?: (users: readonly GridPresenceUser[]) => void;
   /** エラー通知（GridEvent 'error' の写像）。 */
   readonly onError?: (error: NanairoSheetViewError) => void;
   /** 全 GridEvent の素通し（診断・将来種別・rejected/divergence 用）。 */
@@ -156,6 +165,8 @@ export interface NanairoSheetViewHandle {
   scrollToColumn(columnId: string): void;
   /** アクティブセルを移して可視化＋focus（grid GridInstance.setActiveCell 直結・DD-035 R6）。 */
   setActiveCell(rowId: string, columnId: string): void;
+  /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
+  presences(): readonly GridPresenceUser[];
 }
 
 /** callback 群だけを保持する内部型（最新参照を subscribe から呼ぶ・stale closure 回避）。 */
@@ -163,6 +174,8 @@ interface CallbackBag {
   onCellCommit?: NanairoSheetViewCommonProps['onCellCommit'];
   onLayout?: NanairoSheetViewCommonProps['onLayout'];
   onConnectionChange?: NanairoSheetViewCommonProps['onConnectionChange'];
+  onRemoteChange?: NanairoSheetViewCommonProps['onRemoteChange'];
+  onPresenceChange?: NanairoSheetViewCommonProps['onPresenceChange'];
   onError?: NanairoSheetViewCommonProps['onError'];
   onEvent?: NanairoSheetViewCommonProps['onEvent'];
 }
@@ -330,6 +343,8 @@ function NanairoSheetViewImpl(
       onCellCommit: props.onCellCommit,
       onLayout: props.onLayout,
       onConnectionChange: props.onConnectionChange,
+      onRemoteChange: props.onRemoteChange,
+      onPresenceChange: props.onPresenceChange,
       onError: props.onError,
       onEvent: props.onEvent,
     };
@@ -404,6 +419,10 @@ function NanairoSheetViewImpl(
         }
         instance.setActiveCell(rowId, columnId);
       },
+      // DD-049 H5: 参加者一覧は読み取り（connectionState と同じく未 mount でも warn せず空一覧）。
+      presences(): readonly GridPresenceUser[] {
+        return instanceRef.current?.presences() ?? [];
+      },
     }),
     [],
   );
@@ -433,6 +452,12 @@ function NanairoSheetViewImpl(
           break;
         case 'pending':
           cb.onConnectionChange?.(lastConnStateRef.current, event.pendingCount);
+          break;
+        case 'remote-change':
+          cb.onRemoteChange?.(event.change);
+          break;
+        case 'presence':
+          cb.onPresenceChange?.(event.users);
           break;
         // rejected / divergence は onEvent 素通しのみ（Alpha は通知まで・契約 §2）。
         default:

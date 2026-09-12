@@ -91,6 +91,18 @@ export type SessionEvent =
 
 export type SessionObserver = (event: SessionEvent) => void;
 
+/**
+ * サーバー確定（受理済み）の Operation を committed へ適用した通知（DD-049 H4）。`SessionConfig.onCommittedOperation` に渡る。
+ * 他クライアント・サーバー起点・自分の op（echo）のいずれも committed に入った時点で 1 op＝1 回・revision 昇順で届く。
+ * 楽観適用のまま rollback / reject された op と、snapshot bootstrap で確立した状態（committed の丸ごと差し替え）は含まれない。
+ */
+export interface CommittedOperationEvent {
+  /** committed へ適用したサーバー envelope（読み取り専用に扱う）。 */
+  readonly envelope: ServerOperationEnvelope;
+  /** committed への適用差分（SetCells は changes 順に before/after・InsertRows/DeleteRows は行 ID）。 */
+  readonly changeSet: ChangeSet;
+}
+
 // ---- Conflict Queue（コピー可能・§10.1・I-2）----
 
 export type ConflictReason = 'rejected' | 'revalidation-failed' | 'dependency';
@@ -138,6 +150,11 @@ export interface SessionConfig {
   maxOfflineMillis?: number; // 既定 30000（§8.5・Q-4）
   maxOfflinePending?: number; // 既定 100（§8.5・Q-4）
   observer?: SessionObserver; // DD-015: 接続状態・pending 件数・reject 発生の通知（未指定なら通知しない）
+  /**
+   * DD-049 H4: 受理済み op が committed に入るたびの通知（未指定なら通知しない＝observer の契約・イベント列は不変）。
+   * rebuild（pending の再検証・再適用）の後に同期で呼ぶ。throw しないこと（1 ServerMessage の処理を中断させない）。
+   */
+  onCommittedOperation?: (event: CommittedOperationEvent) => void;
 }
 
 const DEFAULT_PROTOCOL_VERSION = 1;
@@ -159,6 +176,7 @@ export class ClientSession implements TransportListener {
   private readonly clock: Clock;
   private readonly idGenerator: IdGenerator;
   private readonly observer: SessionObserver | undefined;
+  private readonly onCommittedOperation: ((event: CommittedOperationEvent) => void) | undefined;
 
   private committed: SheetDocument;
   private view: SheetDocument;
@@ -206,6 +224,7 @@ export class ClientSession implements TransportListener {
     this.clock = config.clock;
     this.idGenerator = config.idGenerator;
     this.observer = config.observer;
+    this.onCommittedOperation = config.onCommittedOperation;
     this.committed = createDocument(config.columnOrder);
     this.view = this.committed;
     this.expectedRevision = this.committed.revision + 1;
@@ -546,13 +565,16 @@ export class ClientSession implements TransportListener {
   /** §7.7 rollback/replay: server op を committed へ適用 → own 除去 → 残 pending 再検証・再適用。 */
   private reconcileServerOperation(serverEnv: ServerOperationEnvelope): void {
     // committed は権威（rollback から導出しない・DA D22）。server op は Room 検証済ゆえ throw しない。
-    this.committed = applyOperation(this.committed, serverEnv.operation, {
+    const applied = applyOperation(this.committed, serverEnv.operation, {
       revision: serverEnv.revision,
-    }).document;
+    });
+    this.committed = applied.document;
     this._appliedServerOpCount += 1; // 適用したサーバー op を計上（bootstrap 後は tail のみ＝全 replay 非依存の実証）
     this.expectedRevision = serverEnv.revision + 1;
     this.removeFromPending(serverEnv.operationId); // own 除去（冪等・operationId 一致・S-H2/H4）
     this.rebuildView(); // 残 pending 再検証＋再適用＋不成立は Conflict Queue（手順4-6）
+    // DD-049 H4: committed に入った受理済み op を通知する（rebuild 後＝view・pending が整合した状態。ChangeSet は適用時に生成済み）。
+    this.onCommittedOperation?.({ envelope: serverEnv, changeSet: applied.changeSet });
   }
 
   private handleAck(message: OperationAckMessage): void {

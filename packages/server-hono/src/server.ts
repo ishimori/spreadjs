@@ -8,6 +8,8 @@
 // DD-026（consumer 統合①）: U1 注入ストア（oplog/snapshotStore）と初期文書（initialDocument＝document@0・snapshot@0 を
 // durable 化してから listen）／U2 認証フック（upgrade 時 authenticate・identity で envelope actorId と presence を上書き）／
 // U3 サーバー起点操作（submit＝擬似接続 'server' として通常受理経路を通す）を本層に追加した。
+// DD-049 H2: 受理通知フック（onAccepted）を追加した。RoomBridge が受理 Outbound を dispatch した直後に fire-and-forget で呼ぶ
+// （Room/Sequencer/PersistentRoom は無改変・前値は copy-on-write の権威文書の参照を Room 投入直前に捕捉して求める）。
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -24,13 +26,17 @@ import { cors } from 'hono/cors';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { RawData } from 'ws';
 
-import { documentHash } from '@nanairo-sheet/core';
+import { cloneCellScalar, documentHash, getCell } from '@nanairo-sheet/core';
 import type {
+  CellScalar,
   ClientMessage,
   ClientMessageExceptJoin,
   ClientOperationEnvelope,
+  DocumentOperation,
   JoinMessage,
+  ServerOperationEnvelope,
   SetCellsOperation,
+  SheetDocument,
 } from '@nanairo-sheet/core';
 import {
   FileOpLogStore,
@@ -72,6 +78,10 @@ import {
 import type { IntegrationDatasetConfig } from './seed-dataset';
 import { buildInitialDocument, liftSetCellsInput } from './serve-adapters';
 import type {
+  ServeAcceptedCellChange,
+  ServeAcceptedEvent,
+  ServeAcceptedHook,
+  ServeAcceptedOrigin,
   ServeAuthenticate,
   ServeIdentity,
   ServeInitialDocument,
@@ -113,6 +123,7 @@ export interface StartServerOptions {
   snapshotStore?: SnapshotStore; // DD-026-1: 注入 snapshot ストア（oplog と同時指定・persistenceDir と排他）
   initialDocument?: () => Promise<ServeInitialDocument> | ServeInitialDocument; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
   authenticate?: ServeAuthenticate; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
+  onAccepted?: ServeAcceptedHook; // DD-049 H2: 受理通知（durable・配信の後に fire-and-forget・失敗は診断 on-accepted-error）
   diagnostics?: DiagnosticSink; // serve() の onDiagnostic への橋渡し
   documents?: StartDocumentsOptions; // DD-043: 複数文書 serve（単一文書オプション群とは排他）
 }
@@ -186,12 +197,21 @@ class RoomBridge {
   private readonly wsByConnection = new Map<string, WebSocket>();
   private readonly connectionByWs = new Map<WebSocket, string>();
   private readonly metaByWs = new Map<WebSocket, ConnectionMeta>();
+  /**
+   * submitOperation の配信待ち（Room へ投入した順・DD-049 Codex P1）。受理（revision 消費）を含む件は、それより前に未 settle の件が
+   * あれば越えない。revision を消費しない応答（reject・noop・duplicate ACK）と失敗は settle しだい配る（Codex 第 2 回 P1）。
+   */
+  private readonly submitDeliveries: SubmitDelivery[] = [];
 
   constructor(
     private readonly room: RoomController,
     /** この bridge が担当する文書 ID（join の申告 documentId と突き合わせる・DD-043）。 */
     private readonly documentId: string,
+    /** serve 全体で共有する配信ループ（全文書の配信を 1 本に直列化し、onAccepted を入れ子にしない・DD-049 Codex 第 2 回 P2）。 */
+    private readonly deliveryLoop: SubmitDeliveryLoop,
     private readonly diagnostics?: DiagnosticSink,
+    /** 受理通知（DD-049 H2）。未指定なら受理経路に一切コストを足さない（前値の参照捕捉もしない）。 */
+    private readonly accepted?: AcceptedNotifier,
   ) {}
 
   /**
@@ -234,11 +254,26 @@ class RoomBridge {
    * サーバー起点の操作（DD-026-3）を擬似接続 SERVER_CONNECTION_ID として通常経路（Room/PersistentRoom.handleMessage）へ
    * 投入する。永続化有効時は durable 化後に解決する。ACK（宛先＝擬似接続）は ws が無いため dispatch が捨て、operations は
    * 全接続へ配信される。Room の ACK/reject から結果を組む。
+   * DD-049（Codex P1）: 配信・受理通知はクライアント操作と共通の投入順 FIFO で行い、その後に解決する（同期 Room の結果を
+   * `await` で後回しにすると、同じ data チャンクで続いたクライアント op が先に配信・通知され revision 順が崩れる）。
    */
-  async submitFromServer(envelope: ClientOperationEnvelope): Promise<ServeSubmitResult> {
-    const outbound = await this.room.handleMessage(SERVER_CONNECTION_ID, { type: 'submitOperation', envelope });
-    this.dispatch(outbound);
-    return submitResultOf(envelope.operationId, outbound);
+  submitFromServer(envelope: ClientOperationEnvelope): Promise<ServeSubmitResult> {
+    const before = this.captureDocumentBeforeSubmit(); // Room 投入と同じ同期区間で捕捉する（DD-049 H2）
+    let result: Outbound[] | Promise<Outbound[]>;
+    try {
+      result = this.room.handleMessage(SERVER_CONNECTION_ID, { type: 'submitOperation', envelope });
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(errorMessage(error))); // 常に Promise 契約
+    }
+    return new Promise<ServeSubmitResult>((resolve, reject) => {
+      this.deliverSubmitInOrder(result, before, 'server', {
+        // 受理通知の後に解決する（submitResultOf の throw は onFailed＝reject へ回る）。
+        onDelivered: (outbound) => {
+          resolve(submitResultOf(envelope.operationId, outbound));
+        },
+        onFailed: reject,
+      });
+    });
   }
 
   private onMessage(ws: WebSocket, data: RawData): void {
@@ -295,17 +330,27 @@ class RoomBridge {
     }
     // DD-026-2: 認証済み接続は申告の actorId/userId/displayName を信用せず、identity で上書きしてから Room へ渡す。
     const identity = this.metaByWs.get(ws)?.identity;
-    const result = this.room.handleMessage(existing, identity !== undefined ? withIdentity(normalized, identity) : normalized);
-    if (result instanceof Promise) {
-      // durable 境界（oplog fsync）解決後に ACK/broadcast を dispatch する（DD-014 durable ACK 契約）。
-      // 書込失敗時は当該接続のみ切断（他接続へ波及させない・P08）。
-      result.then((outbound) => this.dispatch(outbound)).catch((error: unknown) => {
-        console.error(`RoomBridge: durable submit failed: ${errorMessage(error)}`);
-        this.closeSocket(ws, 1011, 'internal error');
-      });
+    const routed = identity !== undefined ? withIdentity(normalized, identity) : normalized;
+    // 書込失敗時は当該接続のみ切断（他接続へ波及させない・P08）。
+    const failConnection = (error: unknown): void => {
+      console.error(`RoomBridge: durable submit failed: ${errorMessage(error)}`);
+      this.closeSocket(ws, 1011, 'internal error');
+    };
+    if (routed.type !== 'submitOperation') {
+      const result = this.room.handleMessage(existing, routed);
+      if (result instanceof Promise) {
+        result.then((outbound) => this.dispatch(outbound)).catch(failConnection);
+        return;
+      }
+      this.dispatch(result);
       return;
     }
-    this.dispatch(result);
+    // DD-049 H2: 受理通知の前値は Room 投入直前の権威文書から求める（hook 指定時だけ参照を捕捉）。
+    const before = this.captureDocumentBeforeSubmit();
+    const result = this.room.handleMessage(existing, routed);
+    // durable 境界（oplog fsync）解決後に ACK/broadcast を dispatch する（DD-014 durable ACK 契約）。配信・受理通知は
+    // サーバー起点 submit と共通の投入順 FIFO で行う（revision 順を保つ・DD-049 Codex P1）。
+    this.deliverSubmitInOrder(result, before, 'client', { onFailed: failConnection });
   }
 
   /**
@@ -401,6 +446,151 @@ class RoomBridge {
         return [...this.room.activeConnectionIds()];
     }
   }
+
+  /**
+   * submitOperation の Outbound を Room へ投入した順（＝revision の順）に dispatch → 受理通知 → onDelivered する（DD-049 Codex P1）。
+   * 同期の Room（永続化なし）の結果は即座に、PersistentRoom の結果は durable 化（append 解決）後に settle する。配る順序の規則は
+   * `takeDeliverableSubmit`、配る場所は serve 全体で共有する `SubmitDeliveryLoop`（hook を入れ子にしない）。
+   * 1 件の失敗（durable 失敗・dispatch や結果組み立ての例外）はその件の onFailed に閉じ、後続の配信を止めない。
+   */
+  private deliverSubmitInOrder(
+    result: Outbound[] | Promise<Outbound[]>,
+    before: SheetDocument | undefined,
+    origin: ServeAcceptedOrigin,
+    callbacks: { readonly onDelivered?: (outbound: Outbound[]) => void; readonly onFailed: (error: unknown) => void },
+  ): void {
+    const delivery: SubmitDelivery = {
+      state: 'pending',
+      outbound: [],
+      consumesRevision: false,
+      failure: undefined,
+      before,
+      origin,
+      ...callbacks,
+    };
+    this.submitDeliveries.push(delivery);
+    if (!(result instanceof Promise)) {
+      this.settleSubmit(delivery, result);
+      return;
+    }
+    result.then(
+      (outbound) => {
+        this.settleSubmit(delivery, outbound);
+      },
+      (error: unknown) => {
+        delivery.state = 'failed';
+        delivery.failure = error;
+        this.deliveryLoop.request(this.deliverNextSubmit);
+      },
+    );
+  }
+
+  private settleSubmit(delivery: SubmitDelivery, outbound: Outbound[]): void {
+    delivery.state = 'ready';
+    delivery.outbound = outbound;
+    delivery.consumesRevision = acceptedEnvelopesOf(outbound).length > 0;
+    this.deliveryLoop.request(this.deliverNextSubmit);
+  }
+
+  /** 配ってよい 1 件を配る（無ければ false）。serve 全体の SubmitDeliveryLoop から呼ばれる。 */
+  private readonly deliverNextSubmit = (): boolean => {
+    const delivery = this.takeDeliverableSubmit();
+    if (delivery === undefined) {
+      return false;
+    }
+    this.deliverSubmit(delivery);
+    return true;
+  };
+
+  /**
+   * 次に配ってよい 1 件を投入順に探して取り出す。受理（revision 消費）を含む件は、それより前に未 settle の件があれば越えない
+   * （revision 順を守る）。revision を消費しない応答（reject・noop・duplicate ACK）と失敗は、先行 op の durable 化を待たずに配る
+   * （従来どおりのタイミング・Codex 第 2 回 P1）。
+   */
+  private takeDeliverableSubmit(): SubmitDelivery | undefined {
+    let pendingAhead = false;
+    for (let index = 0; index < this.submitDeliveries.length; index += 1) {
+      const delivery = this.submitDeliveries[index];
+      if (delivery.state === 'pending') {
+        pendingAhead = true;
+        continue;
+      }
+      if (pendingAhead && delivery.state === 'ready' && delivery.consumesRevision) {
+        continue;
+      }
+      this.submitDeliveries.splice(index, 1);
+      return delivery;
+    }
+    return undefined;
+  }
+
+  private deliverSubmit(delivery: SubmitDelivery): void {
+    let failure: unknown = delivery.failure;
+    if (delivery.state === 'ready') {
+      try {
+        this.dispatch(delivery.outbound);
+        this.notifyAccepted(delivery.outbound, delivery.before, delivery.origin); // throw しない
+        delivery.onDelivered?.(delivery.outbound);
+        return;
+      } catch (error) {
+        failure = error; // dispatch・結果の組み立て（submitResultOf）の例外はこの件の失敗として扱う
+      }
+    }
+    try {
+      delivery.onFailed(failure);
+    } catch (error) {
+      console.error(`RoomBridge: submit の失敗処理が失敗しました: ${errorMessage(error)}`);
+    }
+  }
+
+  /** 受理通知の前値算出用に、Room 投入直前の権威文書の参照を捕捉する（hook 未指定は undefined＝コスト 0・DD-049 H2）。 */
+  private captureDocumentBeforeSubmit(): SheetDocument | undefined {
+    return this.accepted?.readDocument();
+  }
+
+  /**
+   * dispatch 済みの Outbound から受理 envelope（target=all の operations）を取り出して onAccepted を呼ぶ（DD-049 H2）。
+   * reject/noop/duplicate は送信元宛ての ACK/reject しか含まないため通知されない。hook の失敗は診断へ閉じ、**throw しない**
+   * （呼び出し元の durable 経路の catch＝接続切断へ波及させない）。
+   */
+  private notifyAccepted(outbound: Outbound[], before: SheetDocument | undefined, origin: ServeAcceptedOrigin): void {
+    const accepted = this.accepted;
+    if (accepted === undefined || before === undefined) {
+      return;
+    }
+    for (const envelope of acceptedEnvelopesOf(outbound)) {
+      try {
+        const returned = accepted.hook(buildAcceptedEvent(this.documentId, origin, envelope, before));
+        if (isPromiseLike(returned)) {
+          returned.then(undefined, (error: unknown) => {
+            this.reportAcceptedFailure(envelope.revision, error);
+          });
+        }
+      } catch (error) {
+        this.reportAcceptedFailure(envelope.revision, error);
+      }
+    }
+  }
+
+  /**
+   * onAccepted の失敗を診断へ出す（onDiagnostic 未指定でも黙らせない・P08）。受理・配信・永続化には影響しない。
+   * **この関数自体も throw しない**（文字列化できない値や診断 sink の例外で、受理済み submit を reject させたり、async hook の
+   * reject 監視から未処理 rejection を出したりしない・DD-049 Codex P2）。
+   */
+  private reportAcceptedFailure(revision: number, error: unknown): void {
+    const summary =
+      `onAccepted が失敗しました（documentId=${this.documentId} revision=${revision}・受理・配信・永続化には影響なし）: ` +
+      describeThrown(error);
+    try {
+      if (this.diagnostics !== undefined) {
+        this.diagnostics('warn', 'on-accepted-error', summary);
+      } else {
+        console.error(`collaboration-server: ${summary}`);
+      }
+    } catch {
+      console.error(`collaboration-server: ${summary}（診断 sink が失敗したため console へ出力）`);
+    }
+  }
 }
 
 /** 認証済み identity で申告値を上書きする（submitOperation の actorId・presence の userId/displayName。DD-026-2）。 */
@@ -432,6 +622,115 @@ function submitResultOf(operationId: OperationId, outbound: Outbound[]): ServeSu
     }
   }
   throw new Error('submit: Room が ACK/reject を返しませんでした（内部不整合）');
+}
+
+/** RoomBridge の submitOperation 配信待ち 1 件（Room へ投入した順に配る・DD-049 Codex P1）。 */
+interface SubmitDelivery {
+  /** pending=durable 待ち／ready=Outbound 確定／failed=durable 失敗等。 */
+  state: 'pending' | 'ready' | 'failed';
+  outbound: Outbound[];
+  /** 受理（target=all の operations）を含むか。含む件だけが、先行の未 settle 件を越えずに revision 順を守る（Codex 第 2 回 P1）。 */
+  consumesRevision: boolean;
+  failure: unknown;
+  readonly before: SheetDocument | undefined;
+  readonly origin: ServeAcceptedOrigin;
+  readonly onDelivered?: (outbound: Outbound[]) => void;
+  readonly onFailed: (error: unknown) => void;
+}
+
+/**
+ * serve 全体（全文書の RoomBridge）の submitOperation 配信を 1 本のループへ直列化する（DD-049 Codex 第 2 回 P2）。
+ * 配信（dispatch → 受理通知 → submit の解決）はこのループの中でだけ行うため、onAccepted の実行中に同じ文書・別文書へ submit しても、
+ * その配信と通知は実行中の hook が戻った後になる（hook は入れ子に呼ばれない）。各 RoomBridge は「配れる 1 件を配ったら true」を返す
+ * 手順を登録し、ループは全手順が false を返すまで回す（文書をまたぐ配信順は規定しない）。
+ */
+class SubmitDeliveryLoop {
+  private running = false;
+  private readonly waiting = new Set<() => boolean>();
+
+  request(deliverNext: () => boolean): void {
+    this.waiting.add(deliverNext);
+    if (this.running) {
+      return; // 実行中のループ（hook の呼び出し元）が続けて配る
+    }
+    this.running = true;
+    try {
+      while (this.waiting.size > 0) {
+        for (const step of [...this.waiting]) {
+          if (!step()) {
+            this.waiting.delete(step);
+          }
+        }
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+}
+
+/** 受理通知の配線（DD-049 H2）。hook と、前値算出のための権威文書の読取口。 */
+interface AcceptedNotifier {
+  readonly hook: ServeAcceptedHook;
+  /** 権威文書（Sequencer.document）。copy-on-write のため、Room 投入直前に捕捉した参照は以後の op で変わらない。 */
+  readonly readDocument: () => SheetDocument;
+}
+
+/** Outbound から受理 envelope を取り出す（受理だけが target=all の operations を返す＝Room.handleSubmit。1 submit は高々 1 件）。 */
+function acceptedEnvelopesOf(outbound: Outbound[]): ServerOperationEnvelope[] {
+  const envelopes: ServerOperationEnvelope[] = [];
+  for (const item of outbound) {
+    if (item.target.kind === 'all' && item.message.type === 'operations') {
+      envelopes.push(...item.message.operations);
+    }
+  }
+  return envelopes;
+}
+
+/** 受理通知を組む（envelope は複製・前値は op 適用前の文書から逐次に求める・DD-049 H2）。 */
+function buildAcceptedEvent(
+  documentId: string,
+  origin: ServeAcceptedOrigin,
+  envelope: ServerOperationEnvelope,
+  before: SheetDocument,
+): ServeAcceptedEvent {
+  return {
+    documentId,
+    revision: envelope.revision,
+    actorId: envelope.actorId,
+    origin,
+    envelope: structuredClone(envelope), // consumer が書き換えても operationLog（catch-up の供給源）を汚さない
+    changes: acceptedCellChanges(envelope.operation, before),
+  };
+}
+
+const BLANK_CELL: CellScalar = { kind: 'blank' };
+
+/**
+ * SetCells の前後値（DD-049 H2）。同一 op 内で同じセルを複数回書いた場合は直前の書込後の値＝core applyOperation の
+ * ChangeSet と同じ逐次の意味。insertRows / deleteRows は空配列。
+ */
+function acceptedCellChanges(operation: DocumentOperation, before: SheetDocument): ServeAcceptedCellChange[] {
+  if (operation.type !== 'setCells') {
+    return [];
+  }
+  const writtenInOperation = new Map<string, CellScalar>();
+  return operation.changes.map((change) => {
+    const key = JSON.stringify([change.rowId, change.columnId]);
+    const previous =
+      writtenInOperation.get(key) ?? getCell(before, change.rowId, change.columnId)?.value ?? BLANK_CELL;
+    writtenInOperation.set(key, change.value);
+    return {
+      rowId: String(change.rowId),
+      columnId: String(change.columnId),
+      value: cloneCellScalar(change.value),
+      previousValue: cloneCellScalar(previous),
+    };
+  });
+}
+
+/** hook の戻り値が thenable か（async hook の reject を拾うため・DD-049 H2）。 */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
 }
 
 /** 1 文書分の起動仕様（内部・DD-043）。単一文書構成は N=1 のこの仕様へ写像する。 */
@@ -504,9 +803,17 @@ function validateDocumentSpec(spec: DocumentSpec, at: string): void {
  */
 async function createDocumentRuntime(
   spec: DocumentSpec,
-  deps: { clock: Clock; ttlMillis: number; snapshotIntervalOps?: number; diagnostics?: DiagnosticSink },
+  deps: {
+    clock: Clock;
+    ttlMillis: number;
+    snapshotIntervalOps?: number;
+    diagnostics?: DiagnosticSink;
+    onAccepted?: ServeAcceptedHook;
+    /** serve 全体で共有する submitOperation の配信ループ（DD-049 Codex 第 2 回 P2）。 */
+    deliveryLoop: SubmitDeliveryLoop;
+  },
 ): Promise<DocumentRuntime> {
-  const { clock, ttlMillis, diagnostics } = deps;
+  const { clock, ttlMillis, diagnostics, onAccepted, deliveryLoop } = deps;
   const documentId = spec.documentId;
   const columnOrderStrings = spec.columnOrder;
   const columnOrder = columnOrderStrings.map((c) => createColumnId(c));
@@ -590,7 +897,10 @@ async function createDocumentRuntime(
             snapshotIntervalOps: deps.snapshotIntervalOps,
           })
         : undefined;
-    const bridge = new RoomBridge(persistentRoom ?? room, documentId, diagnostics);
+    // DD-049 H2: 受理通知は hook 指定時だけ配線する（前値は Sequencer の権威文書＝copy-on-write の参照から求める）。
+    const accepted: AcceptedNotifier | undefined =
+      onAccepted !== undefined ? { hook: onAccepted, readDocument: () => sequencer.document } : undefined;
+    const bridge = new RoomBridge(persistentRoom ?? room, documentId, deliveryLoop, diagnostics, accepted);
     // 検査/復元用 snapshot: 永続化有効時は durable frontier 以下に制限する（未 fsync revision を `/snapshot`・
     // RunningServer.snapshot() から観測させない・DD-014-1 P1-3）。無効時は現在状態（全 in-memory が読取可能）。
     const readSnapshot = (): SnapshotData =>
@@ -753,7 +1063,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const clock: Clock = { now: () => Date.now() }; // アダプター層のみ実クロック（指示 1）
   // DD-005 統合データセット指定時は列順・シードを 50,000行×200列へ切り替える（既存の小規模デモとは排他）。
   const datasetConfig = resolveDataset(options.integrationDataset);
-  const runtimeDeps = { clock, ttlMillis, snapshotIntervalOps: options.snapshotIntervalOps, diagnostics };
+  const runtimeDeps = {
+    clock,
+    ttlMillis,
+    snapshotIntervalOps: options.snapshotIntervalOps,
+    diagnostics,
+    onAccepted: options.onAccepted,
+    // DD-049（Codex 第 2 回 P2）: 全文書の submitOperation 配信を 1 本のループへ直列化する（onAccepted を入れ子にしない）。
+    deliveryLoop: new SubmitDeliveryLoop(),
+  };
   // デモ HTML の読込は文書を構築する前に済ませる（ここで失敗しても閉じるべきハンドルを作っていない状態にする）。
   const demoHtml = loadDemoHtml();
 
@@ -1134,8 +1452,22 @@ async function closeServer(
   }
 }
 
+/** 例外のメッセージ（toString を持たない値〔null prototype 等〕や文字列化が throw する値でも throw しない・DD-049 Codex P2）。 */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return `（文字列化できない ${typeof error}）`;
+  }
+}
+
+/** 例外を「種別: メッセージ」へ文字列化する（診断用・どんな値でも throw しない・DD-049 Codex P2）。 */
+function describeThrown(error: unknown): string {
+  try {
+    return `${error instanceof Error ? error.name : typeof error}: ${errorMessage(error)}`;
+  } catch {
+    return typeof error;
+  }
 }
 
 /** `tsx src/server.ts`（dev script）で直接起動されたときだけ待受を開始する（import 時は起動しない＝smoke が import 可能）。 */

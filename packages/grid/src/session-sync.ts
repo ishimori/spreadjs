@@ -98,6 +98,12 @@ export interface SessionSyncConfig {
    * foreign revision を owned と誤認しない（R-07 対策の要）。
    */
   onOwnSetCellsCommitted?: (operationId: OperationId, revision: number) => void;
+  /**
+   * 1 サーバーメッセージの処理（session の適用 → Render State の dirty 立て）が終わった直後（DD-049）。
+   * 利用者向けの remote-change / presence はここで配る（listener が命令 API を呼んでも、適用途中の文書や dirty 未反映の
+   * Render State を読まない）。
+   */
+  onServerMessageSettled?: (message: ServerMessage) => void;
 }
 
 export interface SessionSync {
@@ -180,6 +186,8 @@ export function createSessionSync(config: SessionSyncConfig): SessionSync {
           break;
         // welcome/operationAck/heartbeatAck は Render 更新契機ではない（ack は値不変で pending→committed の昇格のみ）。
       }
+      // DD-049: session の適用と Render State の dirty 立てが済んだ＝利用者向けイベント（remote-change/presence）を配ってよい。
+      config.onServerMessageSettled?.(message);
     },
     onConnected() {
       config.onConnected?.();

@@ -22,6 +22,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **server-hono 受理通知フック `onAccepted`（Experimental・DD-049 H2）**: `serve({ onAccepted })` で、受理した操作を 1 件ずつ受け取れる
+  （広島空港 予算共同編集 consumer 駆動。DB・保存先を持たない構成で、偽の oplog を渡さずに集計の再計算などを起動するための口）。
+  - 呼ばれるのは revision を消費した受理だけ（reject・noop・再送の重複・seed/initialDocument・durable 失敗では呼ばれない）。
+    永続化ありでは `append` 解決（durable）と ACK・配信の**後**に、文書ごとに revision 昇順で呼ばれる。
+  - `ServeAcceptedEvent = { documentId, revision, actorId, origin: 'client' | 'server', envelope, changes }`。`changes` は SetCells の
+    前後値（`previousValue`・同一 op 内の同一セルは逐次）で、insertRows/deleteRows は空配列。`envelope` は複製。
+    `ServerInstance.submit` 起点は `origin: 'server'` で、hook の後に submit の Promise が解決する。
+  - hook は待たない（fire-and-forget）。同期 throw・Promise の reject は新しい診断コード `on-accepted-error`（warn）になり、
+    受理・配信・永続化には影響しない（`onDiagnostic` 未指定なら console.error）。hook 内の `submit` は可（実行中の hook が戻った後に
+    revision 順で通知され、hook は入れ子に呼ばれない。無限ループ防止は利用側責務）。
+- **grid `remote-change` イベント（Experimental・DD-049 H4・共同編集モード専用）**: サーバー確定（受理済み）の SetCells が committed に
+  入るたび 1 op＝1 回、`{ type: 'remote-change', change: { origin: 'local' | 'remote' | 'server', revision, actorId, changes } }` を発火する。
+  `changes` は `cell-commit` と同じ表示文字列の前後値。自分の確定もサーバー確定後に `origin: 'local'` で届く。楽観適用のまま
+  rollback/reject された op、snapshot bootstrap（初回接続・1,000 revision 超の差分がある再接続）で確立した状態、行の挿入・削除は
+  通知しない。単独グリッドモードでは発火しない。型 `GridRemoteChange` / `GridRemoteChangeOrigin` を追加。
+- **grid 参加者一覧 `presence` イベントと `GridInstance.presences()`（Experimental・DD-049 H5・共同編集モード専用）**: 先頭に自分
+  （`self: true`）、続いて他者をサーバーから届いた順に並べた `GridPresenceUser { userId, displayName, activeCell, self }` の一覧。
+  一覧が変わったとき（初回 join・他者の参加/移動/切断/TTL 失効・自分の移動）だけ発火し、`presences()` が現在値を返す。
+  単独モード・初回 join 前・destroy 後は `[]`。型 `GridPresenceUser` / `GridCellAddress` を追加。
+- **react `onRemoteChange` / `onPresenceChange` と `ref.presences()`（Experimental・DD-049）**: grid の同名イベントへの callback 系写像
+  （差し替えで remount しない）と、`GridInstance.presences` 直結の handle メソッド（未 mount 時は `[]`）。
+- 機能カタログ（紹介サイト）の「他ユーザーの編集位置表示」を提供中へ更新。
+- 新しいオプション・イベントを使わない既存 consumer の挙動は不変。公開 `.d.ts` snapshot の差分は追加のみ。
+
+### Fixed
+
+- **server-hono の配信順（DD-049・Codex P1）**: 永続化なしの `ServerInstance.submit` の配信（operations）が、直後に同じタイミングで
+  届いたクライアント操作の配信より後になり、revision 順が入れ替わることがあった（クライアントは revision バッファで並べ直すため収束は
+  していた）。受理した操作の配信を、接続の操作・サーバー起点の操作とも Room へ投入した順（＝revision 順）に揃えた（reject・noop・
+  再送への ACK は従来どおり先行操作の durable 化を待たずに返す）。公開 API の変更なし。
+
 ## [0.1.0-alpha.5] - 2026-09-06
 
 ### Added

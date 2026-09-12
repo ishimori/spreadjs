@@ -6,6 +6,7 @@
 // 内部型/デモ専用オプションは露出しない）。
 // DD-026: consumer 統合の 3 つの口（U1 永続化ストアの差し替え・U2 認証フック・U3 サーバー起点操作）を公開型
 // （./serve-types・内部 package 非参照）で追加した。
+// DD-049: 受理通知フック（H2・onAccepted）を追加した。
 
 import { adaptOpLogStore, adaptSnapshotStore } from './serve-adapters';
 import { startServer } from './server';
@@ -13,6 +14,7 @@ import { startServer } from './server';
 // index.d.ts に現れない＝R7 型漏洩 0 を維持する）。
 import type { StartDocumentConfig, StartDocumentsOptions } from './server';
 import type {
+  ServeAcceptedHook,
   ServeAuthenticate,
   ServeDocumentConfig,
   ServeDocuments,
@@ -26,6 +28,10 @@ import type {
 } from './serve-types';
 
 export type {
+  ServeAcceptedCellChange,
+  ServeAcceptedEvent,
+  ServeAcceptedHook,
+  ServeAcceptedOrigin,
   ServeAuthRequest,
   ServeAuthenticate,
   ServeCellScalar,
@@ -63,7 +69,8 @@ export interface ServeDiagnostic {
    * 'serve-started' / 'serve-stopped'（起動・停止）／'auth-rejected'（authenticate が null＝401 拒否・warn）／
    * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
    * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
-   * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）。Cookie・トークン等の値は載せない。
+   * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）／'on-accepted-error'（onAccepted が throw、
+   * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）。Cookie・トークン等の値は載せない。
    */
   readonly code: string;
   readonly message: string;
@@ -106,6 +113,18 @@ export interface ServeOptions {
    * 再接続の同一性のため申告を維持）。未指定なら従来どおり申告値（trusted internal）。
    */
   readonly authenticate?: ServeAuthenticate;
+  /**
+   * 受理通知フック（DD-049 H2）。revision を消費した受理 1 件につき 1 回、**durable 化（永続化あり）と ACK・配信の後**に
+   * 呼ばれる（文書ごとに revision 昇順）。WebSocket 接続の操作は `origin: 'client'`、`ServerInstance.submit` は
+   * `origin: 'server'`（hook の後に submit の Promise が解決する）。reject・noop・再送の重複・seed/initialDocument・
+   * durable 失敗では呼ばれない。DB を持たない構成でも、偽の oplog を渡さずに集計の再計算などを起動できる。
+   * - `changes` は SetCells の前後値（insertRows / deleteRows は空配列）。`envelope` は複製（書き換えても SDK に影響しない）。
+   * - 戻り値の Promise は待たない。同期 throw・reject は診断 `on-accepted-error`（warn）になり、受理・配信・永続化には
+   *   影響しない（`onDiagnostic` 未指定なら console.error）。
+   * - hook 内で `submit` を呼んでよい（別 revision で受理され、実行中の hook が戻った後に revision 順で `origin: 'server'` として
+   *   通知される＝hook は入れ子に呼ばれない）。**無限ループの防止は利用側責務**（`origin === 'server'` を再評価しない等）。
+   */
+  readonly onAccepted?: ServeAcceptedHook;
   /**
    * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止・認証拒否の診断エントリが配信される。
    * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
@@ -183,6 +202,7 @@ export async function serve(options: ServeOptions = {}): Promise<ServerInstance>
     snapshotStore: options.snapshotStore !== undefined ? adaptSnapshotStore(options.snapshotStore) : undefined,
     initialDocument: options.initialDocument,
     authenticate: options.authenticate,
+    onAccepted: options.onAccepted,
     diagnostics: onDiagnostic !== undefined ? diag : undefined,
     documents: options.documents !== undefined ? adaptDocuments(options.documents) : undefined,
   });

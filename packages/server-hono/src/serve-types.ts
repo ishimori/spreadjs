@@ -229,3 +229,45 @@ export interface ServeQuarantinedDocument {
   /** 復旧が失敗した理由（例外メッセージ）。 */
   readonly reason: string;
 }
+
+// ---- H2: 受理通知フック（DD-049）----
+
+/** 受理した SetCells の 1 セル分（前後値付き・DD-049）。 */
+export interface ServeAcceptedCellChange {
+  readonly rowId: string;
+  readonly columnId: string;
+  /** この変更で書き込まれた値。 */
+  readonly value: ServeCellScalar;
+  /**
+   * この変更を適用する直前の値（未書込セルは `{ kind: 'blank' }`）。同じ op 内で同一セルを複数回書いた場合は、
+   * 直前の書込後の値（op 内で逐次）。
+   */
+  readonly previousValue: ServeCellScalar;
+}
+
+/** 受理した操作の起点（DD-049）。`'client'`＝WebSocket 接続のクライアント／`'server'`＝`ServerInstance.submit`。 */
+export type ServeAcceptedOrigin = 'client' | 'server';
+
+/**
+ * `onAccepted` に渡る受理通知（DD-049 H2）。revision を消費した受理 1 件につき 1 回、durable 化（永続化あり）と
+ * ACK・配信の後に届く（文書ごとに revision 昇順）。
+ */
+export interface ServeAcceptedEvent {
+  /** 受理した文書（複数文書 serve では文書ごとに正しい ID）。 */
+  readonly documentId: string;
+  /** サーバー付与の revision。 */
+  readonly revision: number;
+  /** 受理 envelope の actorId（`authenticate` 指定時はサーバーが確定した利用者 ID・`submit` は `options.actorId`）。 */
+  readonly actorId: string;
+  readonly origin: ServeAcceptedOrigin;
+  /** 受理 envelope（oplog へ追記される形と同じ・複製＝書き換えても SDK に影響しない）。 */
+  readonly envelope: ServeOperationEnvelope;
+  /** SetCells のセル変更（`envelope.operation.changes` と同順・前後値付き）。insertRows / deleteRows は空配列。 */
+  readonly changes: readonly ServeAcceptedCellChange[];
+}
+
+/**
+ * 受理通知フック（DD-049 H2）。戻り値の Promise は待たない（fire-and-forget）。同期 throw・Promise の reject は
+ * 診断 `on-accepted-error`（warn）になり、受理・配信・永続化には影響しない。
+ */
+export type ServeAcceptedHook = (event: ServeAcceptedEvent) => void | Promise<void>;

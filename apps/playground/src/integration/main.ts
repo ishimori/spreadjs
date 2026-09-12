@@ -15,6 +15,8 @@ import type {
   GridColumnType,
   GridEvent,
   GridInstance,
+  GridPresenceUser,
+  GridRemoteChange,
 } from '@nanairo-sheet/grid';
 import { getDebugApi } from '@nanairo-sheet/grid/test-support';
 import type { GridDebugApi } from '@nanairo-sheet/grid/test-support';
@@ -333,6 +335,42 @@ function renderBar(): void {
     statusEl.textContent = `接続: ${connLabel}  ｜  未送信(pending): ${pendingNow}  ｜  名前: ${nameParam ?? '(anon)'}`;
   }
 }
+
+// DD-049: 参加者一覧（presence）と確定変更（remote-change）を画面に出す（Manual Gate M1・E2E 証跡用。`?activity=1` のときだけ）。
+// 既定では要素を作らない＝既存 E2E のレイアウト・#int-status の表示は不変。
+const activityEl = params.get('activity') === '1' ? createActivityPanel() : null;
+let presenceUsers: readonly GridPresenceUser[] = [];
+const recentChanges: GridRemoteChange[] = [];
+function createActivityPanel(): HTMLElement {
+  const el = document.createElement('div');
+  el.id = 'int-activity';
+  el.className = 'int-status';
+  el.style.whiteSpace = 'pre-line';
+  document.querySelector('.int-header')?.append(el);
+  return el;
+}
+function renderActivity(): void {
+  if (activityEl === null) {
+    return;
+  }
+  const people = presenceUsers
+    .map((u) => {
+      const cell = u.activeCell === null ? '' : ` @${u.activeCell.rowId}/${u.activeCell.columnId}`;
+      return `${u.displayName}${u.self ? '（自分）' : ''}${cell}`;
+    })
+    .join('、');
+  const changes = recentChanges
+    .map((c) => {
+      const first = c.changes[0];
+      const cell = first === undefined ? '' : ` ${first.rowId}/${first.columnId} 「${first.previousValue}」→「${first.value}」`;
+      const more = c.changes.length > 1 ? ` 他 ${c.changes.length - 1} セル` : '';
+      return `r${c.revision} ${c.origin} ${c.actorId}${cell}${more}`;
+    })
+    .join('  ｜  ');
+  activityEl.textContent =
+    `参加者（presence）: ${people === '' ? '（なし）' : people}\n` +
+    `確定変更（remote-change・新しい順）: ${changes === '' ? '（なし）' : changes}`;
+}
 function renderStatus(event: GridEvent): void {
   gridEvents.push(event); // E2E 記録（DD-027-1）
   if (statusEl === null) {
@@ -370,6 +408,17 @@ function renderStatus(event: GridEvent): void {
     case 'link-open':
       // DD-027-2: リンク列クリックの通知（SDK は navigate しない＝利用側が受けて遷移を実装する）。E2E 観測点。
       statusEl.textContent = `🔗 link-open: row=${event.rowId} col=${event.columnId} value=${event.value}`;
+      break;
+    case 'presence':
+      // DD-049 H5: 参加者一覧（?activity=1 のときだけ表示・#int-status は変えない）。
+      presenceUsers = event.users;
+      renderActivity();
+      break;
+    case 'remote-change':
+      // DD-049 H4: サーバー確定のセル変更（新しい順に 3 件まで表示・#int-status は変えない）。
+      recentChanges.unshift(event.change);
+      recentChanges.splice(3);
+      renderActivity();
       break;
   }
 }

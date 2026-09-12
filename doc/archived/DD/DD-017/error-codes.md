@@ -59,3 +59,6 @@ mount 本体へ波及しない。診断コード例: `boot-start` / `config-reso
 
 `@nanairo-sheet/server-hono` の `ServeOptions.onDiagnostic` も同形（opt-in・既定無出力）で `serve-started` / `serve-stopped`
 を配信する。接続単位の診断・汎用テレメトリ基盤は Stage 2（現状は `ServerInstance.connectionCount()` で代替）。
+その後に追加した server-hono の診断コード（一覧の正本は `ServeDiagnostic.code` の JSDoc）: `auth-rejected`（warn）/ `auth-error`（error）
+〔DD-026-2〕、`document-quarantined`（error）/ `document-unknown`（warn）/ `document-mismatch`（warn）〔DD-043〕、
+`on-accepted-error`（warn・`onAccepted` の throw／返した Promise の reject。受理・配信・永続化には影響しない）〔DD-049〕。
