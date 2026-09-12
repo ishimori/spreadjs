@@ -20,6 +20,12 @@ export interface RowStructureKeyInput {
   /** 状態機械の内部 composing（I-2: DOM と内部の両方を見る）。 */
   readonly sessionComposing: boolean;
   readonly phase: EditPhase;
+  /**
+   * RC14（DD-052-3）: 行操作ショートカット自体が有効か（mount オプション `rowOperations`・既定 true）。
+   * false なら常に 'none'（他の編集は従来どおり可能。公開 API `insertRows`/`deleteRows` は対象外＝consumer の
+   * 明示呼び出しまでは止めない）。未指定時は true 扱い（既存呼び出し元の後方互換）。
+   */
+  readonly rowOperationsEnabled?: boolean;
 }
 
 /**
@@ -29,7 +35,13 @@ export interface RowStructureKeyInput {
  * '+' は主要レイアウトで Shift+'=' により生成される（numpad は Shift 不要）ため shift 有無は問わない。
  */
 export function decideRowStructureKey(input: RowStructureKeyInput): RowStructureKeyDecision {
-  if (input.eventComposing || input.sessionComposing || input.phase !== 'Navigation' || input.altKey) {
+  if (
+    input.rowOperationsEnabled === false ||
+    input.eventComposing ||
+    input.sessionComposing ||
+    input.phase !== 'Navigation' ||
+    input.altKey
+  ) {
     return 'none';
   }
   if (!(input.ctrlKey || input.metaKey)) {

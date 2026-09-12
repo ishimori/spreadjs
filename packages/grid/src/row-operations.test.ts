@@ -41,6 +41,16 @@ describe('decideRowStructureKey', () => {
     expect(decideRowStructureKey(key({ key: '+', altKey: true }))).toBe('none');
   });
 
+  it('RC14（DD-052-3）: rowOperationsEnabled:false は Navigation・非composingでも常に none', () => {
+    expect(decideRowStructureKey(key({ key: '+', rowOperationsEnabled: false }))).toBe('none');
+    expect(decideRowStructureKey(key({ key: '-', shiftKey: false, rowOperationsEnabled: false }))).toBe('none');
+  });
+
+  it('RC14: rowOperationsEnabled:true・未指定は従来どおり（既定 true）', () => {
+    expect(decideRowStructureKey(key({ key: '+', rowOperationsEnabled: true }))).toBe('insert');
+    expect(decideRowStructureKey(key({ key: '+' }))).toBe('insert'); // 未指定
+  });
+
   it('Editing/Composing 位相・composing 中は必ず none（IME 不変条件・I-3）', () => {
     expect(decideRowStructureKey(key({ phase: 'EditingReplace' }))).toBe('none');
     expect(decideRowStructureKey(key({ phase: 'EditingExisting' }))).toBe('none');

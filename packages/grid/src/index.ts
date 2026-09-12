@@ -197,6 +197,14 @@ export type GridEventListener = (event: GridEvent) => void;
 export interface GridStandaloneRow {
   readonly rowId: string;
   readonly cells?: Readonly<Record<string, string>>;
+  /**
+   * RC3（DD-052-3）: この行だけを読み取り専用にする列（ColumnId 文字列の配列・Experimental 0.x）。
+   * mount 時の `readOnlyColumns`（全行に効く列単位の読み取り専用）とは別軸で、**この行のセルにだけ**追加で
+   * 効く（両方に該当すれば当然 readOnly）。`setData` で行ごと差し替えるたびに再評価される（remount 不要）。
+   * 抑止・スキップ・保証層の契約は `readOnlyColumns`/`readOnlyRows` と同型。**standalone モード専用**
+   * （共同編集モードでは無視される。行の編集権限は将来スコープ）。未知列は静かにスキップする。
+   */
+  readonly readOnlyColumns?: readonly string[];
 }
 
 /**
@@ -346,6 +354,13 @@ export interface GridCommonMountOptions {
    * - **注意**: 権限制御ではない（サーバー側強制なし＝`readOnly` / `readOnlyColumns` と同じ）。
    */
   readonly readOnlyRows?: readonly string[];
+  /**
+   * 行操作ショートカット（Ctrl+Shift+'+'=挿入／Ctrl+'-'=削除・Excel 準拠）の有効・無効（Experimental 0.x・
+   * DD-052-3 RC14）。既定 `true`（従来どおり有効）。`false` にすると単独モードのショートカットで行を追加・削除
+   * できなくなる（他の編集は従来どおり可能）。**公開 API `insertRows`/`deleteRows` の呼び出しは対象外**
+   * （consumer の明示的な行操作までは止めない＝ボタン等からの意図的な追加・削除は妨げない）。両モード共通。
+   */
+  readonly rowOperations?: boolean;
   /**
    * 固定行数（先頭 n 行・Experimental 0.x・DD-036 C1）。既定 1（＝DD-036 以前の固定値と完全一致）。`0` で固定なし。
    * 両モード共通・mount 時固定・**view-local**（文書状態にしない＝設定が異なるクライアントは異なる見え方をする）。

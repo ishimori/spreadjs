@@ -96,6 +96,68 @@ describe('createStandaloneSession: 初期注入（決定③）', () => {
   });
 });
 
+describe('createStandaloneSession: RC3（DD-052-3）行データ指定のセル単位 readOnly', () => {
+  it('行の readOnlyColumns に含まれるセルだけ isCellReadOnly=true・hasAnyCellReadOnly=true', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: {
+        rows: [
+          { rowId: 'r1', cells: { 'col-a': 'x' }, readOnlyColumns: ['col-a'] },
+          { rowId: 'r2', cells: { 'col-a': 'y' } },
+        ],
+      },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    expect(session.hasAnyCellReadOnly()).toBe(true);
+    expect(session.isCellReadOnly('r1', 'col-a')).toBe(true);
+    expect(session.isCellReadOnly('r1', 'col-b')).toBe(false); // 同じ行でも対象外の列は false
+    expect(session.isCellReadOnly('r2', 'col-a')).toBe(false); // 他の行は対象外
+  });
+
+  it('未指定・空配列なら hasAnyCellReadOnly=false（現行挙動）', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1', cells: { 'col-a': 'x' }, readOnlyColumns: [] }] },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    expect(session.hasAnyCellReadOnly()).toBe(false);
+    expect(session.isCellReadOnly('r1', 'col-a')).toBe(false);
+  });
+
+  it('未知列は静かにスキップする（cells と同じ扱い）', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1', readOnlyColumns: ['col-zzz'] }] },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    expect(session.hasAnyCellReadOnly()).toBe(false);
+  });
+
+  it('setData で丸ごと再構築される（旧行の指定を引きずらない・決定③と同じ扱い）', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1', cells: { 'col-a': 'x' }, readOnlyColumns: ['col-a'] }] },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    expect(session.isCellReadOnly('r1', 'col-a')).toBe(true);
+    session.setData({ rows: [{ rowId: 'r1', cells: { 'col-a': 'y' } }] }); // readOnlyColumns 無指定で再注入
+    expect(session.isCellReadOnly('r1', 'col-a')).toBe(false);
+    expect(session.hasAnyCellReadOnly()).toBe(false);
+  });
+});
+
 describe('createStandaloneSession: cell-commit 通知（決定②）', () => {
   it('SetCells 確定で value/previousValue 付き cell-commit が発火する', () => {
     const commits: GridCellCommitChange[][] = [];

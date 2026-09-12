@@ -378,6 +378,29 @@ const grid = mount(
 );
 ```
 
+### 行単位の読み取り専用セル・行操作の無効化（DD-052-3）
+
+`GridStandaloneRow.readOnlyColumns`（**単独グリッドモード専用**）は、その行だけを対象に列を読み取り専用にする
+（mount 時の `readOnlyColumns`/`readOnlyRows` は全行/全列に効く別軸のオプション。両方に該当すれば当然読み取り専用）。
+`setData` で行データを差し替えるたびに再評価されるため remount は不要。
+
+```ts
+const initialData: GridStandaloneData = {
+  rows: [
+    // この行の col-b だけ読み取り専用（他の行の col-b は編集できる）。
+    { rowId: 'r1', cells: { 'col-a': '田中', 'col-b': '承認済' }, readOnlyColumns: ['col-b'] },
+    { rowId: 'r2', cells: { 'col-a': '鈴木', 'col-b': '' } },
+  ],
+};
+```
+
+行操作ショートカット（Ctrl+Shift+'+'=挿入／Ctrl+'-'=削除）は `rowOperations: false` で無効化できる（既定 `true`）。
+公開 API `insertRows`/`deleteRows` の呼び出しは対象外（consumer の明示的な行操作は妨げない）。両モード共通。
+
+```ts
+const grid = mount({ container }, { mode: 'standalone', columnOrder, initialData, rowOperations: false });
+```
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

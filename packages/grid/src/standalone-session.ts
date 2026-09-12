@@ -41,6 +41,10 @@ export interface StandaloneSessionConfig {
 export interface StandaloneSession extends GridBackend {
   /** 文書を丸ごと再注入する（決定③・setData）。Render を全再構築する。 */
   setData(data: GridStandaloneData): void;
+  /** RC3（DD-052-3）: このセルは行データ（`GridStandaloneRow.readOnlyColumns`）で読み取り専用に指定されているか。 */
+  isCellReadOnly(rowId: string, columnId: string): boolean;
+  /** RC3: 1件でも行単位の読み取り専用セルが指定されているか（呼び出し側の早期リターン用）。 */
+  hasAnyCellReadOnly(): boolean;
 }
 
 /** CellScalar | undefined を表示文字列へ（undefined=未書込セル=空）。 */
@@ -52,6 +56,9 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
   const columnIds: ColumnId[] = config.columnOrder.map((c) => createColumnId(c));
   const knownColumns = new Set<string>(config.columnOrder);
   const stringColumns = new Set<string>(config.stringColumns ?? []);
+  // RC3（DD-052-3）: 行単位の読み取り専用列（RowId 文字列→ColumnId 文字列集合）。setData のたびに丸ごと再構築する
+  // （決定③「文書を丸ごと再注入」と同じ扱い＝古い行の指定を引きずらない）。
+  let cellReadOnly = new Map<string, ReadonlySet<string>>();
   // 適用ごとに単調増加する revision（cell 単位 lastChangedRevision の源。共同編集の server revision に相当）。
   let revision = 0;
   let doc: SheetDocument = buildDocument(config.initialData);
@@ -75,6 +82,8 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     revision += 1;
     let next = createDocument(columnIds);
     next.revision = revision;
+    // RC3: 文書を丸ごと差し替えるたびに行単位 readOnly も丸ごと再構築する（古い行の指定を引きずらない）。
+    cellReadOnly = new Map<string, ReadonlySet<string>>();
     const rows = data?.rows ?? [];
     if (rows.length === 0) {
       return next;
@@ -98,6 +107,13 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
 
     const changes: SetCellsChange[] = [];
     for (const row of uniqueRows) {
+      // RC3: 行単位の読み取り専用列（未知列は静かにスキップ・cells と同じ扱い）。
+      if (row.readOnlyColumns !== undefined && row.readOnlyColumns.length > 0) {
+        const known = row.readOnlyColumns.filter((c) => knownColumns.has(c));
+        if (known.length > 0) {
+          cellReadOnly.set(row.rowId, new Set(known));
+        }
+      }
       if (row.cells === undefined) {
         continue;
       }
@@ -178,6 +194,12 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       doc = buildDocument(data);
       // 文書差し替え → 行順・全セルが変わりうるため Render を全再構築する（決定③）。
       view.markFullRebuild();
+    },
+    isCellReadOnly(rowId: string, columnId: string): boolean {
+      return cellReadOnly.get(rowId)?.has(columnId) === true;
+    },
+    hasAnyCellReadOnly(): boolean {
+      return cellReadOnly.size > 0;
     },
   };
 }

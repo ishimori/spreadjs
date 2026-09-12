@@ -66,9 +66,11 @@ import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resi
 import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
 import {
+  partitionReadOnlyCellChanges,
   partitionReadOnlyColumnChanges,
   partitionReadOnlyRowChanges,
   shouldSuppressReadonlyKey,
+  touchesReadOnlyCell,
   touchesReadOnlyColumn,
   touchesReadOnlyRow,
 } from './readonly-policy';
@@ -150,6 +152,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // RC12（DD-052-2）: 文字列として保つ列（ColumnId 文字列）。mount 時固定（wrapColumns と同運用）。
   const stringColumns = options.stringColumns ?? [];
   const stringColumnStrings = new Set<string>(stringColumns);
+  // RC14（DD-052-3）: 行操作ショートカット自体の有効・無効（既定 true）。公開 API insertRows/deleteRows は対象外。
+  const rowOperationsEnabled = options.rowOperations ?? true;
   // 行分割・文字測定の共有キャッシュ（base-layer 描画と自動行高計算で共有し line 数を一致させる・D4）。
   // measure は baseCtx.measureText（描画と同一フォント計測）。base-layer とキャッシュを共有する。
   const cellTextCache: TextMetricsCache = createTextMetricsCache((text, font) => {
@@ -810,20 +814,40 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const rowId = sync.view.rowIdAt(rowIndex);
     return rowId !== undefined && isReadOnlyRowId(String(rowId));
   }
-  /** readOnly 列/行が 1 つでも指定されているか（未指定なら以下の分岐は一切コストを持たない）。 */
+  // ---- RC3（DD-052-3）: セル単位 readOnly（GridStandaloneRow.readOnlyColumns）の判定。standalone モード専用 ----
+  /** RowId/ColumnId 文字列が行データ指定の readOnly セルか（SetCells フィルタ・chokepoint 用）。 */
+  function isReadOnlyCellId(rowId: string, columnId: string): boolean {
+    return isStandalone && standalone !== undefined && standalone.isCellReadOnly(rowId, columnId);
+  }
+  /** 行・列 index が行データ指定の readOnly セルか（textarea ロック用）。共同編集モードは常に false。 */
+  function isReadOnlyCellIndex(rowIndex: number, colIndex: number): boolean {
+    if (!isStandalone || sync === undefined) {
+      return false;
+    }
+    const rowId = sync.view.rowIdAt(rowIndex);
+    const colId = sync.view.columnIdAt(colIndex);
+    return rowId !== undefined && colId !== undefined && isReadOnlyCellId(String(rowId), String(colId));
+  }
+  /** RC3 のセル単位 readOnly が 1 件でも現在の行データに指定されているか（standalone 専用・共同編集は常に false）。 */
+  function hasReadOnlyCellRows(): boolean {
+    return isStandalone && standalone?.hasAnyCellReadOnly() === true;
+  }
+  /** readOnly 列/行/セルが 1 つでも指定されているか（未指定なら以下の分岐は一切コストを持たない）。 */
   function hasReadOnlyCells(): boolean {
-    return hasReadOnlyColumns() || hasReadOnlyRows();
+    return hasReadOnlyColumns() || hasReadOnlyRows() || hasReadOnlyCellRows();
   }
   /**
-   * アクティブセルが readOnly 列 **または** readOnly 行にあるか（textarea のロック・入口抑止の共通条件）。
-   * DD-035 R4（列）と DD-036 C3（行）の和。
+   * アクティブセルが readOnly 列・readOnly 行・行データ指定の readOnly セルのいずれかにあるか
+   * （textarea のロック・入口抑止の共通条件）。DD-035 R4（列）・DD-036 C3（行）・RC3（セル）の和。
    */
   function isActiveCellReadOnly(): boolean {
     if (editor === undefined) {
       return false;
     }
     const active = editor.session.getActiveCell();
-    return isReadOnlyColumnIndex(active.col) || isReadOnlyRowIndex(active.row);
+    return (
+      isReadOnlyColumnIndex(active.col) || isReadOnlyRowIndex(active.row) || isReadOnlyCellIndex(active.row, active.col)
+    );
   }
   /**
    * 未知 rowId の診断 warn（DD-036 C3・契約 §3）。行 ID は mount 時点では検証できないため、**初回描画の直後に 1 回だけ**
@@ -898,6 +922,18 @@ export function createGridController(target: GridMountTarget, options: GridMount
           'info',
           'readonly-row-skipped',
           `${label}: readOnly 行のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
+        );
+      }
+      changes = partition.kept;
+    }
+    // RC3（DD-052-3）: 行データ指定のセル単位 readOnly を続けて適用する（和・standalone 専用）。
+    if (hasReadOnlyCellRows()) {
+      const partition = partitionReadOnlyCellChanges(changes, isReadOnlyCellId);
+      if (partition.skipped > 0) {
+        diag.emit(
+          'info',
+          'readonly-cell-skipped',
+          `${label}: readOnly セル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
         );
       }
       changes = partition.kept;
@@ -1677,6 +1713,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
       diag.emit('warn', 'readonly-column-blocked', 'readOnlyColumns: submitSetCells で readOnly 列への SetCells を破棄（undo 記録前）');
       return;
     }
+    // RC3（DD-052-3）: 行データ指定のセル単位 readOnly の保証層（列版・行版と同型・undo 記録前・standalone 専用）。
+    if (hasReadOnlyCellRows() && touchesReadOnlyCell(op.changes, isReadOnlyCellId)) {
+      diag.emit('warn', 'readonly-cell-blocked', 'readOnly セル: submitSetCells で SetCells を破棄（undo 記録前）');
+      return;
+    }
     // DD-020-3: submit 直前に **view（committed＋own pending）** から逆値（前値）を捕捉する（単一記録点＝両モード同一経路）。
     // committed ではなく view を使うのは、直前の未 ACK 楽観編集を飛ばさないため（Codex P1: 連続編集の逆値正しさ）。
     const patches = captureUndoPatches(backend.session.viewDocument, op);
@@ -1703,6 +1744,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // DD-035 R4: 絶対防衛線（Undo/Redo 補償を含む全 SetCells）。readOnly 列への変更を含めば op 全体を破棄する。
     if (hasReadOnlyColumns() && touchesReadOnlyColumn(op.changes, isReadOnlyColumnId)) {
       diag.emit('warn', 'readonly-column-blocked', 'readOnlyColumns: submitToBackend で readOnly 列への SetCells を破棄（絶対防衛線）');
+      return;
+    }
+    // RC3（DD-052-3）: 絶対防衛線のセル版（列版・行版と同型・standalone 専用）。
+    if (hasReadOnlyCellRows() && touchesReadOnlyCell(op.changes, isReadOnlyCellId)) {
+      diag.emit('warn', 'readonly-cell-blocked', 'readOnly セル: submitToBackend で SetCells を破棄（絶対防衛線）');
       return;
     }
     const id = backend.session.submitLocalOperation(op);
@@ -3012,6 +3058,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
           eventComposing: input.isComposing,
           sessionComposing: current.session.isComposing(),
           phase: current.session.getPhase(),
+          rowOperationsEnabled,
         });
         if (rowKey === 'insert') {
           // アクティブ行の**上**へ挿入 → afterRowId=直上行（先頭行なら null）。消費（ブラウザのズームを止める）。

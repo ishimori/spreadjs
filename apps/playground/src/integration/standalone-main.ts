@@ -212,6 +212,8 @@ const columnDisplayFormats = parseColumnDisplayFormats(searchParams.get('display
 const readOnly = searchParams.get('readonly') === '1';
 // DD-035 R4: 読み取り専用列を URL で指定できる（E2E 用）。形式: `?readonlycols=col-b,col-c`。
 const readOnlyColumns = (searchParams.get('readonlycols') ?? '').split(',').filter((c) => c !== '');
+// RC14（DD-052-3）: 行操作ショートカットの有効・無効を URL で指定できる（E2E 用）。例: `?rowops=0`（既定は有効＝1）。
+const rowOperations = searchParams.get('rowops') === '0' ? false : undefined;
 // DD-035 R2: 日付列を URL で指定できる（E2E 用）。形式: `?date=col-b,col-c!icon`（列末尾 `!icon` で openOn:'icon'）。
 function parseDateColumns(
   raw: string | null,
@@ -368,6 +370,7 @@ const handle: StandaloneHandle = {
         ...(readOnly ? { readOnly: true } : {}),
         ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
         ...(readOnlyRows.length > 0 ? { readOnlyRows } : {}),
+        ...(rowOperations !== undefined ? { rowOperations } : {}),
         ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
         ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),

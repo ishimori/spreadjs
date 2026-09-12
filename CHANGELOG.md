@@ -31,6 +31,12 @@
 - **grid `stringColumns`（DD-052-2・ReadyCrew RC12）**: 列単位で標準の型変換（date → number → string）を無効化し、
   空文字以外は常に string で保持する新しい mount オプション。編集確定・貼り付け・`setData` の全経路に一貫適用され、
   先頭ゼロ付き電話番号等が数値化されて元の文字列表現を失うのを防ぐ。既定（未指定）は従来どおり型変換する。
+- **grid `GridStandaloneRow.readOnlyColumns`（DD-052-3・ReadyCrew RC3）**: 単独グリッドモード専用。行データに
+  持たせた列指定だけをその行のセルに限って読み取り専用にする（mount 時の `readOnlyColumns`/`readOnlyRows` と同型の
+  抑止・スキップ・保証層）。`setData` で行ごと差し替えるたびに再評価され remount 不要。共同編集モードでは無視される。
+- **grid `rowOperations`（DD-052-3・ReadyCrew RC14）**: 行操作ショートカット（Ctrl+Shift+'+'/Ctrl+'-'）の有効・無効を
+  切り替える新しい mount オプション（既定 `true`）。`false` でショートカットのみ無効化し、公開 API
+  `insertRows`/`deleteRows` の呼び出しは対象外（consumer の明示的な行操作は妨げない）。両モード共通。
 
 ### Changed（破壊的変更・Experimental 0.x）
 

@@ -112,3 +112,25 @@ export function touchesReadOnlyRow(
 ): boolean {
   return changes.some((change) => isReadOnlyRow(String(change.rowId)));
 }
+
+// ---- RC3（DD-052-3）: セル単位 readOnly（GridStandaloneRow.readOnlyColumns）の SetCells フィルタ（列版/行版と同型）----
+
+/**
+ * SetCells の changes からセル単位 readOnly（`isReadOnlyCell(rowId,columnId)===true`）への変更を除く（RC3）。
+ * 契約は列版・行版と同じ:「readOnly セルだけスキップし他セルへ適用・全セルがスキップなら no-op」。
+ * 列版・行版と併用するときは順に適用する（和＝いずれかに該当するセルがスキップされる）。standalone モード専用。
+ */
+export function partitionReadOnlyCellChanges(
+  changes: readonly SetCellsChange[],
+  isReadOnlyCell: (rowId: string, columnId: string) => boolean,
+): ReadOnlyColumnPartition {
+  return partitionBy(changes, (change) => isReadOnlyCell(String(change.rowId), String(change.columnId)));
+}
+
+/** SetCells がセル単位 readOnly への変更を 1 件でも含むか（chokepoint の保証層）。 */
+export function touchesReadOnlyCell(
+  changes: readonly SetCellsChange[],
+  isReadOnlyCell: (rowId: string, columnId: string) => boolean,
+): boolean {
+  return changes.some((change) => isReadOnlyCell(String(change.rowId), String(change.columnId)));
+}

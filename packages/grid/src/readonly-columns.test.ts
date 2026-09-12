@@ -9,7 +9,7 @@ import { createColumnId, createRowId } from '@nanairo-sheet/types';
 import type { SetCellsChange } from '@nanairo-sheet/core';
 
 import { ColumnTypeConfigError, createColumnTypeRegistry } from './column-types';
-import { partitionReadOnlyColumnChanges, touchesReadOnlyColumn } from './readonly-policy';
+import { partitionReadOnlyCellChanges, partitionReadOnlyColumnChanges, touchesReadOnlyCell, touchesReadOnlyColumn } from './readonly-policy';
 
 const ORDER = ['a', 'b', 'c'];
 
@@ -95,5 +95,24 @@ describe('partitionReadOnlyColumnChanges / touchesReadOnlyColumn（AC4）', () =
     expect(touchesReadOnlyColumn([change('a'), change('b')], isRO)).toBe(true);
     expect(touchesReadOnlyColumn([change('a'), change('c')], isRO)).toBe(false);
     expect(touchesReadOnlyColumn([], isRO)).toBe(false);
+  });
+});
+
+describe('partitionReadOnlyCellChanges / touchesReadOnlyCell（RC3・DD-052-3・行×列の組み合わせ判定）', () => {
+  // r1 の列 b だけ readOnly（他の行の列 b は readOnly ではない＝列版と違い rowId も見る）。
+  const isRO = (rowId: string, columnId: string): boolean => rowId === 'r1' && columnId === 'b';
+
+  it('該当する (rowId,columnId) の変更だけ除き、他行の同じ列は残す', () => {
+    const changes = [change('a'), change('b'), change('b', 'r2'), change('c')];
+    const result = partitionReadOnlyCellChanges(changes, isRO);
+    expect(result.kept.map((c) => `${String(c.rowId)}/${String(c.columnId)}`)).toEqual(['r1/a', 'r2/b', 'r1/c']);
+    expect(result.skipped).toBe(1);
+  });
+
+  it('touchesReadOnlyCell は該当セルを1件でも含めば true（行・列の両方一致が条件）', () => {
+    expect(touchesReadOnlyCell([change('b')], isRO)).toBe(true); // r1/b
+    expect(touchesReadOnlyCell([change('b', 'r2')], isRO)).toBe(false); // r2/b は対象外
+    expect(touchesReadOnlyCell([change('a')], isRO)).toBe(false); // r1/a は対象外
+    expect(touchesReadOnlyCell([], isRO)).toBe(false);
   });
 });
