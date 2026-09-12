@@ -51,6 +51,10 @@ const docParam = params.get('doc');
 const wrapParam = params.get('wrap');
 const wrapColumns = wrapParam !== null && wrapParam !== '' ? wrapParam.split(',') : undefined;
 
+// RC12（DD-052-2）: 文字列として保つ列を URL で指定できる（E2E 用・?wrap= と同方式・例 ?stringCol=col-0）。
+const stringColParam = params.get('stringCol');
+const stringColumns = stringColParam !== null && stringColParam !== '' ? stringColParam.split(',') : undefined;
+
 // DD-027-1: 選択式入力列を URL で指定できる（E2E 用・?wrap= と同方式）。
 // 形式: `?select=col-3:進行中|受注|失注`（複数列は `,` 区切り）。列末尾に `!free` を付けると allowFreeText:true。
 // 例: `?select=col-3:進行中|受注|失注,col-5:A|B|C!free`
@@ -432,6 +436,7 @@ const instance = mount(
     columnWidths: savedLayout.columnWidths,
     rowHeights: savedLayout.rowHeights,
     ...(wrapColumns !== undefined ? { wrapColumns } : {}),
+    ...(stringColumns !== undefined ? { stringColumns } : {}),
     ...(columnTypes !== undefined ? { columnTypes } : {}),
     ...(columnFormats !== undefined ? { columnFormats } : {}),
     ...(columnCaptions !== undefined ? { columnCaptions } : {}),

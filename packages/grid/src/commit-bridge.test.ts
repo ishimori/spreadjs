@@ -46,6 +46,11 @@ describe('draftToScalar（ドラフト→CellScalar）', () => {
     expect(draftToScalar('2026/7/3')).toEqual({ kind: 'date', value: '2026-07-03' });
     expect(draftToScalar('090-1234-5678')).toEqual({ kind: 'string', value: '090-1234-5678' });
   });
+  it('RC12（DD-052-2）: isStringColumn=true では数値/日付に見えても string のまま', () => {
+    expect(draftToScalar('09012345678', true)).toEqual({ kind: 'string', value: '09012345678' });
+    expect(draftToScalar('2026-07-13', true)).toEqual({ kind: 'string', value: '2026-07-13' });
+    expect(draftToScalar('', true)).toEqual({ kind: 'blank' }); // 空文字は isStringColumn でも blank
+  });
 });
 
 describe('captureEditStartRevision（#3 セル単位 beforeRevision の取得）', () => {

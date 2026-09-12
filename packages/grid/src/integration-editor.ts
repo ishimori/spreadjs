@@ -98,6 +98,8 @@ export interface IntegrationEditorConfig {
    * 改行になり、textarea が内容に合わせて下へ伸びる（上限＋内部スクロール）。未指定なら常に false（既存挙動を保つ）。
    */
   readonly isWrapColumn?: (columnId: string) => boolean;
+  /** RC12（DD-052-2）: 文字列として保つ列か（型変換をスキップ）。未指定なら常に false（既存挙動を保つ）。 */
+  readonly isStringColumn?: (columnId: string) => boolean;
 }
 
 export interface IntegrationEditor {
@@ -293,6 +295,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   }
 
   const isWrapColumn = config.isWrapColumn;
+  const isStringColumn = config.isStringColumn;
   const session = createImeEditingSession({
     document: config.document,
     port,
@@ -302,6 +305,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     onChange: config.onChange,
     onDivert: config.onDivert,
     isWrapColumn: isWrapColumn === undefined ? undefined : (columnId) => isWrapColumn(String(columnId)),
+    isStringColumn: isStringColumn === undefined ? undefined : (columnId) => isStringColumn(String(columnId)),
   });
   sessionRef.current = session;
 

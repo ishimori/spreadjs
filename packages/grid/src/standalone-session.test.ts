@@ -47,6 +47,24 @@ describe('createStandaloneSession: 初期注入（決定③）', () => {
     expect(session.view.cellDisplay(createRowId('r2'), createColumnId('col-a'))).toBe('world');
   });
 
+  it('RC12（DD-052-2）: stringColumns 指定列は数値/日付に見えても string のまま保持する', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      stringColumns: ['col-b'],
+      initialData: {
+        rows: [{ rowId: 'r1', cells: { 'col-a': '123', 'col-b': '09012345678' } }],
+      },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    // stringColumns 対象外（col-a）は従来どおり number へ round-trip する。
+    expect(session.view.cellDisplay(createRowId('r1'), createColumnId('col-a'))).toBe('123');
+    // stringColumns 対象（col-b）は先頭ゼロを含め文字列のまま。
+    expect(session.view.cellDisplay(createRowId('r1'), createColumnId('col-b'))).toBe('09012345678');
+  });
+
   it('columnOrder 外の列は静かにスキップする（ApplyError で全体を落とさない）', () => {
     const session = createStandaloneSession({
       columnOrder: COLUMNS,
@@ -149,6 +167,20 @@ describe('createStandaloneSession: setData 再注入（決定③）', () => {
     expect(session.view.cellDisplay(createRowId('x2'), createColumnId('col-b'))).toBe('B');
     // 旧行は消えている。
     expect(session.view.rowIndexOf(createRowId('r1'))).toBe(-1);
+  });
+
+  it('RC12（DD-052-2）: setData 再注入でも stringColumns 指定列は型変換されない', () => {
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      stringColumns: ['col-a'],
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+    session.start();
+    session.setData({ rows: [{ rowId: 'r1', cells: { 'col-a': '09012345678' } }] });
+    session.view.flush();
+    expect(session.view.cellDisplay(createRowId('r1'), createColumnId('col-a'))).toBe('09012345678');
   });
 
   it('revision は空注入でも後退しない（Codex[P2]・単調増加不変）', () => {

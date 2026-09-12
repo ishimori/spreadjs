@@ -223,6 +223,51 @@ describe('createImeEditingSession — RC1（DD-052-1）: isWrapColumn 設定の�
   });
 });
 
+describe('createImeEditingSession — RC12（DD-052-2）: isStringColumn 設定の解決', () => {
+  it('isStringColumn(columnId) が true を返す列は commit 時に型変換されない', () => {
+    const state = createDocState([insertRows(null, ['r0', 'r1'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+      isStringColumn: (columnId) => columnId === col('col-0'),
+    });
+
+    session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    session.handleEvent({ type: 'input', value: '09012345678', isComposing: false });
+    session.handleEvent({ type: 'keydown', key: 'Enter', isComposing: false });
+
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.changes[0]?.value).toEqual({ kind: 'string', value: '09012345678' });
+  });
+
+  it('isStringColumn 未指定・対象外の列は従来どおり型変換される', () => {
+    const state = createDocState([insertRows(null, ['r0', 'r1'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+      isStringColumn: (columnId) => columnId === col('col-1'), // col-0 は対象外
+    });
+
+    session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    session.handleEvent({ type: 'input', value: '123', isComposing: false });
+    session.handleEvent({ type: 'keydown', key: 'Enter', isComposing: false });
+
+    expect(submitted[0]?.changes[0]?.value).toEqual({ kind: 'number', value: 123 });
+  });
+});
+
 describe('createImeEditingSession — #4 RowId 再解決（AC4 行挿入で編集継続）', () => {
   it('編集中に上へ行挿入されると refreshPlacement が新 index で解決（同一 RowId 追従）', () => {
     const state = createDocState([insertRows(null, ['r0', 'r1'])]);

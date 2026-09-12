@@ -43,9 +43,10 @@ export function captureEditStartRevision(
  * 確定ドラフト文字列を CellScalar へ変換する（型変換・標準セット）。
  * 変換規則の正本は core の parseCellInput（受理書式表・偽陽性防止・DD-012-1）。
  * commit 経路はここへ委譲し、composition 中の状態機械・textarea には触れない（IME 不変条件維持）。
+ * `isStringColumn`（RC12・DD-052-2）が true の列は型変換をスキップし常に string で保つ。
  */
-export function draftToScalar(text: string): CellScalar {
-  return parseCellInput(text);
+export function draftToScalar(text: string, isStringColumn = false): CellScalar {
+  return parseCellInput(text, { forceString: isStringColumn });
 }
 
 /** RowId が生存しているか（未知/tombstone は false）。削除判定は index 範囲でなく tombstone で行う（#4）。 */

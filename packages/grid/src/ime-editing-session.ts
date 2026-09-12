@@ -91,6 +91,8 @@ export interface ImeEditingSessionConfig {
   readonly layout: GridLayout;
   /** RC1（DD-052-1）: 折り返し（wrap）列か（ColumnId 文字列で判定）。未指定なら常に false（既存挙動を保つ）。 */
   readonly isWrapColumn?: ((columnId: ColumnId) => boolean) | undefined;
+  /** RC12（DD-052-2）: 文字列として保つ列か（型変換をスキップ）。未指定なら常に false（既存挙動を保つ）。 */
+  readonly isStringColumn?: ((columnId: ColumnId) => boolean) | undefined;
   /** activeCell/editingCell/selection が変わったら Presence を送る。 */
   readonly onPresenceChange?: ((update: PresenceUpdate) => void) | undefined;
   /** 描画/配置の再要求（selection・編集状態・競合が変わったとき）。 */
@@ -232,7 +234,8 @@ export function createImeEditingSession(config: ImeEditingSessionConfig): ImeEdi
     if (target === null) {
       return;
     }
-    const outcome = resolveCommit(doc.getCommittedDocument(), target, draftToScalar(draftText));
+    const isStringColumn = config.isStringColumn?.(target.columnId) ?? false;
+    const outcome = resolveCommit(doc.getCommittedDocument(), target, draftToScalar(draftText, isStringColumn));
     if (outcome.kind === 'submit') {
       const id = config.submit(outcome.operation);
       lastOperationId = id ?? undefined;

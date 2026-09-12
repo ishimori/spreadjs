@@ -221,6 +221,19 @@ describe('buildPaste: アンカー貼り付け・敷き詰め・はみ出し・�
     ]);
   });
 
+  it('RC12（DD-052-2）: isStringColumn の列は数値/日付に見えても string のまま貼り付けられる', () => {
+    const doc = buildDoc([INSERT_ROWS]);
+    // col-0 だけ stringColumns 指定。col-1 は従来どおり変換する。
+    const isStringColumn = (columnId: string) => columnId === String(COLS[0]);
+    const outcome = buildPaste(clipPortOf(doc), [['09012345678', '123']], range(0, 1, 0, 2), isStringColumn);
+    expect(outcome.kind).toBe('submit');
+    if (outcome.kind !== 'submit') return;
+    expect(outcome.operation.changes.map((c) => c.value)).toEqual([
+      { kind: 'string', value: '09012345678' }, // stringColumns 対象列は変換しない
+      { kind: 'number', value: 123 }, // 対象外の列は従来どおり
+    ]);
+  });
+
   it('beforeRevision は実行時点の committed lastChangedRevision（未書込=0）', () => {
     const doc = buildDoc([INSERT_ROWS, set(2, 2, 'old')]); // (2,2) は rev2
     const outcome = buildPaste(clipPortOf(doc), [['new', 'fresh']], range(2, 3, 2, 3));

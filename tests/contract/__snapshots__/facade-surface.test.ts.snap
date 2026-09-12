@@ -336,6 +336,17 @@ export interface GridCommonMountOptions {
      */
     readonly readOnlyColumns?: readonly string[];
     /**
+     * 文字列として保つ列（ColumnId 文字列の配列・Experimental 0.x・DD-052-2）。両モード共通・mount 時固定
+     * （wrapColumns と同運用）。列タイプ（select/link/date）・\`wrapColumns\` と直交し併用可。指定列は次の経路で
+     * 標準の型変換（date → number → string の順で判定・\`parseCellInput\`）を行わず、**空文字以外は常に string** で
+     * 保持する（先頭ゼロ付き電話番号 \`09012345678\` 等が数値化されて元の文字列表現を失うのを防ぐ）:
+     * - 編集確定（IME/textarea の commit）・貼り付け（paste）・\`setData\`（GridStandaloneRow.cells の再注入）
+     * - 空文字は変換対象外で従来どおり blank になる（stringColumns でも変わらない）
+     * - \`cell-commit\` イベント・コピー TSV の値も変換前（string）のまま
+     * 未指定列は従来どおり標準の型変換を行う（既定挙動は無変更）。
+     */
+    readonly stringColumns?: readonly string[];
+    /**
      * 読み取り専用行（RowId 文字列の配列・Experimental 0.x・DD-036 C3）。両モード共通・mount 時固定。
      * \`readOnlyColumns\`（DD-035 R4）の**行版**で、抑止・スキップ・保証層は同型（両方指定なら和＝どちらかに該当する
      * セルが読み取り専用）:

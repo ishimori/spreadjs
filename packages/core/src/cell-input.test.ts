@@ -77,3 +77,22 @@ describe('parseCellInput: string（偽陽性防止＝非該当は入力どおり
     expect(parseCellInput('')).toEqual({ kind: 'blank' });
   });
 });
+
+describe('parseCellInput: forceString（RC12・DD-052-2）', () => {
+  it('数値に見える文字列も forceString: true では string のまま（先頭ゼロ電話番号の保持）', () => {
+    expect(parseCellInput('09012345678', { forceString: true })).toEqual({ kind: 'string', value: '09012345678' });
+  });
+
+  it('日付に見える文字列も forceString: true では string のまま', () => {
+    expect(parseCellInput('2026-07-13', { forceString: true })).toEqual({ kind: 'string', value: '2026-07-13' });
+  });
+
+  it('forceString: true でも空文字は blank のまま', () => {
+    expect(parseCellInput('', { forceString: true })).toEqual({ kind: 'blank' });
+  });
+
+  it('forceString: false または未指定は従来どおり型変換する', () => {
+    expect(parseCellInput('123', { forceString: false })).toEqual({ kind: 'number', value: 123 });
+    expect(parseCellInput('123')).toEqual({ kind: 'number', value: 123 });
+  });
+});

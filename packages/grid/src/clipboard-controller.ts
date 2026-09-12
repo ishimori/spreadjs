@@ -115,6 +115,8 @@ export function buildPaste(
   port: ClipboardDocumentPort,
   matrix: readonly (readonly string[])[],
   range: CellRange,
+  /** RC12（DD-052-2）: 文字列として保つ列か（型変換をスキップ）。未指定なら常に false（既存挙動を保つ）。 */
+  isStringColumn?: (columnId: string) => boolean,
 ): PasteOutcome {
   const matrixRows = matrix.length;
   if (matrixRows === 0) {
@@ -172,7 +174,7 @@ export function buildPaste(
         rowId,
         columnId,
         beforeRevision: captureEditStartRevision(committed, rowId, columnId),
-        value: parseCellInput(text),
+        value: parseCellInput(text, { forceString: isStringColumn?.(String(columnId)) === true }),
       });
     }
   }

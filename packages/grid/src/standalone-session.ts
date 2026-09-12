@@ -28,6 +28,8 @@ export interface StandaloneSessionConfig {
   readonly columnWidths?: Readonly<Record<string, number>>;
   readonly rowHeights?: Readonly<Record<string, number>>;
   readonly wrapColumns?: readonly string[];
+  /** RC12（DD-052-2）: 文字列として保つ列（型変換をスキップ）。 */
+  readonly stringColumns?: readonly string[];
   readonly wrapCache?: TextMetricsCache;
   readonly cellFont?: string;
   readonly lineHeight?: number;
@@ -49,6 +51,7 @@ function displayOf(value: CellScalar | undefined): string {
 export function createStandaloneSession(config: StandaloneSessionConfig): StandaloneSession {
   const columnIds: ColumnId[] = config.columnOrder.map((c) => createColumnId(c));
   const knownColumns = new Set<string>(config.columnOrder);
+  const stringColumns = new Set<string>(config.stringColumns ?? []);
   // 適用ごとに単調増加する revision（cell 単位 lastChangedRevision の源。共同編集の server revision に相当）。
   let revision = 0;
   let doc: SheetDocument = buildDocument(config.initialData);
@@ -103,7 +106,11 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
         if (!knownColumns.has(columnId)) {
           continue;
         }
-        changes.push({ rowId: createRowId(row.rowId), columnId: createColumnId(columnId), value: parseCellInput(value) });
+        changes.push({
+          rowId: createRowId(row.rowId),
+          columnId: createColumnId(columnId),
+          value: parseCellInput(value, { forceString: stringColumns.has(columnId) }),
+        });
       }
     }
     if (changes.length > 0) {

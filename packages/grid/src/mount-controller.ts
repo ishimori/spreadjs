@@ -147,6 +147,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const wrapColumns = options.wrapColumns ?? [];
   const wrapColumnStrings = new Set<string>(wrapColumns);
   const wrapEnabled = wrapColumnStrings.size > 0;
+  // RC12（DD-052-2）: 文字列として保つ列（ColumnId 文字列）。mount 時固定（wrapColumns と同運用）。
+  const stringColumns = options.stringColumns ?? [];
+  const stringColumnStrings = new Set<string>(stringColumns);
   // 行分割・文字測定の共有キャッシュ（base-layer 描画と自動行高計算で共有し line 数を一致させる・D4）。
   // measure は baseCtx.measureText（描画と同一フォント計測）。base-layer とキャッシュを共有する。
   const cellTextCache: TextMetricsCache = createTextMetricsCache((text, font) => {
@@ -2188,7 +2191,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       const matrix = parseClipboardText(text);
       const range = selectionCtrl.selectedRange(editor.session.getActiveCell());
-      const outcome = buildPaste(clipPort, matrix, range);
+      const outcome = buildPaste(clipPort, matrix, range, (columnId) => stringColumnStrings.has(columnId));
       switch (outcome.kind) {
         case 'noop':
           return true; // 空 paste・全欠け → 消費のみ（textarea へ入れない）
@@ -2772,6 +2775,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly(),
       // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
       isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
+      // RC12（DD-052-2）: 文字列として保つ列は編集確定時の型変換をスキップする。
+      isStringColumn: (columnId) => stringColumnStrings.has(columnId),
       // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
       // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
       // DD-035 R2: 日付カレンダーも同様に閉じる。
@@ -3097,6 +3102,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       ...(options.columnWidths !== undefined ? { columnWidths: options.columnWidths } : {}),
       ...(options.rowHeights !== undefined ? { rowHeights: options.rowHeights } : {}),
       ...(wrapEnabled ? { wrapColumns } : {}),
+      ...(stringColumnStrings.size > 0 ? { stringColumns } : {}),
       wrapCache: cellTextCache,
       cellFont: CELL_FONT,
       lineHeight: CELL_TEXT_LINE_HEIGHT,

@@ -360,6 +360,24 @@ const grid = mount(
 );
 ```
 
+### 文字列として保つ列（`stringColumns`・DD-052-2）
+
+電話番号・郵便番号・型番など、先頭ゼロや桁数を保ちたい列は `stringColumns` に含める。標準の型変換
+（date → number → string の順で判定）をスキップし、空文字以外は常に string として保持する
+（編集確定・貼り付け・`setData` の全経路で一貫。既定=未指定の列は従来どおり型変換する）。
+
+```ts
+const grid = mount(
+  { container },
+  {
+    mode: 'standalone',
+    columnOrder: ['name', 'phone'],
+    stringColumns: ['phone'], // 例: '09012345678' が '9012345678'（数値化）にならない
+    initialData,
+  },
+);
+```
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

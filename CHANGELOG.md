@@ -28,6 +28,9 @@
 
 - **grid 長文セル編集（DD-052-1・ReadyCrew RC2）**: `wrapColumns` の列は、編集中の常駐 textarea が内容に合わせて下へ伸びる
   （8 行相当を上限に内部スクロールへ切り替える）。列幅は変わらない。`wrapColumns` 未指定の列・非 wrap 列は無変更。
+- **grid `stringColumns`（DD-052-2・ReadyCrew RC12）**: 列単位で標準の型変換（date → number → string）を無効化し、
+  空文字以外は常に string で保持する新しい mount オプション。編集確定・貼り付け・`setData` の全経路に一貫適用され、
+  先頭ゼロ付き電話番号等が数値化されて元の文字列表現を失うのを防ぐ。既定（未指定）は従来どおり型変換する。
 
 ### Changed（破壊的変更・Experimental 0.x）
 

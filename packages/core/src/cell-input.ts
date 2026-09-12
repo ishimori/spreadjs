@@ -103,16 +103,29 @@ function tryParseNumber(normalized: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** parseCellInput の挙動オプション。 */
+export interface ParseCellInputOptions {
+  /**
+   * RC12（DD-052-2）: true なら日付/数値判定をスキップし、非空テキストを常に string で保つ
+   * （先頭ゼロ付き電話番号等、型変換で元の文字列表現が失われるのを防ぐ列向け）。空文字は forceString でも blank。
+   */
+  readonly forceString?: boolean;
+}
+
 /**
  * 確定ドラフト文字列を CellScalar へ変換する（標準セット）。
  * 空=blank／日付→date（YYYY-MM-DD 正準化）／数値→number（IEEE754）／それ以外→string（入力どおり）。
  *
  * 判定順: date → number → string（date と number の書式は重ならないため順序に依存しないが、
  * 意図を明示するため date を先に判定する。`2026` は number、`2026-07-13` は date）。
+ * `options.forceString` が true なら date/number 判定自体を行わない（RC12・列単位の型変換無効化）。
  */
-export function parseCellInput(text: string): CellScalar {
+export function parseCellInput(text: string, options?: ParseCellInputOptions): CellScalar {
   if (text === '') {
     return { kind: 'blank' };
+  }
+  if (options?.forceString === true) {
+    return { kind: 'string', value: text };
   }
   const normalized = normalizeFullwidth(text);
 
