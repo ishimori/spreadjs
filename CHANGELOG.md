@@ -24,7 +24,7 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
-## [Unreleased]
+## [0.1.0-alpha.9] - 2026-09-13
 
 ### Added
 
@@ -37,6 +37,7 @@
   あわせて、grid の mount オプション・`GridInstance` の公開メンバーのうち React Facade に写像されていないものを
   `npm run typecheck` で機械検出する型レベルの網羅性チェックを `packages/react/src/index.ts` に追加した
   （ランタイムに影響しない module-private な型のみ・.d.ts には出ない）。今回のような写像漏れの再発を防ぐ。
+- **配布**: 10 package を `0.1.0-alpha.9` へ更新。API 版は既存 `0.1.0-experimental` を維持する。
 
 ## [0.1.0-alpha.8] - 2026-09-13
 
