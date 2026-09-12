@@ -2,7 +2,7 @@
 //
 // 【分離】純粋関数（LocalDate 加減算・月グリッド生成＝DOM/時刻非依存）＋純粋状態コントローラ（open/close/highlight・
 // TDD 対象）＋ keydown 前段裁定 `decideDateKey`（純関数）＋ 薄い DOM アダプタ（ポップオーバー・📅 インジケーター・
-// rAF placement 追従＝select-editor の listbox と同方式）。
+// rAF placement 追従＝select-editor の listbox と同方式。位置は可視域に収める＝DD-055・popup-placement の純関数）。
 //
 // 【IME 経路無改変（📐・T1 非該当）】editor-state-machine・ime-editing-session・常駐 textarea は改変しない。
 //   フォーカスは常駐 textarea のまま（I-5 維持）。キーは mount-controller の interceptKeydown が消費して本コントローラへ
@@ -14,6 +14,8 @@
 
 import type { EditPhase } from '@nanairo-sheet/ime';
 import type { CellRect } from '@nanairo-sheet/render';
+
+import { computePopupPlacement, type PopupDirection, type VisibleArea } from './popup-placement';
 
 // ---- 純粋関数（LocalDate・月グリッド） --------------------------------------------------------
 
@@ -312,12 +314,14 @@ export interface DatePickerConfig {
   readonly onIndicatorClick: () => void;
   /** 「今日」の解決（テスト注入用・既定はブラウザのローカル日付）。 */
   readonly today?: () => string;
+  /** DD-055（RC16）: 可視域（ネイティブスクロールバーを除く stage 座標の幅・高さ）。ポップオーバーをこの中に収める（開いている間だけ読む）。 */
+  readonly visibleArea: () => VisibleArea;
 }
 
 export interface DatePicker {
   readonly controller: CalendarController;
   isOpen(): boolean;
-  /** 開く（cellRect の直下へポップオーバーを配置）。 */
+  /** 開く（セルの真下。下に入りきらず上の余白のほうが広ければセルの上＝DD-055）。向きは開いた時点で決め、閉じるまで保つ。 */
   open(params: { readonly rect: CellRect | null; readonly currentValue: string }): void;
   moveDays(delta: number): void;
   moveMonths(delta: number): void;
@@ -354,6 +358,7 @@ export function createDatePicker(config: DatePickerConfig): DatePicker {
   popover.style.boxSizing = 'border-box';
   popover.style.userSelect = 'none';
   popover.style.width = '224px';
+  popover.style.overflowY = 'auto'; // DD-055: 余白に収まらないときは余白の高さに縮めて内部スクロール
   // 枠・ボタン・日セルへの pointerdown で常駐 textarea が blur しないよう focus を保持する（listbox と同じ・I-5）。
   popover.addEventListener('pointerdown', (event) => {
     event.preventDefault();
@@ -376,6 +381,9 @@ export function createDatePicker(config: DatePickerConfig): DatePicker {
     config.onIndicatorClick();
   });
   host.appendChild(indicator);
+
+  // DD-055: 開いた時点で決めた向き（スクロールで上下に跳ねないよう閉じるまで保つ）。閉じている間は null。
+  let direction: PopupDirection | null = null;
 
   // --- 内容の構築（open/月送り/ハイライト移動のたびに全再描画。42 セル固定＝安価） ---
   function render(): void {
@@ -478,8 +486,33 @@ export function createDatePicker(config: DatePickerConfig): DatePicker {
     if (rect === null) {
       return;
     }
-    popover.style.left = `${rect.x}px`;
-    popover.style.top = `${rect.y + rect.height}px`;
+    // 余白で縮める前の高さ＝中身の高さ＋上下の枠。max-height を変えずに測る（内部スクロール位置を保つ）。
+    const placement = computePopupPlacement({
+      cellRect: rect,
+      popupWidth: popover.offsetWidth,
+      popupHeight: popover.scrollHeight + popover.offsetHeight - popover.clientHeight,
+      visibleArea: config.visibleArea(),
+      direction: direction ?? undefined,
+    });
+    direction = placement.direction;
+    popover.style.maxHeight = `${placement.maxHeight}px`;
+    popover.style.left = `${placement.left}px`;
+    popover.style.top = `${placement.top}px`;
+  }
+
+  /** DD-055: 余白に収めて内部スクロールしているとき、キー操作で動かしたハイライトの日を見える位置までスクロールする。 */
+  function revealHighlighted(): void {
+    const active = popover.querySelector<HTMLElement>('.ns-date-day[aria-selected="true"]');
+    if (active === null) {
+      return;
+    }
+    const top = active.offsetTop; // offsetParent は absolute のポップオーバー自身
+    const bottom = top + active.offsetHeight;
+    if (top < popover.scrollTop) {
+      popover.scrollTop = top;
+    } else if (bottom > popover.scrollTop + popover.clientHeight) {
+      popover.scrollTop = bottom - popover.clientHeight;
+    }
   }
 
   return {
@@ -487,28 +520,34 @@ export function createDatePicker(config: DatePickerConfig): DatePicker {
     isOpen: () => controller.isOpen(),
     open: ({ rect, currentValue }) => {
       controller.open({ currentValue, today: today() });
+      direction = null;
       render();
       popover.style.display = 'block';
       placePopover(rect);
+      revealHighlighted();
     },
     moveDays: (delta) => {
       controller.moveDays(delta);
       render();
+      revealHighlighted();
     },
     moveMonths: (delta) => {
       controller.moveMonths(delta);
       render();
+      revealHighlighted();
     },
     confirmValue: () => {
       const value = controller.confirmValue();
       popover.style.display = 'none';
       popover.replaceChildren();
+      direction = null;
       return value;
     },
     close: () => {
       controller.close();
       popover.style.display = 'none';
       popover.replaceChildren();
+      direction = null;
     },
     refresh: ({ openRect, indicatorRect }) => {
       if (controller.isOpen()) {

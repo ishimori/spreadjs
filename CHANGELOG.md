@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.9`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.10`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.10` | `alpha` | `0.1.0-experimental` | DD-055（ReadyCrew RC16・RC17）。候補欄（選択式・日付）を可視域に収める・高い行の編集欄がセル全体を覆う |
 | `0.1.0-alpha.9` | `alpha` | `0.1.0-experimental` | DD-054（ReadyCrew RC15）。React Facade へ `stringColumns`・`rowOperations`・`ref.setRows` を写す（alpha.8 の写像漏れ） |
 | `0.1.0-alpha.8` | `alpha` | `0.1.0-experimental` | DD-052-1〜5（ReadyCrew RC1・2・3・4・5・6・12・13・14）・DD-053（広島空港H10）。長文セル編集・型保持列・セル単位readOnly/行操作無効化・setRows・見出しクリック/ホバー通知・参加者一覧の join 時点反映 |
 | `0.1.0-alpha.7` | `alpha` | `0.1.0-experimental` | DD-050。厳格な consumer 設定（`exactOptionalPropertyTypes`・`noUncheckedIndexedAccess`）での型エラーを修正 |
@@ -23,6 +24,23 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.10] - 2026-09-13
+
+### Fixed
+
+- **grid 候補欄（選択式のドロップダウン・日付のカレンダー）が枠の端で切れる（DD-055・ReadyCrew RC16）**: 可視域の下端近くの
+  セルで開くと候補欄が常にセルの下へ開き、横スクロールバーと枠の下で切れて候補を選べなかった。下の余白に入りきらず上の余白の
+  ほうが広ければセルの上に開き（候補欄の下端をセルの上端に揃える）、高さは開いた側の余白に収めてはみ出す分を内部スクロールに
+  する。向きは開いた時点で決め、開いている間はスクロール・絞り込みで上下に跳ねない。可視域の右端を越える位置では左へずらして
+  収める。可視域はスクロールバーを除いた領域（DD-046 のセル追従と同じ基準）。
+- **grid 行の高さが 128px を超える wrap 列の編集欄がセルの途中までしか覆わない（DD-055・ReadyCrew RC17）**: 編集欄の上限
+  （8 行相当・DD-052-1）がセルの高さより優先され、高い行では上部 128px だけが編集欄になり、その下にシートの描画が見えていた。
+  上限を `max(セルの高さ, 128px)` にしてセル全体を覆う（中身がセルより長ければセルの高さで内部スクロール）。あわせて、編集欄が
+  可視域の下端を越える場合は下端までに縮めて内部スクロールにする（1 行分の高さは残す）。1 行の高さのセルの伸び方（128px まで）は
+  変えない。
+  - 公開 API・公開型の変更なし（公開 `.d.ts` snapshot の差分なし）。
+- **配布**: 10 package を `0.1.0-alpha.10` へ更新。API 版は既存 `0.1.0-experimental` を維持する。
 
 ## [0.1.0-alpha.9] - 2026-09-13
 

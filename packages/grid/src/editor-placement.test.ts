@@ -6,7 +6,12 @@ import type { ColumnId, RowId } from '@nanairo-sheet/types';
 import { createAxis } from '@nanairo-sheet/render';
 import { createViewportTransform } from '@nanairo-sheet/render';
 
-import { computeEditorPlacement, type PlacementConfig } from './editor-placement';
+import {
+  computeEditorPlacement,
+  computeWrapEditorHeight,
+  MAX_WRAP_EDITOR_HEIGHT,
+  type PlacementConfig,
+} from './editor-placement';
 
 const HEADER_W = 52;
 const HEADER_H = 24;
@@ -127,6 +132,65 @@ describe('DD-036 C1: 固定列数が n>1 でも pane 区別（可視判定）が
     // 固定バンドの右隣に出る列（index 14）は可視。
     const shown = computeEditorPlacement(transform, 12, 14, cfg);
     expect(shown.visible).toBe(true);
+  });
+});
+
+describe('computeWrapEditorHeight（DD-055 RC17: wrap 列の編集欄の高さ）', () => {
+  const ONE_LINE = 20; // 1 行分（行の高さ 16px＋上下の枠 4px）
+  const roomy = { cellTop: 100, visibleBottom: 700, minHeight: ONE_LINE };
+
+  it('1 行の高さのセルは内容に合わせて下へ伸びる（DD-052-1 の従来値）', () => {
+    expect(computeWrapEditorHeight({ ...roomy, cellHeight: 22, contentHeight: 64 })).toEqual({ height: 64, scroll: false });
+  });
+
+  it('内容がセルより低ければセルの高さのまま', () => {
+    expect(computeWrapEditorHeight({ ...roomy, cellHeight: 22, contentHeight: 16 })).toEqual({ height: 22, scroll: false });
+  });
+
+  it('1 行の高さのセルは 128px（8 行相当）で止まり内部スクロールになる（DD-052-1 AC4 の従来値）', () => {
+    expect(MAX_WRAP_EDITOR_HEIGHT).toBe(128);
+    expect(computeWrapEditorHeight({ ...roomy, cellHeight: 22, contentHeight: 300 })).toEqual({
+      height: 128,
+      scroll: true,
+    });
+  });
+
+  it('128px より高いセルはセルの高さで覆う（上限に切り詰めない）', () => {
+    expect(computeWrapEditorHeight({ ...roomy, cellHeight: 250, contentHeight: 240 })).toEqual({
+      height: 250,
+      scroll: false,
+    });
+  });
+
+  it('高いセルで内容がセルより長ければ、セルの高さのまま内部スクロールになる', () => {
+    expect(computeWrapEditorHeight({ ...roomy, cellHeight: 250, contentHeight: 400 })).toEqual({
+      height: 250,
+      scroll: true,
+    });
+  });
+
+  it('伸びた編集欄が可視域の下端を越えるなら、下端までに縮めて内部スクロールにする', () => {
+    expect(
+      computeWrapEditorHeight({ cellTop: 650, visibleBottom: 700, minHeight: ONE_LINE, cellHeight: 22, contentHeight: 96 }),
+    ).toEqual({ height: 50, scroll: true });
+  });
+
+  it('高いセルが可視域の下端にかかっても、下端までに縮める', () => {
+    expect(
+      computeWrapEditorHeight({ cellTop: 500, visibleBottom: 700, minHeight: ONE_LINE, cellHeight: 250, contentHeight: 240 }),
+    ).toEqual({ height: 200, scroll: true });
+  });
+
+  it('可視域の下端で縮めても 1 行分の高さは下回らない', () => {
+    expect(
+      computeWrapEditorHeight({ cellTop: 690, visibleBottom: 700, minHeight: ONE_LINE, cellHeight: 22, contentHeight: 96 }),
+    ).toEqual({ height: ONE_LINE, scroll: true });
+  });
+
+  it('もともと 1 行分より低い編集欄は、下端で縮める場面でもその高さのまま（1 行分まで伸ばさない）', () => {
+    expect(
+      computeWrapEditorHeight({ cellTop: 695, visibleBottom: 700, minHeight: ONE_LINE, cellHeight: 14, contentHeight: 12 }),
+    ).toEqual({ height: 14, scroll: false });
   });
 });
 

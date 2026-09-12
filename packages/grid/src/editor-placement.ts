@@ -5,7 +5,10 @@
 //   - スクロール pane のセルは固定バンド/ヘッダーの下へスクロールされると隠れる（minX/minY = header + frozen 寸法）。
 //   - 固定行/固定列のセルはスクロールで動かない（minX/minY = header のみ）。
 // transform.cellRect は固定/スクロールを内部で吸収するので、可視判定だけ pane を区別すればよい。
+//
+// wrap 列を編集中の textarea の高さ（RC2・DD-055）も同じく DOM 非依存の純関数としてここに置く。
 
+import { CELL_TEXT_LINE_HEIGHT } from '@nanairo-sheet/render';
 import type { CellRect, ViewportTransform } from '@nanairo-sheet/render';
 
 export interface PlacementConfig {
@@ -51,4 +54,37 @@ export function computeEditorPlacement(
     rect.y + rect.height > minY &&
     rect.y < cfg.viewportHeight;
   return { visible, rect };
+}
+
+/** RC2（DD-052-1）: wrap 列の編集欄が内容に合わせて下へ伸びる上限（8 行相当）。超えたら内部スクロールに切り替える。 */
+export const MAX_WRAP_EDITOR_HEIGHT = 8 * CELL_TEXT_LINE_HEIGHT;
+
+export interface WrapEditorHeightInput {
+  /** 編集セルの上端（stage 座標）。 */
+  readonly cellTop: number;
+  readonly cellHeight: number;
+  /** 編集欄の中身の高さ（textarea の scrollHeight）。 */
+  readonly contentHeight: number;
+  /** 可視域の下端（stage 座標・横スクロールバーを除く）。 */
+  readonly visibleBottom: number;
+  /** 可視域の下端で縮めるときの下限（1 行分の高さ）。 */
+  readonly minHeight: number;
+}
+
+export interface WrapEditorHeight {
+  readonly height: number;
+  /** 中身が編集欄に収まらない（内部スクロールにする）。 */
+  readonly scroll: boolean;
+}
+
+/**
+ * wrap 列を編集中の編集欄の高さ（RC2・DD-055 RC17）。中身に合わせて下へ伸ばし、上限は `max(セルの高さ, 128px)`
+ * （行が高いセルでもセル全体を覆う。1 行の高さのセルは従来どおり 128px まで）。可視域の下端を越える分は縮める
+ * （1 行分の高さは残す）。収まらない分は内部スクロールにする。
+ */
+export function computeWrapEditorHeight(input: WrapEditorHeightInput): WrapEditorHeight {
+  const { cellTop, cellHeight, contentHeight, visibleBottom, minHeight } = input;
+  const wanted = Math.min(Math.max(cellHeight, contentHeight), Math.max(cellHeight, MAX_WRAP_EDITOR_HEIGHT));
+  const height = Math.min(wanted, Math.max(visibleBottom - cellTop, Math.min(minHeight, wanted)));
+  return { height, scroll: contentHeight > height };
 }

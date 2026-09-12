@@ -50,6 +50,7 @@ import type { EditingDocumentPort } from './ime-editing-session';
 import { createIntegrationEditor } from './integration-editor';
 import type { IntegrationEditor } from './integration-editor';
 import { createLoadMetrics } from './initial-load-metrics';
+import type { VisibleArea } from './popup-placement';
 import { toPresenceUsers } from './presence-adapter';
 import { buildPresenceUsers, samePresenceUsers } from './presence-list';
 import { toGridRemoteChange } from './remote-change';
@@ -462,8 +463,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 固定行/列のセルはスクロール非依存ゆえ追従不要（body セルのみ）。
     // DD-036 C4: 軸指定（scrollToRow=縦のみ / scrollToColumn=横のみ）。既定 'both' は従来と同一挙動。
     // DD-046: stageにはネイティブスクロールバーも含まれる。文字が隠れない可視域へ収める。
-    const visibleHeight = Math.min(viewportHeight, scroller.clientHeight || viewportHeight);
-    const visibleWidth = Math.min(viewportWidth, scroller.clientWidth || viewportWidth);
+    const { width: visibleWidth, height: visibleHeight } = visibleArea();
     if (axes !== 'horizontal' && cell.row >= frozenRowCount) {
       if (rect.y < bodyOriginY) {
         scroller.scrollTop += rect.y - bodyOriginY; // 上へはみ出し → スクロールアップ（負）
@@ -485,6 +485,17 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return;
     }
     ensureCellVisible(editor.session.getActiveCell());
+  }
+
+  /**
+   * DD-046・DD-055: 本体の可視域（stage 座標の幅・高さ）。stage にはネイティブスクロールバーも含まれるため scroller の
+   * client 寸法で制限する（初期レイアウトで 0 なら stage の寸法）。セルの追従と、候補欄・wrap 列の編集欄を収める先に使う。
+   */
+  function visibleArea(): VisibleArea {
+    return {
+      width: Math.min(viewportWidth, scroller.clientWidth || viewportWidth),
+      height: Math.min(viewportHeight, scroller.clientHeight || viewportHeight),
+    };
   }
 
   // ---- DD-035 R6: 命令 API（scrollToRow / setActiveCell）----
@@ -2613,7 +2624,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     // 選択式ドロップダウンは選択式列があるときだけ配線する（無ければ overhead ゼロ）。
     if (columnTypeRegistry?.hasAnySelectColumn() === true) {
-      selectDropdown = createSelectDropdown({ host: stage, onConfirm: () => confirmSelect() });
+      selectDropdown = createSelectDropdown({ host: stage, onConfirm: () => confirmSelect(), visibleArea });
     }
 
     // ---- DD-035 R2 日付列（カレンダー・ポップオーバー・editor 経路無改変）----
@@ -2727,6 +2738,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         host: stage,
         onConfirm: (value) => confirmDate(value),
         onIndicatorClick: () => openDate(),
+        visibleArea,
       });
     }
     closeDatePicker = cancelDate;
@@ -2922,6 +2934,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
       // RC12（DD-052-2）: 文字列として保つ列は編集確定時の型変換をスキップする。
       isStringColumn: (columnId) => stringColumnStrings.has(columnId),
+      // DD-055（RC17）: wrap 列の編集欄を可視域（スクロールバーを除く）の下端で縮める。
+      visibleArea,
       // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
       // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
       // DD-035 R2: 日付カレンダーも同様に閉じる。

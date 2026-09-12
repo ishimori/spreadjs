@@ -14,6 +14,8 @@
 // 【重要】page.evaluate のコールバックはブラウザーへ転送されるため、Node 側の関数を参照できない。
 //   API 呼び出しは「メソッド名＋引数（＝シリアライズ可能なデータ）」を callApi へ渡して間接呼び出しする。
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
@@ -488,6 +490,114 @@ export function evidencePathDD041(fileName: string): string {
 /** DD-015 証跡（スクショ等）を保存する絶対パス（DD-005 と同じ理由で test-results/ 配下）。 */
 export function evidencePathDD015(fileName: string): string {
   return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-015/${fileName}`, import.meta.url));
+}
+
+/** DD-055 証跡（スクショ・数値 JSON）を保存する絶対パス（DD-005 と同じ理由で test-results/ 配下）。 */
+export function evidencePathDD055(fileName: string): string {
+  return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-055/${fileName}`, import.meta.url));
+}
+
+/** DD-055: 数値の証跡（要素の矩形など）を JSON で保存する。修正前も残るよう、失敗しうる検証より前に呼ぶ。 */
+export function saveEvidenceJsonDD055(fileName: string, data: unknown): void {
+  const path = evidencePathDD055(fileName);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+/** DD-055: 重ね表示（候補欄・カレンダー・常駐 textarea）の矩形と可視域。座標は stage の左上が原点（cellRectAt と同じ）。 */
+export interface OverlayGeometry {
+  /** 対象要素の矩形（未生成・display:none は null）。 */
+  rect: CellRect | null;
+  /** 対象要素の overflow-y（内部スクロールへの切り替えの確認用。未生成は ''）。 */
+  overflowY: string;
+  /** 対象要素の中身が表示域より長いか（scrollHeight > clientHeight）。 */
+  scrollable: boolean;
+  /** ネイティブスクロールバーを除いた可視域の幅・高さ。 */
+  visibleWidth: number;
+  visibleHeight: number;
+  /** stage 全体（スクロールバーを含む）の幅・高さ。 */
+  stageWidth: number;
+  stageHeight: number;
+}
+
+export async function overlayGeometry(page: Page, selector: string): Promise<OverlayGeometry> {
+  return page.evaluate((sel: string) => {
+    const stage = document.querySelector('.nsheet-stage');
+    const scroller = document.querySelector('.nsheet-scroller');
+    if (!(stage instanceof HTMLElement) || !(scroller instanceof HTMLElement)) {
+      throw new Error('.nsheet-stage / .nsheet-scroller が見つからない');
+    }
+    const area = {
+      visibleWidth: Math.min(stage.clientWidth, scroller.clientWidth),
+      visibleHeight: Math.min(stage.clientHeight, scroller.clientHeight),
+      stageWidth: stage.clientWidth,
+      stageHeight: stage.clientHeight,
+    };
+    const el = document.querySelector(sel);
+    if (!(el instanceof HTMLElement) || getComputedStyle(el).display === 'none') {
+      return { rect: null, overflowY: '', scrollable: false, ...area };
+    }
+    const origin = stage.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    return {
+      rect: { x: box.left - origin.left, y: box.top - origin.top, width: box.width, height: box.height },
+      overflowY: getComputedStyle(el).overflowY,
+      scrollable: el.scrollHeight > el.clientHeight,
+      ...area,
+    };
+  }, selector);
+}
+
+/** DD-055: 重ね表示が可視域（stage の上端・左端から、スクロールバーを除いた下端・右端まで）に収まる。1px の丸めを許す。 */
+export function expectOverlayInsideVisible(geometry: OverlayGeometry, label: string): void {
+  expect(geometry.rect, `${label}: 表示されている`).not.toBeNull();
+  const rect = geometry.rect!;
+  expect(rect.y, `${label}: 上端が stage の上端より下`).toBeGreaterThanOrEqual(-1);
+  expect(rect.y + rect.height, `${label}: 下端が可視域の下端（横スクロールバーの手前）以内`).toBeLessThanOrEqual(
+    geometry.visibleHeight + 1,
+  );
+  expect(rect.x, `${label}: 左端が stage の左端より右`).toBeGreaterThanOrEqual(-1);
+  expect(rect.x + rect.width, `${label}: 右端が可視域の右端（縦スクロールバーの手前）以内`).toBeLessThanOrEqual(
+    geometry.visibleWidth + 1,
+  );
+}
+
+/**
+ * DD-055: headless Chromium はスクロールバーを隠す（幅 0）ため、通常のスクロールバー相当（既定 16px）を scroller の右・下に
+ * 空けて「可視域＝スクロールバーを除いた領域」を再現する（DD-046 imperative-nav.spec.ts と同じ方法）。
+ */
+export async function emulateScrollbars(page: Page, size = 16): Promise<void> {
+  await page.locator('.nsheet-scroller').evaluate((element, px) => {
+    const scroller = element as HTMLElement;
+    scroller.style.right = `${px}px`;
+    scroller.style.bottom = `${px}px`;
+  }, size);
+}
+
+/** DD-055: 可視域（横スクロールバーを除く）に全体が収まる最も下の行 index。scrollTop=0 の表示が前提。 */
+export async function lastFullyVisibleRow(page: Page, col: number): Promise<number> {
+  return page.evaluate((c: number) => {
+    const api = (window as unknown as {
+      __integrationTestApi?: {
+        rowCount(): number;
+        cellRectAt(row: number, col: number): { y: number; height: number } | null;
+      };
+    }).__integrationTestApi;
+    const stage = document.querySelector('.nsheet-stage');
+    const scroller = document.querySelector('.nsheet-scroller');
+    if (api === undefined || !(stage instanceof HTMLElement) || !(scroller instanceof HTMLElement)) {
+      throw new Error('__integrationTestApi / .nsheet-stage / .nsheet-scroller が見つからない');
+    }
+    const visibleHeight = Math.min(stage.clientHeight, scroller.clientHeight);
+    const count = api.rowCount();
+    for (let row = 0; row < count; row += 1) {
+      const rect = api.cellRectAt(row, c);
+      if (rect === null || rect.y + rect.height > visibleHeight) {
+        return row - 1;
+      }
+    }
+    return count - 1;
+  }, col);
 }
 
 /** DD-015: 接続状態（online/offline/stopped）。実ブラウザー断線 headed smoke の可視確認に使う。 */

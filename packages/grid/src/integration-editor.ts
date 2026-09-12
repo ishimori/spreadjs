@@ -17,13 +17,14 @@ import type { EditorEvent } from '@nanairo-sheet/ime';
 import { CELL_TEXT_LINE_HEIGHT } from '@nanairo-sheet/render';
 import type { CellRect, ViewportTransform } from '@nanairo-sheet/render';
 
-import { computeEditorPlacement, type PlacementConfig } from './editor-placement';
+import { computeEditorPlacement, computeWrapEditorHeight, type PlacementConfig } from './editor-placement';
 import {
   createImeEditingSession,
   type DivertedDraft,
   type EditingDocumentPort,
   type ImeEditingSession,
 } from './ime-editing-session';
+import type { VisibleArea } from './popup-placement';
 
 import type { PresenceUpdate } from '@nanairo-sheet/collab';
 import type { SetCellsOperation } from '@nanairo-sheet/core';
@@ -34,8 +35,8 @@ const EDITING_BACKGROUND = '#ffffff';
 const CONFLICT_COLOR = '#d93025';
 const EDITOR_Z = '10';
 const BADGE_Z = '12'; // textarea より上（#9: 競合表示を隠さない）
-// RC2（DD-052-1）: wrap 列の長文編集欄が下へ伸びる上限（8 行相当）。超えたら内部スクロールに切り替える。
-const MAX_WRAP_EDITOR_HEIGHT = 8 * CELL_TEXT_LINE_HEIGHT;
+// DD-055: wrap 列の編集欄を可視域の下端で縮めるときの下限（1 行分＝行の高さ＋上下の枠 2px×2）。
+const WRAP_EDITOR_MIN_HEIGHT = CELL_TEXT_LINE_HEIGHT + 4;
 
 /** keydown 前段裁定へ渡す素の値（DOM 非依存・DD-020-1 案X＋DD-020-3 Undo/Redo 修飾キー）。 */
 export interface KeydownInterceptInput {
@@ -100,6 +101,11 @@ export interface IntegrationEditorConfig {
   readonly isWrapColumn?: (columnId: string) => boolean;
   /** RC12（DD-052-2）: 文字列として保つ列か（型変換をスキップ）。未指定なら常に false（既存挙動を保つ）。 */
   readonly isStringColumn?: (columnId: string) => boolean;
+  /**
+   * DD-055（RC17）: 可視域（ネイティブスクロールバーを除く stage 座標の幅・高さ）。wrap 列の編集欄を可視域の下端で
+   * 縮めるのに使う（wrap 列の編集中だけ読む）。未指定なら縮めない。
+   */
+  readonly visibleArea?: () => VisibleArea;
 }
 
 export interface IntegrationEditor {
@@ -195,7 +201,8 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
 
   /**
    * RC2: セル矩形に対する textarea の高さを決める。wrap 列の編集中でなければ従来どおりセル矩形と同寸の
-   * 単一行（変更なし）。wrap 列の編集中は内容（scrollHeight）に合わせて下へ伸ばし、上限を超えたら内部スクロール。
+   * 単一行（変更なし）。wrap 列の編集中は内容（scrollHeight）に合わせて下へ伸ばし、上限を超えたら内部スクロール
+   * （上限はセルの高さを下回らず、可視域の下端を越える分は縮める＝DD-055・computeWrapEditorHeight）。
    */
   const applyHeight = (rect: CellRect): void => {
     if (!editingVisual || !isEditingWrapColumn()) {
@@ -208,12 +215,18 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     textarea.style.whiteSpace = 'pre-wrap';
     textarea.style.wordBreak = 'break-all'; // wrapLines（文字単位・単語境界なし）の折返しに視覚を寄せる
     textarea.style.lineHeight = `${CELL_TEXT_LINE_HEIGHT}px`;
-    // 一旦セル高へ戻してから scrollHeight を測る（前回の伸長分が残って過大評価するのを防ぐ）。
-    textarea.style.height = `${rect.height}px`;
-    const natural = textarea.scrollHeight;
-    const height = Math.min(Math.max(rect.height, natural), MAX_WRAP_EDITOR_HEIGHT);
+    // 高さを 0 にして中身の高さを測る（前回の伸長分で過大評価しない）。DD-055: セルの高さへ戻して測ると、
+    // セルより低く縮めている間は測るたびに内部スクロール位置が切り詰められ、入力中の行が見えなくなる。
+    textarea.style.height = '0px';
+    const { height, scroll } = computeWrapEditorHeight({
+      cellTop: rect.y,
+      cellHeight: rect.height,
+      contentHeight: textarea.scrollHeight,
+      visibleBottom: config.visibleArea?.().height ?? Number.POSITIVE_INFINITY,
+      minHeight: WRAP_EDITOR_MIN_HEIGHT,
+    });
     textarea.style.height = `${height}px`;
-    textarea.style.overflowY = natural > MAX_WRAP_EDITOR_HEIGHT ? 'auto' : 'hidden';
+    textarea.style.overflowY = scroll ? 'auto' : 'hidden';
   };
 
   // --- TextareaPort（実 DOM への反映。composition 中は value/selection を書かない・I-3） ---

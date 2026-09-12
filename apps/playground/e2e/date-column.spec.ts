@@ -9,6 +9,17 @@
 import { expect, test } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 
+import {
+  emulateScrollbars,
+  evidencePathDD055,
+  expectOverlayInsideVisible,
+  highlightCell,
+  highlightSelector,
+  lastFullyVisibleRow,
+  overlayGeometry,
+  saveEvidenceJsonDD055,
+  scrollTo,
+} from './integration-helpers';
 import * as sa from './standalone-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -226,6 +237,184 @@ test('AC2: 印字文字は手入力（正準化）・openOn=icon 列は F2/dblcl
     await page.keyboard.press('F2');
     await page.keyboard.press('Alt+ArrowDown');
     expect(await dateOpen(page)).toBe(false);
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+// ---- DD-055（ReadyCrew RC16）: カレンダーを可視域の中に開く ---------------------------------------------
+// 証跡（スクショ・数値 JSON）は失敗しうる検証より前に保存する（修正前の状態を同じ手順で残すため）。
+
+/** カレンダーの下端とセルの上端のずれ（px・整数に丸める）。どちらかが見えなければ null。 */
+async function popoverBottomToCellTop(page: Page, row: number, col: number): Promise<number | null> {
+  const cell = await sa.cellRectAt(page, row, col);
+  const { rect } = await overlayGeometry(page, '.ns-date-popover');
+  return cell === null || rect === null ? null : Math.round(rect.y + rect.height - cell.y);
+}
+
+test('DD-055 AC2: 可視域の下端近くの日付セル → 4 通りの開き方すべてでカレンダーがセルの上に開き可視域に収まり、開いたままスクロールしても上向きのまま追従する', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    // 列・行を増やして縦横にスクロールさせ、スクロールバー相当の 16px を空ける（可視域の下端＝横スクロールバーの手前。
+    // ReadyCrew の画面と同じ条件。headless はスクロールバーを隠すため模擬する）。
+    await page.goto('/standalone.html?date=col-b&extracols=12&seedrows=80');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+    await emulateScrollbars(page);
+    const col = 1;
+    const row = await lastFullyVisibleRow(page, col);
+    const cell = (await sa.cellRectAt(page, row, col))!;
+    const area = await overlayGeometry(page, '.ns-date-popover');
+    expect(area.visibleHeight, '前提: 横スクロールバーの分だけ可視域が stage より低い').toBeLessThan(area.stageHeight);
+    const openers: ReadonlyArray<readonly [string, () => Promise<void>]> = [
+      [
+        'F2',
+        async () => {
+          await sa.selectCell(page, row, col);
+          await page.keyboard.press('F2');
+        },
+      ],
+      [
+        'Alt+ArrowDown',
+        async () => {
+          await sa.selectCell(page, row, col);
+          await page.keyboard.press('Alt+ArrowDown');
+        },
+      ],
+      [
+        'dblclick',
+        async () => {
+          await page.locator('.nsheet-scroller').dblclick({ position: await cellCenter(page, row, col) });
+        },
+      ],
+      [
+        '📅',
+        async () => {
+          await sa.selectCell(page, row, col);
+          await page.locator('.ns-date-indicator').click();
+        },
+      ],
+    ];
+    for (const [label, open] of openers) {
+      await open();
+      await expect.poll(async () => dateOpen(page), { message: `${label} で開く` }).toBe(true);
+      const geometry = await overlayGeometry(page, '.ns-date-popover');
+      if (label === 'F2') {
+        await highlightCell(page, row, col);
+        await highlightSelector(page, '.ns-date-popover');
+        await page.screenshot({ path: evidencePathDD055('bug1-date-bottom.png') });
+        saveEvidenceJsonDD055('bug1-date-bottom.json', { row, col, cell, popover: geometry });
+      }
+      expectOverlayInsideVisible(geometry, label);
+      expect(
+        Math.abs(geometry.rect!.y + geometry.rect!.height - cell.y),
+        `${label}: カレンダーの下端がセルの上端に揃う（セルの上に開く）`,
+      ).toBeLessThanOrEqual(1);
+      await page.keyboard.press('Escape');
+      await expect.poll(async () => dateOpen(page)).toBe(false);
+    }
+
+    // 開いたままスクロール → 向きは変わらず、下端がセルの上端に揃ったまま追従する（AC5 の日付側）。
+    await sa.selectCell(page, row, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => dateOpen(page)).toBe(true);
+    await scrollTo(page, 5 * 22, 0);
+    await expect
+      .poll(async () => popoverBottomToCellTop(page, row, col), { message: '5 行スクロール: 上向きのまま追従' })
+      .toBe(0);
+    expectOverlayInsideVisible(await overlayGeometry(page, '.ns-date-popover'), '5 行スクロール');
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-055 AC3: 上下どちらの余白もカレンダーより狭い → 広い側に開いて余白に収まる高さで内部スクロールし、キーで動かしたハイライトの日が見える', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 420 } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?date=col-b&seedrows=60');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+    await emulateScrollbars(page);
+    const col = 1;
+    const area = await overlayGeometry(page, '.ns-date-popover');
+    // 可視域の中央付近の行（列見出し 24px・行 22px）に、6 週表示の月（2026 年 8 月）の 2 週目の日付を入れる。
+    const row = Math.round((area.visibleHeight / 2 - 24 - 11) / 22);
+    await page.evaluate((target: number) => {
+      const rows = Array.from({ length: 60 }, (_, i) => ({
+        rowId: `r${i}`,
+        cells: { 'col-a': `行${i}`, 'col-b': i === target ? '2026-08-02' : '' },
+      }));
+      window.__standalone?.reinject({ rows });
+    }, row);
+    await expect.poll(async () => sa.displayCell(page, `r${row}`, 'col-b')).toBe('2026-08-02');
+    const cell = (await sa.cellRectAt(page, row, col))!;
+    const spaceAbove = cell.y;
+    const spaceBelow = area.visibleHeight - (cell.y + cell.height);
+
+    await sa.selectCell(page, row, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => dateOpen(page)).toBe(true);
+    const geometry = await overlayGeometry(page, '.ns-date-popover');
+    expectOverlayInsideVisible(geometry, '上下とも狭い');
+    expect(geometry.scrollable, '前提: 上下どちらの余白もカレンダーより狭く、はみ出す分は内部スクロール').toBe(true);
+    if (spaceAbove > spaceBelow) {
+      expect(Math.abs(geometry.rect!.y + geometry.rect!.height - cell.y), '上の余白が広い → セルの上に開く').toBeLessThanOrEqual(1);
+    } else {
+      expect(Math.abs(geometry.rect!.y - (cell.y + cell.height)), '下の余白が広い（同じ）→ セルの下に開く').toBeLessThanOrEqual(1);
+    }
+
+    // ↓ で 4 週送る（8/2 → 8/30＝6 週目の行。表示月は 8 月のまま）→ ハイライトの日がカレンダーの表示範囲に入る。
+    for (let i = 0; i < 4; i += 1) {
+      await page.keyboard.press('ArrowDown');
+    }
+    await expect.poll(async () => dateHighlighted(page)).toBe('2026-08-30');
+    const popover = (await overlayGeometry(page, '.ns-date-popover')).rect!;
+    const day = (await overlayGeometry(page, '.ns-date-day[data-date="2026-08-30"]')).rect!;
+    expect(day.y, 'ハイライトの日の上端がカレンダーの中').toBeGreaterThanOrEqual(popover.y - 1);
+    expect(day.y + day.height, 'ハイライトの日の下端がカレンダーの中').toBeLessThanOrEqual(popover.y + popover.height + 1);
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-055 AC4: 可視域の右端近くの日付列でカレンダーを開く → 右端を越えず左へずれる', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?date=col-x9&extracols=12&seedrows=80');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+    await emulateScrollbars(page);
+    const row = 2;
+    const col = 13; // col-a〜col-d の後ろの 10 列目＝col-x9
+    expect(await sa.colIdAt(page, col)).toBe('col-x9');
+    const cell = (await sa.cellRectAt(page, row, col))!;
+    const area = await overlayGeometry(page, '.ns-date-popover');
+    expect(cell.x + cell.width, '前提: 列全体が可視域に入っている').toBeLessThanOrEqual(area.visibleWidth);
+    expect(cell.x + 224, '前提: セルの左端から置くと右端を越える（カレンダーの幅 224px）').toBeGreaterThan(area.visibleWidth);
+
+    await sa.selectCell(page, row, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => dateOpen(page)).toBe(true);
+    const geometry = await overlayGeometry(page, '.ns-date-popover');
+    await highlightSelector(page, '.ns-date-popover');
+    await page.screenshot({ path: evidencePathDD055('bug1-date-right.png') });
+    saveEvidenceJsonDD055('bug1-date-right.json', { row, col, cell, popover: geometry });
+    expectOverlayInsideVisible(geometry, '右端の日付列');
+    expect(
+      Math.abs(geometry.rect!.x + geometry.rect!.width - area.visibleWidth),
+      '右端を可視域の右端に揃えて左へずらす',
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.rect!.y - (cell.y + cell.height)), '縦は従来どおりセルの下に開く').toBeLessThanOrEqual(1);
     await page.keyboard.press('Escape');
   } finally {
     await context.close();

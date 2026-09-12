@@ -3,6 +3,7 @@
 // 【分離】純粋状態コントローラ（open/close/highlight・DOM 非依存＝TDD 対象）＋ 薄い DOM アダプタ（listbox
 // オーバーレイ・▼ インジケーター・rAF placement 追従＝badge と同方式）。加えて keydown の前段裁定 `decideSelectKey`
 // を純関数として切り出す（integration-editor の interceptKeydown から状態機械の前で評価する・IME 経路無改変）。
+// listbox の位置は可視域に収める（DD-055・popup-placement の純関数）。
 //
 // 【IME 経路無改変（📐・T1 非該当）】editor-state-machine・ime-editing-session・常駐 textarea は改変しない。
 //   フォーカスは常駐 textarea のまま（I-5 維持）。↑↓/Enter/Esc は mount-controller の interceptKeydown が消費して
@@ -11,6 +12,8 @@
 
 import type { EditPhase } from '@nanairo-sheet/ime';
 import type { CellRect } from '@nanairo-sheet/render';
+
+import { computePopupPlacement, type PopupDirection, type VisibleArea } from './popup-placement';
 
 // ---- 純粋コントローラ（TDD 対象） ------------------------------------------------------------
 
@@ -208,18 +211,25 @@ export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
 const LISTBOX_Z = '30'; // 常駐 textarea(10)・badge(12) より上
 const INDICATOR_Z = '11';
 const HIGHLIGHT_BG = '#e8f0fe';
+// listbox の高さの既定の上限。可視域の余白がこれより狭ければ余白の高さまで縮める（DD-055）。
+const LISTBOX_MAX_HEIGHT = 220;
 
 export interface SelectDropdownConfig {
   /** listbox/indicator を配置するコンテナ（position:relative の stage）。 */
   readonly host: HTMLElement;
   /** 候補クリック（pointerdown）での確定要求。mount-controller が SetCells を組んで submit する。 */
   readonly onConfirm: () => void;
+  /** DD-055（RC16）: 可視域（ネイティブスクロールバーを除く stage 座標の幅・高さ）。listbox をこの中に収める（開いている間だけ読む）。 */
+  readonly visibleArea: () => VisibleArea;
 }
 
 export interface SelectDropdown {
   readonly controller: SelectController;
   isOpen(): boolean;
-  /** 開く（cellRect の直下へ listbox を配置）。`highlight:false` はハイライト無しで開く（DD-037 suggest モード）。 */
+  /**
+   * 開く（セルの真下。下に入りきらず上の余白のほうが広ければセルの上＝DD-055）。向きは開いた時点で決め、閉じるまで保つ。
+   * `highlight:false` はハイライト無しで開く（DD-037 suggest モード）。
+   */
   open(params: {
     readonly rect: CellRect | null;
     readonly options: readonly string[];
@@ -258,7 +268,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   listbox.style.boxShadow = '0 2px 8px rgba(0,0,0,0.18)';
   listbox.style.font = '13px system-ui, sans-serif';
   listbox.style.color = '#202124';
-  listbox.style.maxHeight = '220px';
+  listbox.style.maxHeight = `${LISTBOX_MAX_HEIGHT}px`;
   listbox.style.overflowY = 'auto';
   listbox.style.boxSizing = 'border-box';
   // Fable 5 P2-1: listbox 自体（枠・内部スクロールバー＝候補16件超で出現）への pointerdown で常駐 textarea が
@@ -282,6 +292,8 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   host.appendChild(indicator);
 
   let optionEls: HTMLDivElement[] = [];
+  // DD-055: 開いた時点で決めた向き（スクロール・絞り込みで上下に跳ねないよう閉じるまで保つ）。閉じている間は null。
+  let direction: PopupDirection | null = null;
 
   function renderOptions(): void {
     listbox.replaceChildren();
@@ -335,8 +347,19 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
       return;
     }
     listbox.style.minWidth = `${Math.max(rect.width, 80)}px`;
-    listbox.style.left = `${rect.x}px`;
-    listbox.style.top = `${rect.y + rect.height}px`;
+    // 余白で縮める前の高さ＝中身の高さ＋上下の枠（既定の上限まで）。max-height を変えずに測る（内部スクロール位置を保つ）。
+    const naturalHeight = Math.min(LISTBOX_MAX_HEIGHT, listbox.scrollHeight + listbox.offsetHeight - listbox.clientHeight);
+    const placement = computePopupPlacement({
+      cellRect: rect,
+      popupWidth: listbox.offsetWidth,
+      popupHeight: naturalHeight,
+      visibleArea: config.visibleArea(),
+      direction: direction ?? undefined,
+    });
+    direction = placement.direction;
+    listbox.style.maxHeight = `${Math.min(LISTBOX_MAX_HEIGHT, placement.maxHeight)}px`;
+    listbox.style.left = `${placement.left}px`;
+    listbox.style.top = `${placement.top}px`;
   }
 
   return {
@@ -344,10 +367,11 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
     isOpen: () => controller.isOpen(),
     open: ({ rect, options, currentValue, highlight }) => {
       controller.open({ options, currentValue, highlight });
+      direction = null;
       renderOptions();
-      paintHighlight();
       listbox.style.display = 'block';
       placeListbox(rect);
+      paintHighlight(); // 高さが決まってから、現値のハイライトを listbox の表示範囲へスクロールする
     },
     setOptions: (options) => {
       if (!controller.isOpen()) {
@@ -371,6 +395,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
       listbox.style.display = 'none';
       listbox.replaceChildren();
       optionEls = [];
+      direction = null;
       return value;
     },
     close: () => {
@@ -378,6 +403,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
       listbox.style.display = 'none';
       listbox.replaceChildren();
       optionEls = [];
+      direction = null;
     },
     refresh: ({ openRect, indicatorRect }) => {
       if (controller.isOpen()) {

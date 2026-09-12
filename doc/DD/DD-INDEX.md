@@ -6,6 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
+| DD-055 | 候補欄のはみ出しと長文編集欄の高さ | 進行中 | consumer 駆動（ReadyCrew DD-124・本番 alpha.9 で発見）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC16・RC17。Human Spec Gate 済み（論点1〜5 は推奨どおり・2026-09-13）。修正・検証・Codex（指摘なし）済み、alpha.10 配布中 |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 

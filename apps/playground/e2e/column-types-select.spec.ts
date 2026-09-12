@@ -12,14 +12,24 @@ import { expect, test } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 
 import {
+  cellRectAt,
   colIdAt,
   committedCell,
   composeFinalizeAndCommit,
   composeOpen,
   dispatchSyntheticPaste,
+  emulateScrollbars,
+  evidencePathDD055,
+  expectOverlayInsideVisible,
+  highlightCell,
+  highlightSelector,
+  lastFullyVisibleRow,
   openClient,
+  overlayGeometry,
   plainTypeAndCommit,
   rowIdAt,
+  saveEvidenceJsonDD055,
+  scrollTo,
   selectCell,
   selectHighlightedIndex,
   selectOpen,
@@ -426,6 +436,247 @@ test('AC2(単独モード): 選択式確定 → cell-commit 発火（decision②
     expect(commitEvents.length).toBeGreaterThanOrEqual(1);
     const changed = commitEvents.flatMap((e) => e.changes ?? []).find((c) => c.columnId === columnId);
     expect(changed?.value).toBe('受注');
+  } finally {
+    await context.close();
+  }
+});
+
+// ---- DD-055（ReadyCrew RC16）: 候補欄を可視域の中に開く -------------------------------------------------
+// 証跡（スクショ・数値 JSON）は失敗しうる検証より前に保存する（修正前の状態を同じ手順で残すため）。
+
+/** 候補欄の下端とセルの上端のずれ（px・整数に丸める）。どちらかが見えなければ null。 */
+async function listboxBottomToCellTop(page: Page, row: number, col: number): Promise<number | null> {
+  const cell = await cellRectAt(page, row, col);
+  const { rect } = await overlayGeometry(page, '.ns-select-listbox');
+  return cell === null || rect === null ? null : Math.round(rect.y + rect.height - cell.y);
+}
+
+test('DD-055 AC1: 可視域の下端近くの選択式セル → 5 通りの開き方すべてで候補欄がセルの上に開き可視域に収まる。下に余白のあるセルは下に開く', async ({
+  browser,
+}) => {
+  const { context, page } = await openSelectClient(browser, 'DD055-下端');
+  try {
+    await emulateScrollbars(page);
+    const col = 3;
+    const row = await lastFullyVisibleRow(page, col);
+    const cell = (await cellRectAt(page, row, col))!;
+    const openers: ReadonlyArray<readonly [string, () => Promise<void>]> = [
+      [
+        'F2',
+        async () => {
+          await selectCell(page, row, col);
+          await page.keyboard.press('F2');
+        },
+      ],
+      [
+        'Enter',
+        async () => {
+          await selectCell(page, row, col);
+          await page.keyboard.press('Enter');
+        },
+      ],
+      [
+        'Alt+ArrowDown',
+        async () => {
+          await selectCell(page, row, col);
+          await page.keyboard.press('Alt+ArrowDown');
+        },
+      ],
+      [
+        'dblclick',
+        async () => {
+          await page.locator('.nsheet-scroller').dblclick({ position: await positionInScroller(page, row, col) });
+        },
+      ],
+      [
+        '印字文字（厳格モード）',
+        async () => {
+          await selectCell(page, row, col);
+          await page.keyboard.press('a');
+        },
+      ],
+    ];
+    for (const [label, open] of openers) {
+      await open();
+      await expect.poll(async () => selectOpen(page), { message: `${label} で開く` }).toBe(true);
+      const geometry = await overlayGeometry(page, '.ns-select-listbox');
+      if (label === 'F2') {
+        await highlightCell(page, row, col);
+        await highlightSelector(page, '.ns-select-listbox');
+        await page.screenshot({ path: evidencePathDD055('bug1-select-bottom.png') });
+        saveEvidenceJsonDD055('bug1-select-bottom.json', { row, col, cell, listbox: geometry });
+      }
+      expectOverlayInsideVisible(geometry, label);
+      expect(
+        Math.abs(geometry.rect!.y + geometry.rect!.height - cell.y),
+        `${label}: 候補欄の下端がセルの上端に揃う（セルの上に開く）`,
+      ).toBeLessThanOrEqual(1);
+      await page.keyboard.press('Escape');
+      await expect.poll(async () => selectOpen(page)).toBe(false);
+    }
+
+    // 下に余白のあるセルは従来どおり下に開く。
+    const upperRow = 3;
+    const upperCell = (await cellRectAt(page, upperRow, col))!;
+    await selectCell(page, upperRow, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => selectOpen(page)).toBe(true);
+    const downward = await overlayGeometry(page, '.ns-select-listbox');
+    expectOverlayInsideVisible(downward, '下に余白のあるセル');
+    expect(
+      Math.abs(downward.rect!.y - (upperCell.y + upperCell.height)),
+      '候補欄の上端がセルの下端に揃う（従来どおり下に開く）',
+    ).toBeLessThanOrEqual(1);
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-055 AC3: 上下どちらの余白も候補欄より狭い → 広い側に開いて余白に収まる高さで内部スクロールし、↓で送った最後の候補が見える（単独）', async ({
+  browser,
+}) => {
+  const options = Array.from({ length: 30 }, (_, i) => `候補${String(i + 1).padStart(2, '0')}`);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 420 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(`/standalone.html?seedrows=60&select=${encodeURIComponent(`col-b:${options.join('|')}`)}`);
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+    await emulateScrollbars(page);
+    const col = 1;
+    const area = await overlayGeometry(page, '.ns-select-listbox');
+    // 可視域の中央付近の行（列見出し 24px・行 22px）。
+    const row = Math.round((area.visibleHeight / 2 - 24 - 11) / 22);
+    const cell = (await sa.cellRectAt(page, row, col))!;
+    const spaceAbove = cell.y;
+    const spaceBelow = area.visibleHeight - (cell.y + cell.height);
+    expect(Math.max(spaceAbove, spaceBelow), '前提: 上下どちらの余白も候補欄の上限（220px）より狭い').toBeLessThan(220);
+
+    await sa.selectCell(page, row, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => selectOpen(page)).toBe(true);
+    const geometry = await overlayGeometry(page, '.ns-select-listbox');
+    await highlightCell(page, row, col);
+    await highlightSelector(page, '.ns-select-listbox');
+    await page.screenshot({ path: evidencePathDD055('bug1-select-both-short.png') });
+    saveEvidenceJsonDD055('bug1-select-both-short.json', { row, col, cell, spaceAbove, spaceBelow, listbox: geometry });
+    expectOverlayInsideVisible(geometry, '上下とも狭い');
+    expect(geometry.scrollable, '余白に収まらない分は内部スクロール').toBe(true);
+    if (spaceAbove > spaceBelow) {
+      expect(Math.abs(geometry.rect!.y + geometry.rect!.height - cell.y), '上の余白が広い → セルの上に開く').toBeLessThanOrEqual(1);
+    } else {
+      expect(Math.abs(geometry.rect!.y - (cell.y + cell.height)), '下の余白が広い（同じ）→ セルの下に開く').toBeLessThanOrEqual(1);
+    }
+
+    for (let i = 1; i < options.length; i += 1) {
+      await page.keyboard.press('ArrowDown');
+    }
+    expect(await selectHighlightedIndex(page)).toBe(options.length - 1);
+    const listbox = (await overlayGeometry(page, '.ns-select-listbox')).rect!;
+    const last = (await overlayGeometry(page, `.ns-select-option[data-index="${options.length - 1}"]`)).rect!;
+    expect(last.y, '最後の候補の上端が候補欄の中').toBeGreaterThanOrEqual(listbox.y - 1);
+    expect(last.y + last.height, '最後の候補の下端が候補欄の中').toBeLessThanOrEqual(listbox.y + listbox.height + 1);
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-055 AC4: 可視域の右端近くの列で開く → 候補欄が右端を越えず左へずれる', async ({ browser }) => {
+  const wideCol = 30;
+  const wideOptions = ['とても長い候補の名前その一', 'とても長い候補の名前その二', '短い候補'];
+  const { context, page } = await openClient(browser, 'DD055-右端', {
+    select: `${SELECT_QUERY},col-${wideCol}:${wideOptions.join('|')}`,
+  });
+  try {
+    await emulateScrollbars(page);
+    const row = 4;
+    const area = await overlayGeometry(page, '.ns-select-listbox');
+    const initial = (await cellRectAt(page, row, wideCol))!;
+    // 対象列の右端を可視域の右端（縦スクロールバーの手前）へ合わせる（初期 scrollLeft=0）。
+    await scrollTo(page, 0, initial.x + initial.width - area.visibleWidth);
+    await expect
+      .poll(
+        async () => {
+          const rect = await cellRectAt(page, row, wideCol);
+          return rect === null ? null : Math.round(rect.x + rect.width - area.visibleWidth);
+        },
+        { message: '対象列の右端が可視域の右端に来る' },
+      )
+      .toBe(0);
+    const cell = (await cellRectAt(page, row, wideCol))!;
+    await selectCell(page, row, wideCol);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => selectOpen(page)).toBe(true);
+    const geometry = await overlayGeometry(page, '.ns-select-listbox');
+    await highlightSelector(page, '.ns-select-listbox');
+    await page.screenshot({ path: evidencePathDD055('bug1-select-right.png') });
+    saveEvidenceJsonDD055('bug1-select-right.json', { row, col: wideCol, cell, listbox: geometry });
+    expect(geometry.rect!.width, '前提: 候補欄がセルより広い（右へはみ出しうる）').toBeGreaterThan(cell.width);
+    expectOverlayInsideVisible(geometry, '右端の列');
+    expect(
+      Math.abs(geometry.rect!.x + geometry.rect!.width - area.visibleWidth),
+      '右端を可視域の右端に揃えて左へずらす',
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.rect!.y - (cell.y + cell.height)), '縦は従来どおりセルの下に開く').toBeLessThanOrEqual(1);
+    await page.keyboard.press('Escape');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-055 AC5: 上に開いたまま絞り込み・スクロール → 向きは変わらず候補欄の下端がセルの上端に揃ったまま追従し、セルが画面外へ出たら閉じる', async ({
+  browser,
+}) => {
+  const freeCol = 7;
+  const { context, page } = await openClient(browser, 'DD055-追従', {
+    select: `${SELECT_QUERY},col-${freeCol}:AA|AB|AC|B!free`,
+  });
+  try {
+    await emulateScrollbars(page);
+    // (1) 選択式（候補から選ぶ）: 最下行でセルの上に開き、スクロールしても上向きのまま追従する。
+    const col = 3;
+    const row = await lastFullyVisibleRow(page, col);
+    await selectCell(page, row, col);
+    await page.keyboard.press('F2');
+    await expect.poll(async () => selectOpen(page)).toBe(true);
+    await expect
+      .poll(async () => listboxBottomToCellTop(page, row, col), { message: '開いた直後: 候補欄の下端がセルの上端' })
+      .toBe(0);
+    for (const scrolledRows of [5, 12]) {
+      // セルが上へ動き、下にも候補欄が入る余白ができる（開き直していないので向きは保つ）。
+      await scrollTo(page, scrolledRows * 22, 0);
+      await expect
+        .poll(async () => listboxBottomToCellTop(page, row, col), {
+          message: `${scrolledRows} 行スクロール: 上向きのまま追従`,
+        })
+        .toBe(0);
+      expectOverlayInsideVisible(await overlayGeometry(page, '.ns-select-listbox'), `${scrolledRows} 行スクロール`);
+    }
+    await scrollTo(page, (row + 5) * 22, 0);
+    await expect.poll(async () => selectOpen(page), { message: 'セルが画面外へ出たら閉じる（従来どおり）' }).toBe(false);
+    await scrollTo(page, 0, 0);
+
+    // (2) 自由入力併存列（入力中の前方一致の絞り込み・DD-037）: 上に開いたまま候補が減っても下端はセルの上端に揃う。
+    const freeRow = await lastFullyVisibleRow(page, freeCol);
+    await selectCell(page, freeRow, freeCol);
+    await page.locator('textarea.int-cell-editor').focus();
+    await page.keyboard.type('a');
+    await expect.poll(async () => selectOptions(page)).toEqual(['AA', 'AB', 'AC']);
+    await expect
+      .poll(async () => listboxBottomToCellTop(page, freeRow, freeCol), { message: '候補 3 件: セルの上に開く' })
+      .toBe(0);
+    const tallHeight = (await overlayGeometry(page, '.ns-select-listbox')).rect!.height;
+    await page.keyboard.type('b');
+    await expect.poll(async () => selectOptions(page)).toEqual(['AB']);
+    await expect
+      .poll(async () => listboxBottomToCellTop(page, freeRow, freeCol), { message: '候補 1 件に絞られても下端はセルの上端' })
+      .toBe(0);
+    expect((await overlayGeometry(page, '.ns-select-listbox')).rect!.height, '絞り込みで候補欄が低くなる').toBeLessThan(
+      tallHeight,
+    );
+    await page.keyboard.press('Escape');
   } finally {
     await context.close();
   }

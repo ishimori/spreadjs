@@ -90,6 +90,7 @@
 |------|------|
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
+| `doc/DD/DD-055/` | 候補欄のはみ出しと長文編集欄の高さ（ReadyCrew RC16・RC17）の再現・修正検証（bug-report・verification・Before/After の画面と矩形の数値）と Codex レビュー |
 | `doc/archived/DD/DD-048/` | 点線・破線と共通横罫線の確定シナリオ・検証証跡・Release引き渡し |
 | `doc/archived/DD/DD-050/` | 厳格な consumer 設定での型検査の Codex レビュー（依頼・結果）・alpha.7 検証結果と広島 DD-005-3 引き渡し |
 | `doc/archived/DD/DD-049/` | 受理通知・remote-change・presence の契約（contract.md）・Codex 2 往復・2 クライアント証跡・alpha.6 検証結果と広島 DD-005-3 引き渡し |
