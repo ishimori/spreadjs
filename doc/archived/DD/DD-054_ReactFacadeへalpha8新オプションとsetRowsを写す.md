@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-13 | 2026-09-13 | 進行中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC15。DD-052-2〜4 の React 写像漏れ。Phase 1〜2（写像・テスト・文書）完了、alpha.9配布待ち |
+| 2026-09-13 | 2026-09-13 | 完了 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC15。DD-052-2〜4 の React 写像漏れを解消し、0.1.0-alpha.9で配布済み |
 
 > アプローチ: TDD（Facade の props・handle の写像。既存の `nanairo-sheet-view.dd0NN.test.ts` と同じ形で先にテストを書く）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -67,14 +67,19 @@ alpha.8 で grid Facade に入った `stringColumns`（DD-052-2・RC12）・`row
 
 ### Phase 2: 文書と配布
 - [x] `CHANGELOG.md`（alpha.9）・`doc/quick-start.md` §4c・`apps/showcase/src/features.json` の react 説明を更新
-- [ ] 配布 closure 10 package（`packages/{grid,react,server-hono,core,types,collab,render,selection,ime,server}/package.json`）の `version` と `package-lock.json` の該当エントリを `0.1.0-alpha.9` へ上げる（`scripts/release/build-release.sh` は採番せず既存の版を読むだけで、版がそろっていなければ停止する＝同 109-121）
-- [ ] `bash scripts/release/build-release.sh --out release/0.1.0-alpha.9` で配布物を生成し（既定の出力先は `release/` 直下＝同 23・30-35）、ReadyCrew DD-124 への引き渡し（版・変更点）を本DDのログへ記録
-- [ ] 🔬 機械検証: `npm run typecheck:consumer-strict`・`npm run consumer-harness` → パス／`release/0.1.0-alpha.9/manifest.json` の `version` が `0.1.0-alpha.9`
+- [x] 配布 closure 10 package（`packages/{grid,react,server-hono,core,types,collab,render,selection,ime,server}/package.json`）の `version` と `package-lock.json` の該当エントリを `0.1.0-alpha.9` へ上げる（`scripts/release/build-release.sh` は採番せず既存の版を読むだけで、版がそろっていなければ停止する＝同 109-121）
+- [x] `bash scripts/release/build-release.sh --out release/0.1.0-alpha.9` で配布物を生成し（既定の出力先は `release/` 直下＝同 23・30-35）、ReadyCrew DD-124 への引き渡し（版・変更点）を本DDのログへ記録
+- [x] 🔬 機械検証: `npm run typecheck:consumer-strict`・`npm run consumer-harness` → パス／`release/0.1.0-alpha.9/manifest.json` の `version` が `0.1.0-alpha.9`
 
 ### 完了前チェック
-- [ ] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
-- [ ] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ。深掘りが要る場合の手法: doc/da-method.md）
-- [ ] 🔬 全回帰1回（`npm run typecheck`・`npm run lint`・`npm test` → 全パス）
+- [x] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
+- [x] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ。深掘りが要る場合の手法: doc/da-method.md）
+- [x] 🔬 全回帰1回（`npm run typecheck`・`npm run lint`・`npm test` → 全パス）
+
+## 既知の未保証境界
+
+- 論点3の型レベル網羅性チェックは DD の決定どおり `GridCommonMountOptions`（両モード共通オプション）と `GridInstance` のみを対象にし、モード別オプション（`GridStandaloneMountOptions`/`GridCollaborationMountOptions` の `serverUrl`/`columnOrder`/`initialData`/`displayName`/`clientId` 等）は対象外（手作業で一致を確認済みだが、将来の追加を機械検出しない）。範囲が広がるため本DDでは見送り、必要になれば別DDで検討する
+- `rowOperations={false}` が実際に Ctrl+Shift+'+'／Ctrl+'-' を無効化する挙動そのものは grid 側（DD-052-3）で E2E 済み。本DDの `nanairo-sheet-view.dd054.test.ts` は「prop が grid mount option へ正しく渡ること」のみを検証し、React 経由でのキーボード操作 E2E は追加していない（grid 側のロジックを再テストする価値が低いため）
 
 ## ログ
 
@@ -86,3 +91,6 @@ alpha.8 で grid Facade に入った `stringColumns`（DD-052-2・RC12）・`row
 - 論点3（型レベルの網羅性チェック）を採用: `GridCommonMountOptions` の全キーが対応する props 名（`columnWidths`→`initialColumnWidths` 等の改名は明示マップ）で `NanairoSheetViewCommonProps` に存在すること、`GridInstance` の全メンバーが除外リスト（`documentId`・`subscribe`・`destroy`＝理由付き）を除いて `NanairoSheetViewHandle` に存在することを、`npm run typecheck` で強制する。実装中に2回とも意図的に欠落させて型エラーが該当キー名入りで出ることを確認済み（例: `Type "stringColumns" does not satisfy the constraint never`）。ハマった点: (1) homomorphic mapped type が optional 修飾を引き継ぐため `[K in keyof T]:` だけだと union に undefined が混入する→`-?` で除去、(2) noUnusedLocals/noUnusedParameters を満たすため、型だけの named type alias ではなく「呼ばれない関数の引数型」として埋め込み `void fn;` で参照した
 - 🔬 機械検証: `npm test`（129ファイル・1363件）・`npm run typecheck`・`npm run typecheck:consumer-strict`・`npm run lint` 全パス。`tests/contract/facade-surface.test.ts` の react 公開宣言 snapshot 差分（3点の追加のみ）を確認して更新
 - `CHANGELOG.md`（[Unreleased]→alpha.9予定）・`doc/quick-start.md` §4c（識別系props一覧・命令API一覧）・`apps/showcase/src/features.json`（react エントリ）を更新
+- alpha配布: 10 packageを `0.1.0-alpha.9`へ更新（`6850ee0`）。`bash scripts/release/build-release.sh --out release/0.1.0-alpha.9` → unit 1363件・typecheck・lint green → 10 tarball生成 → `verify-manifest.mjs`（sha256一致）・pack内容検査（111 files）PASS → `RELEASE_VENDOR_DIR=... bash scripts/consumer-app.sh`（実挙動E2E 10/10）PASS → `npm run consumer-harness`（独立プロジェクトへの fresh pack→install→tsc --noEmit green・S1-3不合格条件0）PASS → ZIP化（`nanairo-sheet-0.1.0-alpha.9.zip`・365,383 bytes / 12 entries・consumer向けREADME同梱）。ReadyCrew DD-124への実際の引き渡しは本セッションに ready_crew_db への直接アクセスがないため、配布物（release/0.1.0-alpha.9/ と ZIP）をユーザーへ引き渡し、以降の統合は ready_crew_db 側セッションの担当とする
+- 受け入れ基準の照合: 1〜7すべて達成。#5（型レベルテストで検出）は実装中に2回（stringColumns・setRows）意図的に欠落させて型エラーが実際に出ることを確認済み。#6は typecheck・lint・test・consumer-strict・consumer-harness の5点すべてgreen
+- 😈 セルフレビュー: 詳細は既知の未保証境界を参照（型レベルチェックの対象範囲・E2Eの範囲）。上記以外に実害のある齟齬は見当たらない。完了処理としてアーカイブする
