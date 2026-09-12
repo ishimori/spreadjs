@@ -199,3 +199,17 @@
 - **原因**: `types: ./src/index.ts` のソース配布では、consumerのtscがimportで辿ったSDKの `.ts` をconsumerの設定で検査する（`skipLibCheck` は `.d.ts` にしか効かない）。SDK側のtsconfigにそのフラグが無ければ気付けない。TSは1つの代入エラーで1プロパティしか報告しないため、件数は実際に直す箇所より少なく見える。
 - **正しいやり方**: Facadeの入口を `files` に並べ、consumerと同じフラグ・lib・typesを足した専用tsconfig（`tsconfig.consumer-strict.json`）をCIで回す。直し方は、公開型は変えずSDK内の呼び出し側でundefinedのキーを落とす／内部型は `?: T | undefined` に広げて実行時の値の形を変えない／添字は `entries()` 等でなくすか、非空が保証された箇所だけ内部エラーで止める（`!` で黙らせない）。consumerのtsc引数を再現するときは `--target` を明示する（TS 5.9は省略時ES5で、無関係な反復・BigIntのエラーが混ざる）。
 - **元DD**: DD-050（広島空港consumerの要件メモH9）
+
+## 24. headless Chromium（Playwright）はスクロールバーを描かず幅も取らない — 「スクロールバーを除く可視域」の E2E は模擬しないと空振りする
+
+- **症状**: 「横スクロールバーの手前に収まる」「縦スクロールバーに隠れない」を確かめる E2E が、修正前のコードでも緑になる。あるいは前提の assert（可視域＜stage）だけが落ちる。実機の Windows Chrome では 16px 前後のスクロールバーが領域を占めるのに、E2E ではその差が出ない。
+- **原因**: headless Chromium ではスクロールバーの幅が 0 で、`scroller.clientWidth/Height` が stage の寸法と同じになる。可視域を `scroller.client*` で制限する実装（DD-046・DD-055）と、stage の寸法を使う誤った実装の差が E2E から消える。
+- **正しいやり方**: 可視域の端を検証する E2E は、scroller の `right`/`bottom` をスクロールバー相当（16px）空けて模擬する（`apps/playground/e2e/integration-helpers.ts` の `emulateScrollbars`）。「可視域が stage より小さい」ことを前提の assert として置き、模擬が外れたら落ちるようにする。
+- **元DD**: DD-046（`imperative-nav.spec.ts` で初出）→ DD-055（候補欄・編集欄の E2E。模擬なしで撮った修正前の証跡で日付ケースの前提 assert が落ちて発覚）
+
+## 25. textarea の中身の高さは「高さ 0」にして測る — 大きい高さへ戻して測ると内部スクロール位置が切り詰められる
+
+- **症状**: 上限付きで自動伸長する textarea を上限より低く縮めて使うと（例: 可視域の下端で縮める）、再描画のたびに内部スクロールが先頭側へ戻り、末尾の行が見えなくなる。
+- **原因**: 「一旦セルの高さへ戻してから `scrollHeight` を測る」と、その高さで中身が収まる（または余裕が大きい）場合、`scrollHeight` を読んだ時点のレイアウトで `scrollTop` がその高さでの最大値（収まれば 0）へ切り詰められる。直後に低い高さへ戻しても `scrollTop` は元に戻らない。最終の高さが測る高さ以上だった間（DD-052-1）は起きず、縮める仕様を足した瞬間に表面化する。
+- **正しいやり方**: 測る前の高さは `0px` にする（`scrollHeight` が中身の高さそのものになり、`scrollTop` の最大値がどの最終の高さより大きいので切り詰めが起きない）。E2E は「編集欄の中を末尾までスクロール → 入力せずに再配置だけ起こす（グリッドを 1px 動かす）→ 末尾のまま」で固定し、旧方式に戻すと落ちることを確かめる（入力するとセル追従でグリッドがスクロールして状況が変わり、検出できない）。
+- **元DD**: DD-055（`packages/grid/src/integration-editor.ts` の `applyHeight()`）
