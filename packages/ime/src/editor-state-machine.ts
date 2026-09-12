@@ -80,7 +80,12 @@ export type Effect =
   | { readonly type: 'SetPendingNavigation'; readonly cell: CellPosition }
   | { readonly type: 'ClearPendingNavigation' }
   // IME 確定 Enter 等を握りつぶす（UI アダプタは対象キーの preventDefault を行う）。
-  | { readonly type: 'SuppressKey' };
+  | { readonly type: 'SuppressKey' }
+  // RC1（DD-052-1）: wrap 列の Alt+Enter。caret 位置に改行を挿入し編集を続ける（確定しない）。
+  // textarea の既定動作に頼らない（ブラウザーは Alt 押下中の Enter で改行を挿入しない＝Windows の
+  // メニューアクセラレータ修飾キーと衝突するため。実ブラウザー E2E で確認）。UI アダプタが
+  // caret 位置へ直接テキストを挿入し、続けて input として draft へ反映する。
+  | { readonly type: 'InsertNewline' };
 
 export interface EditorStateMachineOptions {
   readonly layout: GridLayout;
@@ -88,6 +93,12 @@ export interface EditorStateMachineOptions {
   readonly initialCell?: CellPosition;
   /** 既存値編集（F2 / ダブルクリック）で初期値を得るための参照（cell-store など）。 */
   readonly getCellValue: (cell: CellPosition) => string;
+  /**
+   * RC1（DD-052-1）: true を返すセルでは編集中の Alt+Enter がセル内改行になる（確定・移動しない＝textarea の
+   * 既定動作に任せるため Effect を返さない）。false/未指定のセルでは Alt+Enter も通常の Enter と同じ確定＋移動。
+   * 未指定なら常に false（既存 consumer の挙動を完全に保つ）。
+   */
+  readonly isWrapColumn?: (cell: CellPosition) => boolean;
 }
 
 export interface EditorStateMachine {
@@ -122,7 +133,8 @@ const EMPTY_CONFLICTS: ReadonlySet<string> = new Set<string>();
  * 編集状態機械を生成する。
  */
 export function createEditorStateMachine(options: EditorStateMachineOptions): EditorStateMachine {
-  const { layout, getCellValue } = options;
+  const { layout, getCellValue, isWrapColumn } = options;
+  const wrapColumnAt = (cell: CellPosition): boolean => isWrapColumn?.(cell) ?? false;
 
   let phase: EditPhase = 'Navigation';
   let activeCell: CellPosition = options.initialCell ?? { row: 0, col: 0 };
@@ -214,9 +226,11 @@ export function createEditorStateMachine(options: EditorStateMachineOptions): Ed
     key: string;
     isComposing: boolean;
     shiftKey?: boolean;
+    altKey?: boolean;
   }): Effect[] => {
     const { key } = event;
     const shiftKey = event.shiftKey ?? false;
+    const altKey = event.altKey ?? false;
 
     // I-2: 'Process'（keyCode 229 相当の IME 由来キー）を主判定にしない（S-D6）。
     if (key === 'Process') {
@@ -283,6 +297,11 @@ export function createEditorStateMachine(options: EditorStateMachineOptions): Ed
         // 競合未解決なら commit を保留（サイレント上書きしない・S-F5・Q-2）。
         if (conflictCell !== null) {
           return [{ type: 'SuppressKey' }];
+        }
+        // RC1（DD-052-1）: wrap 列の Alt+Enter はセル内改行（確定・移動しない）。wrap 列でない場合は
+        // Alt+Enter も通常の Enter と同じ確定＋移動のまま変えない。
+        if (key === 'Enter' && altKey && wrapColumnAt(activeCell)) {
+          return [{ type: 'InsertNewline' }];
         }
         const direction: NavigationDirection =
           key === 'Enter' ? (shiftKey ? 'up' : 'down') : shiftKey ? 'left' : 'right';

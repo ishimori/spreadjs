@@ -22,6 +22,20 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [Unreleased]
+
+### Added
+
+- **grid 長文セル編集（DD-052-1・ReadyCrew RC2）**: `wrapColumns` の列は、編集中の常駐 textarea が内容に合わせて下へ伸びる
+  （8 行相当を上限に内部スクロールへ切り替える）。列幅は変わらない。`wrapColumns` 未指定の列・非 wrap 列は無変更。
+
+### Changed（破壊的変更・Experimental 0.x）
+
+- **grid `wrapColumns` の列で Alt+Enter がセル内改行になった（DD-052-1・ReadyCrew RC1）**: 従来は Alt+Enter も通常の
+  Enter と同じ「確定して下のセルへ移動」だったが、`wrapColumns` に含まれる列では Alt+Enter がキャレット位置へ改行を
+  挿入し編集を続けるようになった（Excel と同じキー割当）。`wrapColumns` を指定していない列・`wrapColumns` 自体を
+  使っていない consumer は無変更。**公開 API の追加・変更はない**（`.d.ts` snapshot 差分なし。既存オプションの挙動変更のみ）。
+
 ## [0.1.0-alpha.7] - 2026-09-12
 
 ### Fixed

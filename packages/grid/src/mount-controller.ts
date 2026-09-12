@@ -2770,6 +2770,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // onChange の syncColumnLock が同期）。DD-035 R6（Codex P1）: 命令 API が初回描画前で保留中の間も入力を遮断する
       // （保留の適用先が確定する前の打鍵を旧セルへ確定させない）。readOnlyColumns 未指定かつ保留なしなら常に false。
       isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly(),
+      // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
+      isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
       // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
       // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
       // DD-035 R2: 日付カレンダーも同様に閉じる。

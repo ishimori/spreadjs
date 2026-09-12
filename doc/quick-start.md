@@ -339,6 +339,27 @@ async function reload(): Promise<void> {
 - **fail-fast**: `mode:'standalone'` に `serverUrl`/`displayName`/`clientId` を混在させると `error`（`standalone-options-conflict`）、`columnOrder` 未指定/空は `standalone-options-invalid`。
 - **F5 復元**: cell-commit を利用側で保存し、次回 mount の `initialData` として戻せばリロードで値が復元される。
 
+### 長文セル編集（`wrapColumns`・DD-052-1）
+
+`wrapColumns` に含めた列は、長文編集に適した挙動になる（両モード共通）:
+
+- **Alt+Enter でセル内改行**（Excel と同じ）。通常の Enter は従来どおり確定＋下のセルへ移動する。`wrapColumns` に
+  含まれない列では Alt+Enter も通常の Enter と同じ確定＋移動のまま変わらない。
+- 編集中の常駐 textarea が入力内容に合わせて下へ伸び、一定の高さ（8 行相当）を超えると内部スクロールに切り替わる。
+  列幅は変わらない。
+
+```ts
+const grid = mount(
+  { container },
+  {
+    mode: 'standalone',
+    columnOrder: ['col-a', 'col-b', 'memo'],
+    wrapColumns: ['memo'], // memo 列だけ長文編集（Alt+Enter 改行・textarea 自動伸長）
+    initialData,
+  },
+);
+```
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

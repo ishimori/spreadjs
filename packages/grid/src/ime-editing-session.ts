@@ -50,6 +50,11 @@ export interface TextareaPort {
   setEditingVisual(editing: boolean): void;
   /** 競合枠（#9・paint のみ・composition 中も可）。 */
   setConflict(conflict: boolean): void;
+  /**
+   * RC1（DD-052-1）: caret 位置（selection）に改行を挿入し、caret をその直後へ移す。挿入後の value を返す。
+   * textarea の既定動作に頼らない実装であること（Alt 押下中の Enter はブラウザーが改行を挿入しない・実機で確認済み）。
+   */
+  insertNewlineAtCaret(): string;
 }
 
 /** ClientSession/DocumentView への読み取り口（committed=権威 / 表示=view / index↔RowId）。 */
@@ -84,6 +89,8 @@ export interface ImeEditingSessionConfig {
   readonly submit: (operation: SetCellsOperation) => OperationId | void;
   /** 状態機械の navigation 境界（rowCount/columnCount のみ使用。pixel は未使用）。 */
   readonly layout: GridLayout;
+  /** RC1（DD-052-1）: 折り返し（wrap）列か（ColumnId 文字列で判定）。未指定なら常に false（既存挙動を保つ）。 */
+  readonly isWrapColumn?: ((columnId: ColumnId) => boolean) | undefined;
   /** activeCell/editingCell/selection が変わったら Presence を送る。 */
   readonly onPresenceChange?: ((update: PresenceUpdate) => void) | undefined;
   /** 描画/配置の再要求（selection・編集状態・競合が変わったとき）。 */
@@ -145,6 +152,10 @@ export function createImeEditingSession(config: ImeEditingSessionConfig): ImeEdi
           return '';
         }
         return doc.displayText(rowId, columnId);
+      },
+      isWrapColumn: (cell) => {
+        const columnId = doc.colIdAt(cell.col);
+        return columnId !== undefined && (config.isWrapColumn?.(columnId) ?? false);
       },
     });
   }
@@ -276,6 +287,13 @@ export function createImeEditingSession(config: ImeEditingSessionConfig): ImeEdi
         // UpdateDraft: textarea は browser（DOM）が値の正 → port.value を書かない（I-1/I-3）。
         // MarkConflict は統合では使わない（競合はサーバー beforeRevision 判定に一本化・#8）。
         break;
+      case 'InsertNewline': {
+        // RC1: caret へ改行を挿入 → 実 DOM イベントは発火させず、input が来たのと同じ経路で
+        // draft を直接反映する（機械の dispatch は同期・既に完了しているため再入の心配はない）。
+        const value = port.insertNewlineAtCaret();
+        applyEffects(machine.dispatch({ type: 'input', value, isComposing: false }));
+        break;
+      }
     }
   }
 

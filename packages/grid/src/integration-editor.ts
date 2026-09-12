@@ -14,6 +14,7 @@
 
 import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 import type { EditorEvent } from '@nanairo-sheet/ime';
+import { CELL_TEXT_LINE_HEIGHT } from '@nanairo-sheet/render';
 import type { CellRect, ViewportTransform } from '@nanairo-sheet/render';
 
 import { computeEditorPlacement, type PlacementConfig } from './editor-placement';
@@ -33,6 +34,8 @@ const EDITING_BACKGROUND = '#ffffff';
 const CONFLICT_COLOR = '#d93025';
 const EDITOR_Z = '10';
 const BADGE_Z = '12'; // textarea より上（#9: 競合表示を隠さない）
+// RC2（DD-052-1）: wrap 列の長文編集欄が下へ伸びる上限（8 行相当）。超えたら内部スクロールに切り替える。
+const MAX_WRAP_EDITOR_HEIGHT = 8 * CELL_TEXT_LINE_HEIGHT;
 
 /** keydown 前段裁定へ渡す素の値（DOM 非依存・DD-020-1 案X＋DD-020-3 Undo/Redo 修飾キー）。 */
 export interface KeydownInterceptInput {
@@ -90,6 +93,11 @@ export interface IntegrationEditorConfig {
    * 物理遮断（textarea.readOnly 属性）は `setInputLock` が担う。未指定なら常に false＝現行経路は完全無変更。
    */
   readonly isInputLocked?: () => boolean;
+  /**
+   * RC1・RC2（DD-052-1）: 折り返し（wrap）列か（ColumnId 文字列で判定）。true の列を編集中は Alt+Enter がセル内
+   * 改行になり、textarea が内容に合わせて下へ伸びる（上限＋内部スクロール）。未指定なら常に false（既存挙動を保つ）。
+   */
+  readonly isWrapColumn?: (columnId: string) => boolean;
 }
 
 export interface IntegrationEditor {
@@ -167,6 +175,44 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   // port/badge のクロージャは session 生成後に実行されるため、前方参照を ref で保持する。
   const sessionRef: { current: ImeEditingSession | undefined } = { current: undefined };
   let currentRect: CellRect | null = null;
+  // RC2: 現在 setEditingVisual(true) 中か（Navigation では常に単一行・固定高のまま = 既存挙動を保つ）。
+  let editingVisual = false;
+
+  /** RC1・RC2: 現在の編集/アクティブセルが wrap 列か（未指定・列未解決なら false）。 */
+  const isEditingWrapColumn = (): boolean => {
+    if (config.isWrapColumn === undefined) {
+      return false;
+    }
+    const cell = sessionRef.current?.getActiveCell();
+    if (cell === undefined) {
+      return false;
+    }
+    const columnId = config.document.colIdAt(cell.col);
+    return columnId !== undefined && config.isWrapColumn(String(columnId));
+  };
+
+  /**
+   * RC2: セル矩形に対する textarea の高さを決める。wrap 列の編集中でなければ従来どおりセル矩形と同寸の
+   * 単一行（変更なし）。wrap 列の編集中は内容（scrollHeight）に合わせて下へ伸ばし、上限を超えたら内部スクロール。
+   */
+  const applyHeight = (rect: CellRect): void => {
+    if (!editingVisual || !isEditingWrapColumn()) {
+      textarea.style.whiteSpace = 'pre';
+      textarea.style.overflowY = 'hidden';
+      textarea.style.height = `${rect.height}px`;
+      textarea.style.lineHeight = `${rect.height}px`;
+      return;
+    }
+    textarea.style.whiteSpace = 'pre-wrap';
+    textarea.style.wordBreak = 'break-all'; // wrapLines（文字単位・単語境界なし）の折返しに視覚を寄せる
+    textarea.style.lineHeight = `${CELL_TEXT_LINE_HEIGHT}px`;
+    // 一旦セル高へ戻してから scrollHeight を測る（前回の伸長分が残って過大評価するのを防ぐ）。
+    textarea.style.height = `${rect.height}px`;
+    const natural = textarea.scrollHeight;
+    const height = Math.min(Math.max(rect.height, natural), MAX_WRAP_EDITOR_HEIGHT);
+    textarea.style.height = `${height}px`;
+    textarea.style.overflowY = natural > MAX_WRAP_EDITOR_HEIGHT ? 'auto' : 'hidden';
+  };
 
   // --- TextareaPort（実 DOM への反映。composition 中は value/selection を書かない・I-3） ---
   const port = {
@@ -198,10 +244,10 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
       textarea.style.left = `${rect.x}px`;
       textarea.style.top = `${rect.y}px`;
       textarea.style.width = `${rect.width}px`;
-      textarea.style.height = `${rect.height}px`;
-      textarea.style.lineHeight = `${rect.height}px`;
+      applyHeight(rect);
     },
     setEditingVisual: (editing: boolean) => {
+      editingVisual = editing;
       textarea.style.background = editing ? EDITING_BACKGROUND : 'transparent';
       // Navigation はクリックを下の scroller へ通す（入力受け口は focus で保持）。
       textarea.style.pointerEvents = editing ? 'auto' : 'none';
@@ -213,6 +259,16 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     setConflict: (conflict: boolean) => {
       textarea.style.outline = conflict ? `2px solid ${CONFLICT_COLOR}` : 'none';
       updateBadge(conflict);
+    },
+    insertNewlineAtCaret: () => {
+      // RC1: ブラウザーの既定動作（Enter でのテキスト挿入）に頼らない。Alt 押下中の Enter は
+      // Windows のメニューアクセラレータ修飾キーと衝突し、既定の改行挿入が起きない（実機 E2E で確認済み）。
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? textarea.value.length;
+      const value = `${textarea.value.slice(0, start)}\n${textarea.value.slice(end)}`;
+      textarea.value = value;
+      textarea.setSelectionRange(start + 1, start + 1);
+      return value;
     },
   };
 
@@ -236,6 +292,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     badge.style.display = 'block';
   }
 
+  const isWrapColumn = config.isWrapColumn;
   const session = createImeEditingSession({
     document: config.document,
     port,
@@ -244,6 +301,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     onPresenceChange: config.onPresenceChange,
     onChange: config.onChange,
     onDivert: config.onDivert,
+    isWrapColumn: isWrapColumn === undefined ? undefined : (columnId) => isWrapColumn(String(columnId)),
   });
   sessionRef.current = session;
 

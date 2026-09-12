@@ -22,6 +22,7 @@ const B5: CellPosition = { row: 4, col: 1 };
 function makeMachine(options?: {
   initialCell?: CellPosition;
   values?: ReadonlyArray<readonly [CellPosition, string]>;
+  wrapColumns?: ReadonlySet<number>;
 }) {
   const values = new Map<string, string>();
   for (const [cell, value] of options?.values ?? []) {
@@ -31,6 +32,7 @@ function makeMachine(options?: {
     layout: DEFAULT_GRID_LAYOUT,
     initialCell: options?.initialCell ?? A1,
     getCellValue: (cell) => values.get(cellKey(cell)) ?? '',
+    isWrapColumn: options?.wrapColumns === undefined ? undefined : (cell) => options.wrapColumns!.has(cell.col),
   });
 }
 
@@ -49,12 +51,13 @@ function types(effects: readonly Effect[]): string[] {
 // --- 素の値ヘルパ（synthetic イベント列を簡潔に組む） ---
 const keydown = (
   key: string,
-  opts?: { isComposing?: boolean; shiftKey?: boolean },
+  opts?: { isComposing?: boolean; shiftKey?: boolean; altKey?: boolean },
 ): EditorEvent => ({
   type: 'keydown',
   key,
   isComposing: opts?.isComposing ?? false,
   shiftKey: opts?.shiftKey ?? false,
+  altKey: opts?.altKey ?? false,
 });
 const keyup = (key: string, isComposing = false): EditorEvent => ({ type: 'keyup', key, isComposing });
 const input = (value: string, isComposing = false): EditorEvent => ({ type: 'input', value, isComposing });
@@ -599,6 +602,55 @@ describe('H. フォーカス境界', () => {
     const effects = m.dispatch({ type: 'focus' });
     expect(effects).toEqual([]);
     expect(m.getPhase()).toBe('Navigation');
+  });
+});
+
+// ===========================================================================
+// RC1（DD-052-1）: wrap 列の Alt+Enter はセル内改行（Effect を返さず textarea の既定動作に任せる）
+// ===========================================================================
+describe('RC1: wrap 列の Alt+Enter', () => {
+  it('wrap 列で Alt+Enter → InsertNewline のみ（commit も移動もしない・UI アダプタが caret へ改行を挿入する）', () => {
+    const m = makeMachine({ wrapColumns: new Set([0]) }); // col=0 が wrap 列
+    m.dispatch(input('ab'));
+    const effects = m.dispatch(keydown('Enter', { altKey: true }));
+    expect(types(effects)).toEqual(['InsertNewline']);
+    expect(m.getPhase()).toBe('EditingReplace'); // 編集継続（確定しない）
+    expect(m.getActiveCell()).toEqual(A1); // 移動しない
+    expect(m.getDraft()).toBe('ab'); // draft は状態機械側では変えない（UI アダプタからの input で更新される）
+  });
+
+  it('wrap 列でない列（未指定）の Alt+Enter → 通常の Enter と同じ確定＋下移動', () => {
+    const m = makeMachine(); // isWrapColumn 未指定 = 全列 wrap でない
+    m.dispatch(input('ab'));
+    const effects = m.dispatch(keydown('Enter', { altKey: true }));
+    expect(effectOf(effects, 'Commit')).toEqual({ type: 'Commit', cell: A1, value: 'ab' });
+    expect(effectOf(effects, 'Move')?.direction).toBe('down');
+    expect(m.getActiveCell()).toEqual(A2);
+    expect(m.getPhase()).toBe('Navigation');
+  });
+
+  it('wrap 列指定があっても他の列（col=1）は対象外 → Alt+Enter は通常どおり確定＋移動', () => {
+    const m = makeMachine({ initialCell: B1, wrapColumns: new Set([0]) }); // wrap は col=0 のみ
+    m.dispatch(input('ab'));
+    const effects = m.dispatch(keydown('Enter', { altKey: true }));
+    expect(effectOf(effects, 'Commit')).toEqual({ type: 'Commit', cell: B1, value: 'ab' });
+    expect(effectOf(effects, 'Move')?.direction).toBe('down');
+  });
+
+  it('wrap 列でも Alt を伴わない通常の Enter は従来どおり確定＋下移動', () => {
+    const m = makeMachine({ wrapColumns: new Set([0]) });
+    m.dispatch(input('ab'));
+    const effects = m.dispatch(keydown('Enter'));
+    expect(effectOf(effects, 'Commit')).toEqual({ type: 'Commit', cell: A1, value: 'ab' });
+    expect(effectOf(effects, 'Move')?.direction).toBe('down');
+  });
+
+  it('wrap 列で競合未解決中の Alt+Enter は SuppressKey（サイレント上書きしない・S-F5 と同型）', () => {
+    const m = makeMachine({ wrapColumns: new Set([0]) });
+    m.dispatch(input('ab'));
+    m.dispatch({ type: 'remoteUpdate', cell: A1, value: 'other' }); // conflictCell を立てる
+    const effects = m.dispatch(keydown('Enter', { altKey: true }));
+    expect(types(effects)).toEqual(['SuppressKey']);
   });
 });
 

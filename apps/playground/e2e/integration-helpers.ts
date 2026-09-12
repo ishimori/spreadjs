@@ -321,6 +321,8 @@ export async function editorProbe(page: Page): Promise<{
   selectionStart: number | null;
   selectionEnd: number | null;
   display: string;
+  /** RC2（DD-052-1）: 実 DOM の高さ（px 文字列。wrap 列の長文編集欄の自動伸長検証用）。 */
+  height: string;
 }> {
   return page.locator('textarea.int-cell-editor').evaluate((el) => {
     const ta = el as HTMLTextAreaElement;
@@ -331,6 +333,7 @@ export async function editorProbe(page: Page): Promise<{
       selectionStart: ta.selectionStart,
       selectionEnd: ta.selectionEnd,
       display: ta.style.display,
+      height: ta.style.height,
     };
   });
 }

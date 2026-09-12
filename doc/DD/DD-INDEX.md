@@ -8,6 +8,11 @@
 |----|------|-----------|------|
 | DD-053 | 参加しただけの利用者を参加者一覧に載せる | 検討中 | 広島 DD-005-3 で発見。セルを選ばずに開いた人が他者の presence 一覧・名前タグに出ない（DD-049 契約 §4 との食い違い） |
 | DD-052 | ReadyCrew商談進捗シート向け拡張 | 検討中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。範囲と子DD分割は Human Spec Gate 待ち |
+| DD-052-1 | 長文セル編集 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC1・RC2）。Alt+Enter＝セル内改行＋長文編集欄の自動伸長 |
+| DD-052-2 | 文字列として保つ列 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC12）。列オプション `stringColumns` で型自動変換を止める |
+| DD-052-3 | 編集の制限 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC3・RC14） |
+| DD-052-4 | 再注入と元に戻す履歴 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC4・RC13） |
+| DD-052-5 | 見出しクリックとホバーの通知 | 検討中 | 親=DD-052（consumer 駆動: ReadyCrew RC5・RC6） |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 

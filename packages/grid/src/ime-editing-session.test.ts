@@ -71,6 +71,11 @@ function createFakePort() {
     setConflict: (c) => {
       conflict = c;
     },
+    insertNewlineAtCaret: () => {
+      // テスト用の簡略実装: 常に末尾へ改行を追加する（caret 追跡はしない）。
+      value = `${value}\n`;
+      return value;
+    },
   };
   return {
     port,
@@ -145,6 +150,76 @@ describe('createImeEditingSession — #7 Commit（生存確認→beforeRevision�
     session.handleEvent({ type: 'doubleClick', cell: { row: 1, col: 0 } });
     expect(session.getEditingTarget()).toEqual({ rowId: row('r1'), columnId: col('col-0'), startRevision: 2 });
     expect(fake.snap().value).toBe('既存'); // 既存値を textarea へ（mode='existing'）
+  });
+});
+
+describe('createImeEditingSession — RC1（DD-052-1）: isWrapColumn 設定の解決', () => {
+  it('isWrapColumn(columnId) が true を返す列では Alt+Enter で commit しない（col=0 を wrap 列として解決）', () => {
+    const state = createDocState([insertRows(null, ['r0', 'r1'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+      isWrapColumn: (columnId) => columnId === col('col-0'),
+    });
+
+    session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    session.handleEvent({ type: 'input', value: 'ab', isComposing: false });
+    fake.browserSetValue('ab'); // 実ブラウザーは input 前に textarea.value を更新済み（insertNewlineAtCaret の前提）
+    const consumed = session.handleEvent({ type: 'keydown', key: 'Enter', isComposing: false, altKey: true });
+
+    expect(consumed).toBe(true); // InsertNewline を消費（preventDefault してよい）
+    expect(submitted).toHaveLength(0);
+    expect(session.getEditingTarget()).not.toBeNull(); // 編集継続（commit していない）
+    expect(session.getDraft()).toBe('ab\n'); // port.insertNewlineAtCaret() の結果が draft へ反映される
+    expect(fake.snap().value).toBe('ab\n');
+  });
+
+  it('isWrapColumn(columnId) が false を返す列では Alt+Enter が通常の Enter と同じ commit になる', () => {
+    const state = createDocState([insertRows(null, ['r0', 'r1'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+      isWrapColumn: (columnId) => columnId === col('col-1'), // 編集対象は col-0 なので対象外
+    });
+
+    session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    session.handleEvent({ type: 'input', value: 'ab', isComposing: false });
+    session.handleEvent({ type: 'keydown', key: 'Enter', isComposing: false, altKey: true });
+
+    expect(submitted).toHaveLength(1);
+    expect(session.getEditingTarget()).toBeNull();
+  });
+
+  it('isWrapColumn 未指定なら Alt+Enter も通常の Enter と同じ commit（既存挙動を保つ）', () => {
+    const state = createDocState([insertRows(null, ['r0', 'r1'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+    });
+
+    session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    session.handleEvent({ type: 'input', value: 'ab', isComposing: false });
+    session.handleEvent({ type: 'keydown', key: 'Enter', isComposing: false, altKey: true });
+
+    expect(submitted).toHaveLength(1);
   });
 });
 

@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-12 | 2026-09-12 | 検討中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。範囲と子DD分割は Human Spec Gate 待ち |
+| 2026-09-12 | 2026-09-12 | 進行中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md`。Human Spec Gate完了・子DD-052-1〜5起票済み。子DD実装中 |
 
 > アプローチ: 標準（アンブレラ。要件の範囲・API の形・子DD分割を決め、実装は子DDで行う）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -70,8 +70,15 @@ Evidence Level: standard
 - 2026-09-12 ユーザー: ReadyCrew 商談進捗への本番導入と、SDK の不足を SDK 改良で応える方針（背景）
 - 論点2: **(a) Alt+Enter＝セル内改行を SDK 側で持つ**（2026-09-12 ユーザー決定。consumer にキー処理を実装させない）
 - consumer（ReadyCrew）の対応環境は Chrome/Edge のみで可（2026-09-12 ユーザー確認）＝Tier 1 の拡大は求めない
-- 論点1・3〜8: Human Spec Gate 後に本節へ記録する（推奨と異なる判断は理由を1行添える）
-- 子DD分割案（論点1 (a) の場合）: DD-052-1 長文セル編集（RC1・RC2・Risk A）／DD-052-2 文字列として保つ列（RC12・Risk A）／DD-052-3 編集の制限（RC3・RC14）／DD-052-4 再注入と元に戻す履歴（RC4・RC13）／DD-052-5 見出しクリックとホバーの通知（RC5・RC6）
+- 2026-09-12 ユーザー: 「DD-052・DD-053 を連続実施、実装に迷ったら推奨案で決定」の指示。以降の論点1・3〜8 は表の推奨のとおり確定（推奨と異なる判断はなし）
+- 論点1: **(a)**。高・中（RC1〜RC6・RC12〜RC14）を子DD化し、低（RC7〜RC11）は backlog 記録と consumer のつなぎで済ませる
+- 論点3: **(b)**。RC1（セル内改行）は `wrapColumns` の列だけに効かせる。それ以外の列は従来どおり確定＋下移動
+- 論点4: **(a)**。RC2 は編集中の textarea を内容に合わせて下へ伸ばす（上限＋内部スクロール）。常駐 textarea 1本の IME 経路を維持
+- 論点5: **(a)**。RC3 は `GridStandaloneRow` に `readOnlyColumns?: string[]` を持たせ `setData` で更新
+- 論点6: **RC4 (a)・RC5 提示のとおり・RC6 (a)**。RC4 は `ref.setRows(rows)`（RowId で置換・追加、置換セルに触れない Undo を残す）。RC5 は `header-click{columnId}` イベント＋並べ替え中を示す表示オプション。RC6 は `cell-hover{rowId,columnId,rect}`（出入りで発火・間引きあり）
+- 論点7: **(a)**。RC1〜RC3・RC12 は DD-051 の結論を待たず着手する。RC4〜RC6・RC13・RC14 も本ユーザー指示（2026-09-12・DD-052/053 連続実施）により今回まとめて着手する — DD-051 論点10（consumer駆動DDとゲート作業の優先順位）は依然未決だが、これは「今後どちらを先に着手するか」の優先順位づけの論点であり、ユーザーが今回直接指示して着手済みの作業を事後的に後戻りさせる根拠にはならない。DD-051 論点10 の結論は本DD完了後に着手する将来の consumer 駆動 DD にのみ適用する
+- 論点8: **RC12 (a)・RC13 は子DD-052-4 で原因を確認のうえ決定・RC14 提示のとおり**。RC12 は列オプション `stringColumns: string[]`（入力・貼り付け・`setData` の値を変換しない）。RC14 は `rowOperations?: boolean`（既定 true）
+- 子DD分割（確定）: DD-052-1 長文セル編集（RC1・RC2・Risk A）／DD-052-2 文字列として保つ列（RC12・Risk A）／DD-052-3 編集の制限（RC3・RC14）／DD-052-4 再注入と元に戻す履歴（RC4・RC13）／DD-052-5 見出しクリックとホバーの通知（RC5・RC6）
 
 ## 受け入れ基準
 
@@ -85,13 +92,13 @@ Evidence Level: standard
 ## タスク一覧
 
 ### Phase 1: Human Spec Gate
-- [ ] 論点1〜8 をユーザーへ提示し、結論を決定事項へ記録
-- [ ] 🔬 機械検証: `bash scripts/doc-check.sh` → エラー0
+- [x] 論点1〜8 をユーザーへ提示し、結論を決定事項へ記録（2026-09-12・全論点推奨採用）
+- [x] 🔬 機械検証: `bash scripts/doc-check.sh` → エラー0
 
 ### Phase 2: 子DD起票と backlog 記録
-- [ ] 論点1 の範囲で子DD（`doc/DD/DD-052-N_*.md`）を起票し、Risk Class ヘッダを子DDごとに判定
-- [ ] 範囲外の RC を `doc/plan/stage2-backlog.md` に新節（出典: ReadyCrew DD-124）で記録
-- [ ] 🔬 機械検証: `bash scripts/dd-index-gen.sh`・`bash scripts/doc-check.sh` → エラー0
+- [x] 論点1 の範囲で子DD（`doc/DD/DD-052-N_*.md`）を起票し、Risk Class ヘッダを子DDごとに判定（052-1・052-2=A／052-3・052-4・052-5=B）
+- [x] 範囲外の RC を `doc/plan/stage2-backlog.md` §3.8 に記録（出典: ReadyCrew DD-124）
+- [x] 🔬 機械検証: `bash scripts/dd-index-gen.sh`・`bash scripts/doc-check.sh` → エラー0
 
 ### Phase 3: 子DDの完了と引き渡し
 - [ ] 子DDの完了・配布を確認し、本DDのログへ版と対応 RC を1行ずつ記録
@@ -108,3 +115,4 @@ Evidence Level: standard
 - DD作成。ready_crew_db のセッションが起票を代行（要件メモは同セッションが alpha.7 のソースを読んで作成）。以後は spreadjs 側のセッションで進める
 - Codex レビュー（high・ready_crew_db `doc/DD/DD-124/codex-review-result.md`。DD-124 と合わせて実行）: 本DDへの指摘なし（Risk A・IME 経路・DD-051 との書き分けは妥当）。consumer 側の指摘から RC12（型変換）・RC13（コールバック内 setData と Undo）・RC14（行操作の無効化）を要件メモへ追加し、本DDの表・論点1/7/8・子DD分割案へ反映
 - ユーザー決定: 論点2 (a)（Alt+Enter＝セル内改行を SDK 側で持つ）。consumer の対応環境は Chrome/Edge のみで可＝Tier 1 の拡大要求なし
+- Human Spec Gate（論点1・3〜8）を推奨案で確定。`doc/plan/stage2-backlog.md` §3.8 に RC7〜RC11 を記録。子DD DD-052-1〜5 を起票（`bash scripts/dd-index-gen.sh`・`bash scripts/doc-check.sh` 済み）。以降は子DDで実装を進める
