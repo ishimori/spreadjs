@@ -64,8 +64,8 @@
       "id": "standalone",
       "title": "単独グリッドモード（サーバー不要）",
       "status": "available",
-      "summary": "共同編集サーバーを立てずに単独で使えるモード。確定した値は cell-commit イベントで通知され、保存は利用側アプリの API に接続します（認証・保存は利用側の責務）。react-query 等の非同期データは再注入で反映できます。",
-      "source": "DD-024",
+      "summary": "共同編集サーバーを立てずに単独で使えるモード。確定した値は cell-commit イベントで通知され、保存は利用側アプリの API に接続します（認証・保存は利用側の責務）。react-query 等の非同期データは setData（全置換）で反映できるほか、setRows で一部の行だけを Undo 履歴を消さずに部分更新できます。",
+      "source": "DD-024・DD-052-4",
       "meta": "E2E 検証済み（表示/注入・IME確定→cell-commit・F5復元・再mountリーク）"
     },
     {

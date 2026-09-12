@@ -37,6 +37,17 @@
 - **grid `rowOperations`（DD-052-3・ReadyCrew RC14）**: 行操作ショートカット（Ctrl+Shift+'+'/Ctrl+'-'）の有効・無効を
   切り替える新しい mount オプション（既定 `true`）。`false` でショートカットのみ無効化し、公開 API
   `insertRows`/`deleteRows` の呼び出しは対象外（consumer の明示的な行操作は妨げない）。両モード共通。
+- **grid `GridInstance.setRows`（DD-052-4・ReadyCrew RC4）**: 単独グリッドモード専用。`setData` と違い渡した行
+  だけを置換・追加し、言及しなかった行・Undo/Redo 履歴はそのまま保つ（値が変わったセルだけを 1 回の確定操作として
+  記録）。未知の RowId は新規行として末尾へ追加する。readOnly はプログラム的な再注入として `setData` と同様に
+  バイパスする。
+
+### Fixed
+
+- **grid Undo の幽霊エントリ（DD-052-4・ReadyCrew RC13）**: 単独グリッドモードで `onCellCommit` 内から consumer が
+  同期的に `setData` を呼ぶと、`setData` の Undo 全消去より**後**に元の確定操作の Undo エントリが記録されてしまい、
+  消去済みスタックへ実体のない「幽霊エントリ」が残っていた（`canUndo()` が誤って `true` のままになる）。Undo 記録を
+  `onCellCommit` 通知より前に完了させるよう順序を修正した。公開 API・イベント契約の変更はない。
 
 ### Changed（破壊的変更・Experimental 0.x）
 

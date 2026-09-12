@@ -482,6 +482,17 @@ export interface GridInstance {
      */
     setData(data: GridStandaloneData): void;
     /**
+     * 単独グリッドモード（DD-052-4 RC4）で行単位の部分更新を行う。\`setData\` と違い**渡した行だけ**を置換・追加し、
+     * 言及しなかった既存行はそのまま（Undo/Redo 履歴も消さない）。既存行は \`cells\` に含めた列だけを診断し、値が
+     * 変わったセルだけを 1 回の確定操作として記録する（値が同じセルは触れない＝無駄な Undo エントリを作らない）。
+     * 未知の RowId は新規行として末尾へ追加する（新規行の挿入自体は \`insertRows\` と同様 Undo/Redo 対象外）。
+     * \`readOnlyColumns\` は明示した行だけ置き換わる（省略した行は既存の指定を保つ）。列（\`readOnlyColumns\` mount
+     * オプション）・行（\`readOnlyRows\`）・セル単位いずれの読み取り専用も \`setData\` と同様にバイパスして適用する
+     * （consumer によるプログラム的な再注入のため）。共同編集モードで呼ぶと no-op（診断 warn）。boot 未完了時は
+     * \`setData\` と同様に保留し、呼ばれた順に構築後適用する。
+     */
+    setRows(rows: readonly GridStandaloneRow[]): void;
+    /**
      * 行を挿入する（Experimental 0.x・DD-021-1・両モード）。\`afterRowId\` の直後へ \`count\` 行（既定 1）を挿入する
      * （\`afterRowId=null\` で先頭へ）。新 RowId は \`crypto.randomUUID\` で採番し \`row-structure-change\`（kind=insert）で
      * 返す。**同期 throw しない**（既存 API 流儀）: \`count\` が 1〜100,000 の整数でない・未知アンカーは実行前拒否として

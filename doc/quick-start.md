@@ -401,6 +401,19 @@ const initialData: GridStandaloneData = {
 const grid = mount({ container }, { mode: 'standalone', columnOrder, initialData, rowOperations: false });
 ```
 
+### 行単位の部分更新（`setRows`・DD-052-4）
+
+`setData` は文書を丸ごと差し替えて Undo/Redo 履歴も消す。一部の行だけを非同期に更新したい場合（他ユーザーの
+確定を反映する等）は `setRows` を使う。渡した行だけを置換・追加し、言及しなかった行・既存の Undo 履歴はそのまま残る。
+
+```ts
+// 行 r1 の col-a だけ更新（他の行・r1 の他の列・Undo 履歴には触れない）。
+grid.setRows([{ rowId: 'r1', cells: { 'col-a': '更新後' } }]);
+
+// 未知の RowId は新規行として末尾へ追加される。
+grid.setRows([{ rowId: 'r99', cells: { 'col-a': '新規行' } }]);
+```
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

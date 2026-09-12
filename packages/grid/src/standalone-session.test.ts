@@ -96,6 +96,142 @@ describe('createStandaloneSession: 初期注入（決定③）', () => {
   });
 });
 
+describe('createStandaloneSession: RC4（DD-052-4）setRows（行単位の部分更新）', () => {
+  function session(stringColumns?: string[]) {
+    return createStandaloneSession({
+      columnOrder: COLUMNS,
+      stringColumns,
+      initialData: {
+        rows: [
+          { rowId: 'r1', cells: { 'col-a': 'A1', 'col-b': 'B1' } },
+          { rowId: 'r2', cells: { 'col-a': 'A2', 'col-b': 'B2' } },
+        ],
+      },
+      rowHeight: 22,
+      colWidth: 80,
+      onCellCommit: () => {},
+    });
+  }
+
+  it('既存行の変更セルだけ diff し、言及しなかった行・セルはそのまま', () => {
+    const s = session();
+    s.start();
+    const result = s.setRows([{ rowId: 'r1', cells: { 'col-a': 'A1-changed' } }]);
+    expect(result.insertedRowCount).toBe(0);
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes[0]).toMatchObject({ before: { kind: 'string', value: 'A1' }, after: { kind: 'string', value: 'A1-changed' } });
+    expect(s.view.cellDisplay(createRowId('r1'), createColumnId('col-a'))).toBe('A1-changed');
+    expect(s.view.cellDisplay(createRowId('r1'), createColumnId('col-b'))).toBe('B1'); // 言及しなかったセルは不変
+    expect(s.view.cellDisplay(createRowId('r2'), createColumnId('col-a'))).toBe('A2'); // 言及しなかった行は不変
+  });
+
+  it('値が変わらないセルは changes に含めない（無駄な Undo を作らない）', () => {
+    const s = session();
+    s.start();
+    const result = s.setRows([{ rowId: 'r1', cells: { 'col-a': 'A1' } }]); // 既存値と同じ
+    expect(result.changes).toHaveLength(0);
+  });
+
+  it('未知の RowId は新規行として末尾へ追加し、cells を初期値として適用する', () => {
+    const s = session();
+    s.start();
+    const result = s.setRows([{ rowId: 'r3', cells: { 'col-a': 'A3' } }]);
+    expect(result.insertedRowCount).toBe(1);
+    expect(result.changes).toHaveLength(1);
+    s.view.flush(); // 行 Axis の再構築は次の構造 flush（他の standalone-session テストと同じ作法）
+    expect(s.view.rowAxis.count()).toBe(3);
+    expect(s.view.cellDisplay(createRowId('r3'), createColumnId('col-a'))).toBe('A3');
+    expect(s.view.rowIndexOf(createRowId('r3'))).toBe(2); // 末尾（r1,r2 の後）
+  });
+
+  it('readOnlyColumns を明示した行だけ置き換わり、省略した行は既存指定を保つ', () => {
+    const s = session();
+    s.start();
+    s.setRows([{ rowId: 'r1', readOnlyColumns: ['col-a'] }]);
+    expect(s.isCellReadOnly('r1', 'col-a')).toBe(true);
+    // 別の setRows 呼び出しで readOnlyColumns を省略 → 既存指定を保つ。
+    s.setRows([{ rowId: 'r1', cells: { 'col-b': 'B1-x' } }]);
+    expect(s.isCellReadOnly('r1', 'col-a')).toBe(true);
+    // 明示的に空配列を渡すと解除される。
+    s.setRows([{ rowId: 'r1', readOnlyColumns: [] }]);
+    expect(s.isCellReadOnly('r1', 'col-a')).toBe(false);
+  });
+
+  it('stringColumns 指定列は setRows でも型変換されない', () => {
+    const s = session(['col-a']);
+    s.start();
+    s.setRows([{ rowId: 'r1', cells: { 'col-a': '09012345678' } }]);
+    expect(s.view.cellDisplay(createRowId('r1'), createColumnId('col-a'))).toBe('09012345678');
+  });
+
+  it('未知列は静かにスキップする', () => {
+    const s = session();
+    s.start();
+    const result = s.setRows([{ rowId: 'r1', cells: { 'col-zzz': 'ignored' } }]);
+    expect(result.changes).toHaveLength(0);
+  });
+
+  it('複数行の混在（既存の変更＋新規追加）を1回で処理できる', () => {
+    const s = session();
+    s.start();
+    const result = s.setRows([
+      { rowId: 'r1', cells: { 'col-a': 'A1-v2' } },
+      { rowId: 'r3', cells: { 'col-a': 'A3' } },
+    ]);
+    expect(result.insertedRowCount).toBe(1);
+    expect(result.changes).toHaveLength(2);
+    s.view.flush();
+    expect(s.view.rowAxis.count()).toBe(3);
+  });
+});
+
+describe('createStandaloneSession: RC13（DD-052-4）beforeCellCommit は onCellCommit より前に呼ばれる', () => {
+  it('setCells で実際に値が変わるとき、beforeCellCommit → onCellCommit の順で同期発火する', () => {
+    const order: string[] = [];
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1' }] },
+      rowHeight: 22,
+      colWidth: 80,
+      beforeCellCommit: () => order.push('before'),
+      onCellCommit: () => order.push('commit'),
+    });
+    session.start();
+    session.session.submitLocalOperation(setCells([{ rowId: 'r1', columnId: 'col-a', value: 'x' }]));
+    expect(order).toEqual(['before', 'commit']);
+  });
+
+  it('同じ値への上書きでも changeSet は空にならない（core apply は before===after でも change として記録）ため beforeCellCommit → onCellCommit の順で発火する', () => {
+    const order: string[] = [];
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1', cells: { 'col-a': 'same' } }] },
+      rowHeight: 22,
+      colWidth: 80,
+      beforeCellCommit: () => order.push('before'),
+      onCellCommit: () => order.push('commit'),
+    });
+    session.start();
+    session.session.submitLocalOperation(setCells([{ rowId: 'r1', columnId: 'col-a', value: 'same' }]));
+    expect(order).toEqual(['before', 'commit']);
+  });
+
+  it('構造Op（insertRows）では beforeCellCommit は呼ばれない（setCells 専用）', () => {
+    const order: string[] = [];
+    const session = createStandaloneSession({
+      columnOrder: COLUMNS,
+      initialData: { rows: [{ rowId: 'r1' }] },
+      rowHeight: 22,
+      colWidth: 80,
+      beforeCellCommit: () => order.push('before'),
+      onCellCommit: () => order.push('commit'),
+    });
+    session.start();
+    session.session.submitLocalOperation({ type: 'insertRows', afterRowId: createRowId('r1'), rows: [{ rowId: createRowId('r2') }] });
+    expect(order).toEqual([]);
+  });
+});
+
 describe('createStandaloneSession: RC3（DD-052-3）行データ指定のセル単位 readOnly', () => {
   it('行の readOnlyColumns に含まれるセルだけ isCellReadOnly=true・hasAnyCellReadOnly=true', () => {
     const session = createStandaloneSession({

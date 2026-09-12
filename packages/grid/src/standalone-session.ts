@@ -8,15 +8,32 @@
 // connection/pending/presence/heartbeat を持たないため AC6（共同編集専用面の非発火）は構造的に保証される
 // （契約: doc/DD/DD-024/standalone-contract.md §5）。
 
-import { applyOperation, createDocument, parseCellInput } from '@nanairo-sheet/core';
-import type { CellScalar, DocumentOperation, InsertRowsOperation, SetCellsChange, SheetDocument } from '@nanairo-sheet/core';
+import { applyOperation, createDocument, displayRowOrder, getCell, parseCellInput } from '@nanairo-sheet/core';
+import type { CellScalar, DocumentOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId } from '@nanairo-sheet/types';
 import type { TextMetricsCache } from '@nanairo-sheet/render';
 
 import { DocumentView, cellScalarToDisplay } from './document-view';
 import type { GridBackend, GridBackendSession } from './grid-backend';
-import type { GridCellCommitChange, GridStandaloneData } from './index';
+import type { GridCellCommitChange, GridStandaloneData, GridStandaloneRow } from './index';
+import type { UndoPatch } from './undo-stack';
+
+/** RC4: setRows の適用結果。 */
+export interface StandaloneRowsResult {
+  /** 実際に値が変わったセル（既存行の変更＋新規行の初期値）。UndoPatch そのもの＝呼び出し側がそのまま記録できる。 */
+  readonly changes: readonly UndoPatch[];
+  /** 新規追加された行数（末尾へ追加・行挿入自体は既存の Undo/Redo 対象外＝行操作と同運用）。 */
+  readonly insertedRowCount: number;
+}
+
+/** 2つの CellScalar が同値か（kind とその値の完全一致）。 */
+function sameCellScalar(a: CellScalar, b: CellScalar): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  return a.kind === 'blank' || a.value === (b as { value: string | number }).value;
+}
 
 export interface StandaloneSessionConfig {
   /** 列順（ColumnId 文字列・mount options.columnOrder）。 */
@@ -35,6 +52,12 @@ export interface StandaloneSessionConfig {
   readonly lineHeight?: number;
   /** 確定値（SetCells）が適用されたら表示文字列の batch を通知する（mount-controller が cell-commit へ写す）。 */
   readonly onCellCommit: (changes: readonly GridCellCommitChange[]) => void;
+  /**
+   * RC13（DD-052-4）: SetCells 適用直後・`onCellCommit` 通知の**前**に呼ぶ（setCells 系操作なら changeSet が
+   * 空でも常に呼ぶ）。mount-controller が Undo 記録をここで完了させる。`onCellCommit` 内で consumer が同期的に
+   * `setData` を呼んでも、その時点で Undo 記録は既に終わっている（`setData` の Undo 全消去が正しく効く）。
+   */
+  readonly beforeCellCommit?: () => void;
 }
 
 /** 単独モードの backend（GridBackend）＋ 再注入 API。 */
@@ -45,6 +68,14 @@ export interface StandaloneSession extends GridBackend {
   isCellReadOnly(rowId: string, columnId: string): boolean;
   /** RC3: 1件でも行単位の読み取り専用セルが指定されているか（呼び出し側の早期リターン用）。 */
   hasAnyCellReadOnly(): boolean;
+  /**
+   * RC4（DD-052-4）: 行単位の部分更新（`setData` と違い、渡した行だけを置換・追加し他の行はそのまま）。
+   * 既存行は `cells` に含まれる列だけを診断（値が変わらないセルは触れない＝Undo 対象に入れない）。
+   * 未知の RowId は新規行として末尾へ追加する。`readOnlyColumns` は明示指定した行だけ置き換える
+   * （未指定ならその行の既存指定を保つ）。readOnly（列/行/セル）は `setData` と同様に無視して適用する
+   * （プログラム的な再注入は利用者編集の抑止対象ではない）。未知列は静かにスキップする。
+   */
+  setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult;
 }
 
 /** CellScalar | undefined を表示文字列へ（undefined=未書込セル=空）。 */
@@ -144,14 +175,18 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       // Render State を Document State へ追従させる（setCells=cell dirty / insert・delete=structure dirty）。
       // 共同編集の observer が server message で行う dirty 立てを、単独モードはローカル適用時に行う。
       view.noteOperation(operation);
-      if (operation.type === 'setCells' && result.changeSet.cells.length > 0) {
-        const changes: GridCellCommitChange[] = result.changeSet.cells.map((change) => ({
-          rowId: String(change.rowId),
-          columnId: String(change.columnId),
-          value: displayOf(change.after),
-          previousValue: displayOf(change.before),
-        }));
-        config.onCellCommit(changes);
+      if (operation.type === 'setCells') {
+        // RC13: changeSet が空（実質 no-op）でも Undo 記録のタイミングは維持する（onCellCommit の通知条件とは独立）。
+        config.beforeCellCommit?.();
+        if (result.changeSet.cells.length > 0) {
+          const changes: GridCellCommitChange[] = result.changeSet.cells.map((change) => ({
+            rowId: String(change.rowId),
+            columnId: String(change.columnId),
+            value: displayOf(change.after),
+            previousValue: displayOf(change.before),
+          }));
+          config.onCellCommit(changes);
+        }
       }
       // 構造Op（insert/delete）は cell-commit 対象外。Render 追従は呼び出し側（editor onChange / recompute）が担う。
       return undefined;
@@ -200,6 +235,73 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     },
     hasAnyCellReadOnly(): boolean {
       return cellReadOnly.size > 0;
+    },
+    setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult {
+      const existingRowIds = new Set<string>();
+      for (const rowId of doc.rowMeta.keys()) {
+        if (doc.rowMeta.get(rowId)?.tombstone !== true) {
+          existingRowIds.add(String(rowId));
+        }
+      }
+      const newRows = rows.filter((r) => !existingRowIds.has(r.rowId));
+      // 重複 RowId は先着で dedupe する（buildDocument と同じ防御・consumer データ事故対策）。
+      const seenNew = new Set<string>();
+      const uniqueNewRows = newRows.filter((r) => (seenNew.has(r.rowId) ? false : (seenNew.add(r.rowId), true)));
+
+      if (uniqueNewRows.length > 0) {
+        revision += 1;
+        // 末尾へ追加する: afterRowId=null は「先頭（index 0）」の意味（core の規約）なので、既存の最終行を
+        // 明示的にアンカーにする（文書が空なら null=先頭のままで問題ない）。
+        const order = displayRowOrder(doc);
+        const anchor = order.length > 0 ? order[order.length - 1]! : null;
+        const insertOp: InsertRowsOperation = {
+          type: 'insertRows',
+          afterRowId: anchor,
+          rows: uniqueNewRows.map((r) => ({ rowId: createRowId(r.rowId) })),
+        };
+        doc = applyOperation(doc, insertOp, { revision }).document;
+      }
+
+      const changes: UndoPatch[] = [];
+      const setCellsChanges: SetCellsChange[] = [];
+      for (const row of rows) {
+        // RC3: 明示指定した行だけ readOnlyColumns を置き換える（未指定は既存指定を保つ）。
+        if (row.readOnlyColumns !== undefined) {
+          const known = row.readOnlyColumns.filter((c) => knownColumns.has(c));
+          if (known.length > 0) {
+            cellReadOnly.set(row.rowId, new Set(known));
+          } else {
+            cellReadOnly.delete(row.rowId);
+          }
+        }
+        if (row.cells === undefined) {
+          continue;
+        }
+        const rowId = createRowId(row.rowId);
+        for (const [columnId, value] of Object.entries(row.cells)) {
+          if (!knownColumns.has(columnId)) {
+            continue; // 未知列は静かにスキップ（buildDocument と同じ扱い）
+          }
+          const colId = createColumnId(columnId);
+          const before = getCell(doc, rowId, colId)?.value ?? { kind: 'blank' };
+          const after = parseCellInput(value, { forceString: stringColumns.has(columnId) });
+          if (sameCellScalar(before, after)) {
+            continue; // RC4: 値が変わらないセルには触れない（Undo 対象に入れない）
+          }
+          changes.push({ rowId, columnId: colId, before, after });
+          setCellsChanges.push({ rowId, columnId: colId, beforeRevision: 0, value: after });
+        }
+      }
+
+      if (setCellsChanges.length > 0) {
+        revision += 1;
+        const op: SetCellsOperation = { type: 'setCells', conflictPolicy: 'reject-overlap', changes: setCellsChanges };
+        doc = applyOperation(doc, op, { revision }).document;
+      }
+      if (uniqueNewRows.length > 0 || setCellsChanges.length > 0) {
+        view.markFullRebuild(); // 行の追加・値の変更をまとめて反映（部分 dirty より単純・呼び出し頻度は低い想定）
+      }
+      return { changes, insertedRowCount: uniqueNewRows.length };
     },
   };
 }

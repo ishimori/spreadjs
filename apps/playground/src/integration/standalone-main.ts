@@ -315,6 +315,10 @@ function renderBar(): void {
   }
 }
 
+// RC13 回帰確認用（DD-052-4・E2E専用）: onCellCommit 内で同期的に setData を呼ぶ consumer を再現する。
+// 例: `?rc13sync=1`。既定（未指定）は従来どおり persist するだけ（setData は呼ばない）。
+const rc13SyncOnCommit = searchParams.get('rc13sync') === '1';
+
 function onEvent(event: GridEvent): void {
   events.push(event);
   if (event.type === 'cell-commit') {
@@ -325,6 +329,10 @@ function onEvent(event: GridEvent): void {
       row[change.columnId] = change.value;
     }
     persist(saved);
+    if (rc13SyncOnCommit) {
+      // consumer が確定を見て同期的に正規状態を再注入するパターン（楽観更新の確定反映等）を再現する。
+      window.__gridInstance?.setData(buildInitialData());
+    }
   } else if (event.type === 'error') {
     connLabel = `error[${event.phase}]: ${event.message}`;
   }
@@ -342,6 +350,8 @@ interface StandaloneHandle {
   destroy(): void;
   /** 再注入デモ（決定③）: 指定データで setData を呼ぶ。 */
   reinject(data: GridStandaloneData): void;
+  /** RC4（DD-052-4）デモ: 行単位の部分更新で setRows を呼ぶ。 */
+  applyRows(rows: GridStandaloneData['rows']): void;
   /** localStorage の保存モックを消す（テストの独立性）。 */
   clearSaved(): void;
 }
@@ -401,6 +411,9 @@ const handle: StandaloneHandle = {
   },
   reinject(data: GridStandaloneData): void {
     this.instance?.setData(data);
+  },
+  applyRows(rows: GridStandaloneData['rows']): void {
+    this.instance?.setRows(rows);
   },
   clearSaved(): void {
     try {

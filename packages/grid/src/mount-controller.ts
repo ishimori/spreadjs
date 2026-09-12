@@ -98,6 +98,7 @@ import type {
   GridRowStructureChange,
   GridStandaloneData,
   GridStandaloneMountOptions,
+  GridStandaloneRow,
 } from './index';
 
 const HEADER_WIDTH = 52;
@@ -168,6 +169,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let standalone: StandaloneSession | undefined;
   // boot（microtask）完了前に setData が呼ばれたときの保留データ（Codex[P1]: mount 直後の同期 setData を捨てない）。
   let pendingStandaloneData: GridStandaloneData | undefined;
+  // RC4（DD-052-4）: boot 完了前に setRows が呼ばれたときの保留分（同型の理由。setData と違い部分更新の累積のため
+  // 呼ばれた順に**全件**キューする＝最後の1回だけ採用する setData とは異なる）。
+  const pendingStandaloneRows: Array<readonly GridStandaloneRow[]> = [];
   let editor: IntegrationEditor | undefined;
   let browserTransport: BrowserWebSocketTransport | undefined;
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
@@ -208,6 +212,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const selectionCtrl = createSelectionController();
   // Undo/Redo スタックの所有者（DD-020-3）。確定単位（1 op）ごとに逆値を保持し補償 SetCells を生成する。
   const undoCtrl = createUndoController();
+  // RC13（DD-052-4）: submitSetCells が捕捉した逆値パッチを、standalone の beforeCellCommit フックへ橋渡しする
+  // 一時変数（submitToBackend 呼び出し1回のスコープでのみ有効。フック未消費なら submitSetCells 側で必ず null に戻す）。
+  let pendingStandaloneUndoPatches: UndoPatch[] | null = null;
   let firstDataDrawn = false;
   let lastSessionEvent: SessionEvent | undefined;
   let resolvedDocumentId = options.documentId;
@@ -1721,8 +1728,18 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // DD-020-3: submit 直前に **view（committed＋own pending）** から逆値（前値）を捕捉する（単一記録点＝両モード同一経路）。
     // committed ではなく view を使うのは、直前の未 ACK 楽観編集を飛ばさないため（Codex P1: 連続編集の逆値正しさ）。
     const patches = captureUndoPatches(backend.session.viewDocument, op);
+    if (isStandalone) {
+      // RC13（DD-052-4）: standalone は submitToBackend の内側（submitLocalOperation）で beforeCellCommit フックが
+      // 同期発火し、そこで記録を完了させる（onCellCommit 通知より前＝consumer の同期 setData に壊されない）。
+      pendingStandaloneUndoPatches = patches;
+    }
     const id = submitToBackend(backend, op);
-    recordUndoEntry(backend, patches, id);
+    if (isStandalone) {
+      // フックで消費済みなら既に null。changeSet 空等でフックが記録しなかった場合に備え、次回submitへ漏らさない。
+      pendingStandaloneUndoPatches = null;
+    } else {
+      recordUndoEntry(backend, patches, id);
+    }
     return id;
   }
 
@@ -1774,22 +1791,33 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   /**
-   * 元操作の undo エントリを記録する。standalone は即時確定 revision で ownedRevision を確定・collab は opId で後追い ACK。
-   * collab で submit が同期 reject された op（rebuildView が編集開始 revision の stale を submit 中に判定）は pending に
-   * 残らない → **undo エントリに入れない**（AC5・Codex P2: 誤記録＋redo 誤破棄を防ぐ）。
+   * 元操作の undo エントリを記録する（collab 専用。standalone は RC13 の beforeCellCommit フック経由で
+   * recordStandaloneUndoEntry を使う）。collab は opId で後追い ACK。submit が同期 reject された op
+   * （rebuildView が編集開始 revision の stale を submit 中に判定）は pending に残らない →
+   * **undo エントリに入れない**（AC5・Codex P2: 誤記録＋redo 誤破棄を防ぐ）。
    */
   function recordUndoEntry(backend: GridBackend, patches: UndoPatch[], id: OperationId | void): void {
     if (patches.length === 0) {
       return;
     }
-    if (isStandalone) {
-      const first = patches[0]!;
-      undoCtrl.recordUserOp(null, patches, cellRevision(backend.session.committedDocument, first.rowId, first.columnId));
-      return;
-    }
     if (id !== undefined && backend.session.pendingOperationIds().some((p) => String(p) === String(id))) {
       undoCtrl.recordUserOp(id, patches, null);
     }
+  }
+
+  /**
+   * RC13（DD-052-4）: standalone の undo エントリを即時確定 revision で記録する。`StandaloneSession` の
+   * `beforeCellCommit` フックから、`onCellCommit`（consumer 通知）より**前**に同期で呼ばれる。これにより
+   * consumer が `onCellCommit` 内で同期的に `setData` を呼んでも、Undo 記録は既に完了しており、`setData` の
+   * Undo 全消去（`undoCtrl.clear()`）が幽霊エントリを残さず正しく効く（従来は notify 後に記録していたため
+   * 消去済みスタックへ記録してしまっていた）。
+   */
+  function recordStandaloneUndoEntry(backend: GridBackend, patches: UndoPatch[]): void {
+    if (patches.length === 0) {
+      return;
+    }
+    const first = patches[0]!;
+    undoCtrl.recordUserOp(null, patches, cellRevision(backend.session.committedDocument, first.rowId, first.columnId));
   }
 
   // ---- 行操作（Insert/Delete）公開層（DD-021-1）----
@@ -3153,6 +3181,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
       wrapCache: cellTextCache,
       cellFont: CELL_FONT,
       lineHeight: CELL_TEXT_LINE_HEIGHT,
+      // RC13（DD-052-4）: submitSetCells が積んだ逆値パッチを、consumer 通知（onCellCommit）より前に記録する。
+      beforeCellCommit: () => {
+        const patches = pendingStandaloneUndoPatches;
+        pendingStandaloneUndoPatches = null;
+        if (patches !== null && standalone !== undefined) {
+          recordStandaloneUndoEntry(standalone, patches);
+        }
+      },
       // 確定通知（決定②「通知のみ」）: 表示文字列 batch を cell-commit イベントへ写して購読者へ配信する。
       onCellCommit: (changes) => {
         emit({ type: 'cell-commit', changes });
@@ -3165,6 +3201,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const data = pendingStandaloneData;
       pendingStandaloneData = undefined;
       applyStandaloneData(data);
+    }
+    // RC4: boot 前に呼ばれた setRows を、呼ばれた順に適用する（setData 適用の後＝setData で全置換された上に重ねる）。
+    while (pendingStandaloneRows.length > 0) {
+      const rows = pendingStandaloneRows.shift()!;
+      applyStandaloneSetRows(rows);
     }
   }
 
@@ -3197,6 +3238,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return;
     }
     editor.pointerdownCell({ row: Math.min(active.row, rowCount - 1), col: Math.min(active.col, colCount - 1) });
+  }
+
+  /**
+   * RC4（DD-052-4）: 行単位の部分更新（`setRows`）を適用する。`setData` と違い Undo を消さず、渡した行の
+   * 変更セルだけを 1 Undo エントリとして記録する（新規行の挿入自体は行操作と同様 Undo 対象外）。readOnly は
+   * `setData` と同様にバイパスする（プログラム的な再注入のため）。行が増えるだけで列は変わらないため、
+   * `applyStandaloneData` と違い activeCell のクランプは不要（既存の選択が範囲外になることがない）。
+   */
+  function applyStandaloneSetRows(rows: readonly GridStandaloneRow[]): void {
+    if (standalone === undefined) {
+      return; // 共同編集モードは対象外（setData と同様の扱い）
+    }
+    const result = standalone.setRows(rows);
+    if (result.changes.length > 0) {
+      recordStandaloneUndoEntry(standalone, [...result.changes]);
+    }
   }
 
   // ---- 公開ハンドル ----
@@ -3241,6 +3298,19 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       // 共同編集モードでは no-op（診断のみ）。
       diag.emit('warn', 'setData', 'setData は単独モード専用（共同編集モードでは無視）');
+    },
+    setRows(rows: readonly GridStandaloneRow[]) {
+      // RC4（DD-052-4）: 単独モード専用（setData の部分更新版）。
+      if (standalone !== undefined) {
+        applyStandaloneSetRows(rows);
+        return;
+      }
+      // 単独モードだが boot（microtask）未完了 → 保留し構築後に順番どおり適用する（setData と同じ理由・Codex[P1]）。
+      if (isStandalone && !destroyed) {
+        pendingStandaloneRows.push(rows);
+        return;
+      }
+      diag.emit('warn', 'setRows', 'setRows は単独モード専用（共同編集モードでは無視）');
     },
     insertRows(options: { readonly afterRowId: string | null; readonly count?: number }) {
       performInsertRows(options.afterRowId, options.count ?? 1);
