@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-12 | 2026-09-12 | 確認待ち | 厳格設定の型検査 38件→0件・CI へ追加・全回帰 green・Codex（medium）マージ可・指摘なし。コミットと配布の版（alpha.7）の判断待ち |
+| 2026-09-12 | 2026-09-12 | 完了 | 厳格な consumer 設定（2フラグ）での SDK 内の型エラー 38件→0件・CI に検査を追加。alpha.7（882a56d）を生成し独立 consumer 検証 PASS・広島 DD-005-3 へ引き渡し |
 
 > アプローチ: 標準（型のための修正が中心。修正後の不変は既存の全回帰で担保し、厳格設定の型検査を機械検証として足す）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -80,7 +80,7 @@ TS2375・TS2379 は `exactOptionalPropertyTypes`（optional へ undefined を渡
 | D2 | 論点2 = (b) | `tsconfig.consumer-strict.json`（`tsconfig.base.json` を継承し、2フラグ・lib `ES2022`/`DOM`/`DOM.Iterable`・types `node`・`files` に Facade 3 つの入口）とルート script `typecheck:consumer-strict`（`tsc -p`）。CI の checks に `npm run typecheck` の直後の1ステップとして足す |
 | D3 | 論点3 = (a) | `!` は使わない（規約 P03）。**添字をなくす**（`entries()`・`reduceRight`・反転コピー）、**取り出した値の undefined 判定へ置き換える**（`findIndex` の -1 判定・非空検査済みの `ids[0]`）、**空なら内部エラーを throw**（呼び出し側が 1 件以上で呼ぶ `operationsMessage`・`primaryRejectCode`）の3形で直す |
 | D4 | 論点4 = (b) を優先 | **公開型（Facade が export する型）は変えない**。SDK 内の呼び出し側で undefined を落とす（react `toMountOptions` は `omitUndefined` で値が undefined のキーを落として grid へ渡す／grid `border-rules.ts` の内部 Map は関数ローカルの型）。**内部型**（core・collab・server・ime と Facade 内の非公開型）は、既に undefined を素通ししている実態に合わせて `?: T \| undefined` へ広げ、実行時の値の形（キーの有無）を変えない。キーを省く形にしないのは、ime の trace テストが `'key' in trace` でキーの有無を検査しているため。公開型を広げる (a) は不要だった |
-| D5 | 配布 | tarball の再生成は本DDでは行わない。alpha.6（DD-049 の配布）は本DD の編集より前に生成済みで、本DD の変更を含まない。載せる版はユーザー判断 |
+| D5 | 配布 | ユーザー指示（2026-09-12「コミットして新しいターボールを生成してください」）で `0.1.0-alpha.7` として配布する。alpha.6 は DD-049 の配布として本DD の編集より前に生成済みで、本DD の変更を含まない |
 
 ### 着手時点の計測と仕分け（📐 実装前詳細化）
 
@@ -121,12 +121,12 @@ TS は 1 つの代入エラーで 1 プロパティしか報告しないため�
 - [x] 🔬 機械検証: `npm run typecheck:consumer-strict` → 0 件／わざと違反を1つ入れて失敗することを確認して戻す
 
 ### Phase 3: 回帰と配布
-- [x] `tests/contract` snapshot 更新（差分が拡張だけであることを目視）・`CHANGELOG.md` → 公開 .d.ts snapshot は差分なし（更新不要）。CHANGELOG は Unreleased の Fixed に記載
-- [ ] tarball 再生成（`scripts/release/build-release.sh`）の要否と版をユーザーへ確認（DD-049 の配布と同じ版に載せるか）
+- [x] `tests/contract` snapshot 更新（差分が拡張だけであることを目視）・`CHANGELOG.md` → 公開 .d.ts snapshot は差分なし（更新不要）。CHANGELOG は 0.1.0-alpha.7 の Fixed に記載
+- [x] tarball 再生成（`scripts/release/build-release.sh`）の要否と版をユーザーへ確認（DD-049 の配布と同じ版に載せるか） → alpha.6 は引き渡し済みのため alpha.7。実装 `d06975a`・版更新 `882a56d` の後に `release/0.1.0-alpha.7/` を生成（closureDirty=false）。verify-manifest／check-pack-contents（111 files）／consumer-app E2E 10/10／tarball 実体への厳格設定の型検査 0 件 PASS。[検証結果](DD-050/validation.md)・[引き渡し](DD-050/handoff.md)・[凍結 manifest](DD-050/release-manifest.json)
 - [x] 🔬 機械検証（全回帰1回）: `npm run typecheck`・`npm run lint`・`npm test`・`npm run test:e2e`・`npm run test:e2e:showcase` → 全 green（1315 件・E2E 203 件・showcase 4 件）
 
 ### 完了前チェック
-- [x] 受け入れ基準 1〜4 を照合（5 は consumer 側で確認） → AC1 0 件／AC2 全回帰 green（テスト・E2E は無修正）／AC3 違反を入れると exit 2／AC4 公開 .d.ts snapshot 差分なし・CHANGELOG 記載
+- [x] 受け入れ基準 1〜4 を照合（5 は consumer 側で確認） → AC1 0 件／AC2 全回帰 green（テスト・E2E は無修正）／AC3 違反を入れると exit 2／AC4 公開 .d.ts snapshot 差分なし・CHANGELOG 記載。AC5 は広島側（spreadjs 側では tarball 実体への厳格設定の型検査 0 件で代替確認）
 - [x] 😈 セルフレビュー1巡（足した throw が正常系で発火しないか・公開型の変更が拡張だけか）
 
 ## 既知の未保証境界・既知制約
@@ -135,6 +135,11 @@ TS は 1 つの代入エラーで 1 プロパティしか報告しないため�
 - 計測は Facade 3つの入口から辿れるソースだけ。`grid/test-support` など公開契約でない入口は対象外
 - 検査は spreadjs の TypeScript（ルートの devDependency・5.9）で行う。consumer の TypeScript の版が大きく違うと結果が一致しないことがある
   （例: TS 5.9 は `--target` を省くと ES5 になり、2フラグと無関係な反復・BigInt のエラーが出る）
+- **配布**: 本DDの変更は `0.1.0-alpha.7`（`release/0.1.0-alpha.7/`・ソース `882a56d`）に含まれる。広島リポへの適用は広島側 DD-005-3 で行う（本DDでは未実施）
+- **受け入れ基準 5**（広島 `mock/scripts/typecheck.mjs` で「nanairo-sheet 内」0 件）は広島側 DD-005-3 で確認する（本DDでは未実施）。
+  spreadjs 側では alpha.7 の tarball 実体へ同じフラグの tsc を当てて 0 件を確認済み
+- `scripts/release/build-release.sh` は closureDirty を冒頭で判定し、数分の検証ゲートの後に pack する。その間に packages/ が編集されると、
+  中身が混ざった tarball でも closureDirty=false になる（alpha.7 は tarball とコミットの全ファイル照合で混入なしを確認。スクリプトの改修は未着手）
 
 ## ログ
 
@@ -164,3 +169,13 @@ TS は 1 つの代入エラーで 1 プロパティしか報告しないため�
   Codex 側でも差分を読み、厳格設定の型検査を実行して確認している。反映する修正なし
 - DD-INDEX.md を再生成（起票時の申し送りを解消）。ステータスは確認待ち: コミットと、本DD を載せる配布の版の判断待ち
   （alpha.6 は DD-049 として引き渡し済みのため、載せるなら alpha.7 を想定）
+- ユーザー指示「コミットして新しいターボールを生成してください」を受けて完了処理。実装をコミット（`d06975a`）→ 10 package と package-lock を
+  `0.1.0-alpha.7` へ更新し CHANGELOG を確定（`882a56d`）→ `build-release.sh --out release/0.1.0-alpha.7`（gitDirty=false・closureDirty=false・unit 1,315 PASS）→
+  verify-manifest／check-pack-contents（111 files）／`consumer-app.sh`（最終 tarball のみ・E2E 10/10）PASS → ZIP 化（350,358 bytes / 12 entries）。
+  詳細は [validation.md](DD-050/validation.md)、引き渡しは [handoff.md](DD-050/handoff.md)
+- tarball 実体の確認: 10 tarball の `src/`・`public/` 101 files を `882a56d` と照合して全一致。consumer-app に install した tarball 実体へ広島と同じフラグの
+  tsc を当ててエラー 0 件（SDK ソース 93 files はすべて tarball の展開物から読み、リポジトリの packages/ は 0 files）
+- 気付き: `build-release.sh` は closureDirty を冒頭で判定してから検証ゲート（数分）を挟んで pack するため、その間の packages/ の編集を検出できない
+  （既知の未保証境界へ記載。改修は未着手）
+- 完了時チェック: 知見を `doc/engineering-patterns.md` #23 へ昇格。本文と添付（Codex 依頼・結果・validation・handoff・release-manifest）を一緒にアーカイブし、
+  DD-INDEX をスクリプト再生成、DOC-MAP に添付フォルダを追記

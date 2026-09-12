@@ -6,7 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-050 | 厳格なconsumer設定での型検査 | 確認待ち | 厳格設定の型検査 38件→0件・CI へ追加・全回帰 green・Codex（medium）マージ可・指摘なし。コミットと配布の版（alpha.7）の判断待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
 ## 保留・見送り
@@ -19,6 +18,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-050 | 厳格なconsumer設定での型検査 | 厳格な consumer 設定（2フラグ）での SDK 内の型エラー 38件→0件・CI に検査を追加。alpha.7（882a56d）を生成し独立 consumer 検証 PASS・広島 DD-005-3 へ引き渡し |
 | DD-049 | 共同編集の受理通知とPresence公開 | server-hono onAccepted・grid remote-change／presence／presences()・React 写像を提供。alpha.6 の 10 tarball と独立 consumer 検証完了・広島 DD-005-3 へ引き渡し |
 | DD-048 | 点線・破線と全行共通の横罫線 | 点線・破線と共通横線を提供。alpha.5の10tarballと独立consumer検証完了 |
 | DD-047 | 行列の区切り罫線 | rowBorders/columnBorders実装・全回帰・alpha.4の10 tarball作成 |

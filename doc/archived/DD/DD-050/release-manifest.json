@@ -1,0 +1,87 @@
+{
+  "distribution": "pack-tarball-closure",
+  "note": "DD-017 決定事項A: private registry ではなく pack closure 方式を正式化。consumer は本 closure 全 tarball を同時 install する（欠けると module 解決不能）。registry 昇格は Stage 2。",
+  "channel": "alpha",
+  "version": "0.1.0-alpha.7",
+  "apiVersion": "0.1.0-experimental",
+  "generatedAt": "2026-09-12T08:19:16.980Z",
+  "gitCommit": "882a56dfdb255271a5127f9c8ac2bd0d7a2c6b3e",
+  "gitDirty": false,
+  "closureDirty": false,
+  "closureDirtyPaths": [],
+  "dirtyNote": "gitDirty は working tree 全体、closureDirty は配布に影響するパス（packages/・scripts/release/・package.json・package-lock.json・tsconfig.base.json）のみを見る。closureDirty=false なら本 tarball は gitCommit から再現できる（gitDirty=true でも doc 等の無関係な変更に過ぎない）。closureDirty=true の tarball は gitCommit と一致しないため、配布判断の証拠には使わないこと。",
+  "installNote": "tarball は本 manifest と同じ release/ にある。consumer プロジェクトへ tarball をコピー（例 vendor/）してから install を実行するか、release/ を cwd にして実行する。scripts/consumer-app.sh は tarball を .vendor へコピーして検証する。",
+  "install": "npm install --no-save --install-links --no-audit --no-fund ./nanairo-sheet-grid-0.1.0-alpha.7.tgz ./nanairo-sheet-react-0.1.0-alpha.7.tgz ./nanairo-sheet-server-hono-0.1.0-alpha.7.tgz ./nanairo-sheet-core-0.1.0-alpha.7.tgz ./nanairo-sheet-types-0.1.0-alpha.7.tgz ./nanairo-sheet-collab-0.1.0-alpha.7.tgz ./nanairo-sheet-render-0.1.0-alpha.7.tgz ./nanairo-sheet-selection-0.1.0-alpha.7.tgz ./nanairo-sheet-ime-0.1.0-alpha.7.tgz ./nanairo-sheet-server-0.1.0-alpha.7.tgz",
+  "packages": [
+    {
+      "name": "@nanairo-sheet/grid",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-grid-0.1.0-alpha.7.tgz",
+      "bytes": 157907,
+      "sha256": "05d2bc735987acbec213f3506ef45a4619ff05b73822f2002e9224094600382f"
+    },
+    {
+      "name": "@nanairo-sheet/react",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-react-0.1.0-alpha.7.tgz",
+      "bytes": 8785,
+      "sha256": "d9c319dec08178993da24a166aba3002da874b1b6ac5316c75ce21a836958036"
+    },
+    {
+      "name": "@nanairo-sheet/server-hono",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-server-hono-0.1.0-alpha.7.tgz",
+      "bytes": 51635,
+      "sha256": "53d0902c1ce26f3f8b149a6065922e72a561c4b94e9a0f2e048aaf1c0f4bc96b"
+    },
+    {
+      "name": "@nanairo-sheet/core",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-core-0.1.0-alpha.7.tgz",
+      "bytes": 26028,
+      "sha256": "8ba9b10305c268f4fcf1c4bc0f3b1453ca84715d861b4412ba276e58848ec889"
+    },
+    {
+      "name": "@nanairo-sheet/types",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-types-0.1.0-alpha.7.tgz",
+      "bytes": 1387,
+      "sha256": "f33cb47822e7ea26aea975a21739937d278f62eb96c5aab98d15a6e1aacaea32"
+    },
+    {
+      "name": "@nanairo-sheet/collab",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-collab-0.1.0-alpha.7.tgz",
+      "bytes": 23607,
+      "sha256": "c7fc0e1d45c25d582638413e3534e3365dd6e672afbd1a5fb8b39445abdad0d5"
+    },
+    {
+      "name": "@nanairo-sheet/render",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-render-0.1.0-alpha.7.tgz",
+      "bytes": 35122,
+      "sha256": "0b2921f3214e78fa9dc62d8ebcabf7ca1f40fe6985c94baa8dbf695770b241d5"
+    },
+    {
+      "name": "@nanairo-sheet/selection",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-selection-0.1.0-alpha.7.tgz",
+      "bytes": 1143,
+      "sha256": "cb58a70d31992e40ccdcf4123eecbac916c4a878731a3be6fa17d27b4a75131a"
+    },
+    {
+      "name": "@nanairo-sheet/ime",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-ime-0.1.0-alpha.7.tgz",
+      "bytes": 12535,
+      "sha256": "063024dd48cf9826a9de33deb5da27b7a9605371b68915378b11b625754bf321"
+    },
+    {
+      "name": "@nanairo-sheet/server",
+      "version": "0.1.0-alpha.7",
+      "tarball": "nanairo-sheet-server-0.1.0-alpha.7.tgz",
+      "bytes": 27554,
+      "sha256": "534629d0efcb5d802c95cad9f9a081fe8c4815a19b547eac403cc9ad9261bbb4"
+    }
+  ]
+}

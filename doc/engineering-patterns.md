@@ -192,3 +192,10 @@
 - **対処**: 最終的に解決された線種を格子線の描画にも渡し、pattern境界だけ実線pathを省く。値背景の上/左insetも同じ境界で外す。on画素だけでなくoff画素の背景色をDPR別に検査する。固定paneは共通の周期原点を使い、境界を二重に描かない。
 - **外周**: 線幅1device pxは境界の外側に置くとclipで消える。最終行/列・0/1行を含め、最低1device pxをデータ内へ残す検査を置く。
 - **元DD**: DD-048
+
+## 23. TSソースのまま配るSDKは、consumerの厳格フラグでSDK自身が型検査される（consumerと同じフラグで公開入口から検査する）
+
+- **症状**: SDK側の `npm run typecheck` はgreenなのに、consumerが `exactOptionalPropertyTypes`・`noUncheckedIndexedAccess` を有効にすると、SDK内で数十件の型エラーになりconsumerのbuildが落ちる。
+- **原因**: `types: ./src/index.ts` のソース配布では、consumerのtscがimportで辿ったSDKの `.ts` をconsumerの設定で検査する（`skipLibCheck` は `.d.ts` にしか効かない）。SDK側のtsconfigにそのフラグが無ければ気付けない。TSは1つの代入エラーで1プロパティしか報告しないため、件数は実際に直す箇所より少なく見える。
+- **正しいやり方**: Facadeの入口を `files` に並べ、consumerと同じフラグ・lib・typesを足した専用tsconfig（`tsconfig.consumer-strict.json`）をCIで回す。直し方は、公開型は変えずSDK内の呼び出し側でundefinedのキーを落とす／内部型は `?: T | undefined` に広げて実行時の値の形を変えない／添字は `entries()` 等でなくすか、非空が保証された箇所だけ内部エラーで止める（`!` で黙らせない）。consumerのtsc引数を再現するときは `--target` を明示する（TS 5.9は省略時ES5で、無関係な反復・BigIntのエラーが混ざる）。
+- **元DD**: DD-050（広島空港consumerの要件メモH9）
