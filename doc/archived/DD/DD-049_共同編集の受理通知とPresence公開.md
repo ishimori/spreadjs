@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-09-12 | 2026-09-12 | 確認待ち | 実装・Codex 2 回（指摘 5 件反映）・全回帰 green。コミットと alpha 配布（広島 DD-005-3 引き渡し）の判断待ち |
+| 2026-09-12 | 2026-09-12 | 完了 | server-hono onAccepted・grid remote-change／presence／presences()・React 写像を提供。alpha.6 の 10 tarball と独立 consumer 検証完了・広島 DD-005-3 へ引き渡し |
 
 > アプローチ: 標準＋TDD（純関数: イベント写像・presence 差分）＋E2E駆動（配線: playground 2 クライアント）。要件は consumer の設計DDで確定済み（guides.md §1）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない。`authenticate` は既存のまま）
@@ -131,7 +131,7 @@ consumer 統合②（広島空港 予算管理モック・共同編集 W-04 = �
 - [x] `doc/quick-start.md`: §3d（`onAccepted` で再計算）・§4（`remote-change` / `presence`）・§4c（React callback・`presences()`）を追記（製品化 6 観点-5 DX 成果物）
 - [x] 📸 エビデンス: 2 クライアント E2E のスクショを `DD-049/` へ（下記「エビデンス」）
 - [x] 🔬 機械検証（全回帰 1 回）: `npm test`／`npm run typecheck`／`npm run lint`（boundary new=0）／`npm run test:e2e`／`npm run test:e2e:showcase` → 全 green（unit 128 files / 1,311 tests・typecheck・lint boundary new=0・playground E2E 203 passed〔既存 201＋新規 2〕・showcase E2E 4 passed）。Codex 指摘の修正後に 2 回目も green（unit 1,313 tests・playground E2E 203・showcase E2E 4）、Codex 第 2 回の修正後に 3 回目も green（unit 1,315 tests・typecheck・lint boundary new=0・playground E2E 203・showcase E2E 4）
-- [ ] tarball 再生成（`scripts/release/build-release.sh`）は広島側 DD-005-3 が受け取る。引き渡し手順は広島メモ「持ち込み後の作業」→ DD-048 と同じく **source commit 後**に生成する（gitDirty=false の成果物を渡す）
+- [x] tarball 再生成（`scripts/release/build-release.sh`）は広島側 DD-005-3 が受け取る。引き渡し手順は広島メモ「持ち込み後の作業」→ DD-048 と同じく **source commit 後**に生成する → 10 package を `0.1.0-alpha.6` へ更新（`863fa74`）後に `release/0.1.0-alpha.6/` を生成（closureDirty=false・unit 1,315 PASS・verify-manifest／check-pack-contents／consumer-app E2E 10/10 PASS）。[検証結果](DD-049/validation.md)・[引き渡し](DD-049/handoff.md)・[凍結 manifest](DD-049/release-manifest.json)
 
 ### 完了前チェック
 - [x] 受け入れ基準 1〜9 を照合（未達成があれば理由をログへ）→ 9 件とも充足（照合結果はログ）
@@ -161,8 +161,7 @@ consumer 統合②（広島空港 予算管理モック・共同編集 W-04 = �
   `stop()` 実行中に durable 化を終えた受理は通知されうる。無限ループ防止は consumer 責務。順序保証は文書内のみ。
 - **hook を入れ子にしない保証は 1 つの `serve()` の中だけ**: 同じプロセスで別の `serve()` インスタンスを立て、hook からそちらの `submit` を呼ぶと、
   そのインスタンスの hook は同期で呼ばれうる（1 プロセスに複数 serve を立てる構成は想定外。複数文書は `documents` で 1 つの serve にまとめる）。
-- **配布**: 本DDの変更は `0.1.0-alpha.5` の tarball に含まれない（CHANGELOG は [Unreleased]）。広島側 DD-005-3 への引き渡しは source commit 後に
-  `scripts/release/build-release.sh` で次の alpha を生成して行う。
+- **配布**: 本DDの変更は `0.1.0-alpha.6`（`release/0.1.0-alpha.6/`・ソース `863fa74`）に含まれる。広島リポへの適用・実画面確認は広島側 DD-005-3 で行う（本DDでは未実施）。
 
 ## Manual Gate（クローズ非ブロック・正味）
 
@@ -207,3 +206,5 @@ consumer 統合②（広島空港 予算管理モック・共同編集 W-04 = �
   - AC9: stage2-backlog §3.7（H1/H3/H6/H7 の回収先）・DD-049-1 起票・dd-index-gen
 - ステータスを「確認待ち」にした（Manual Gate 待ちではない＝M1 は境界へ移送済み）。残りはユーザー判断: (1) 本DDの変更のコミット → ユーザー指示「作業が終わったらそろそろコミットしてほしい」により 2026-09-12 にコミット (2) alpha の版採番と `scripts/release/build-release.sh` による tarball 生成・独立 consumer 検証（DD-048 と同じく source commit 後＝gitDirty=false） (3) 広島 DD-005-3 への引き渡し記録 → 完了・アーカイブ
 - 密度計測: 人間確認 0 分（Human Spec Gate は推奨案で代行）／Codex high × 2 回（findings 2＋3＝5 件・全採用・すべて回帰テストを先に追加して red を確認）／Manual Gate 実施 0 件（M1 は境界へ移送）／全回帰 3 回（unit 約 1 分・E2E 約 4 分）／着手から実装・レビュー反映まで同日
+- ユーザー判断「DD-049・DD-049-1 系は完了・アーカイブ・コミット」を受けて完了処理。(2) 10 package を `0.1.0-alpha.6` へ更新（CHANGELOG の [Unreleased] を確定・`863fa74`）→ `build-release.sh` で `release/0.1.0-alpha.6/` を生成（closureDirty=false・unit 1,315 PASS）→ verify-manifest／check-pack-contents（111 files）／`consumer-app.sh`（最終 tarball のみ・E2E 10/10）PASS → ZIP 化（350,250 bytes / 12 entries）。並行セッション DD-050 の `packages/*/src` 編集は pack 完了後（詳細は [validation.md](DD-049/validation.md)）。(3) [引き渡し](DD-049/handoff.md) を記録。DD-049-1 は見送りでアーカイブ（consumer は変更履歴で代替・stage2-backlog §3.7 を更新）
+- 完了時チェック: 本文と添付（contract・Codex 2 往復・証跡 2 枚・validation・handoff・release-manifest）を一緒にアーカイブ、DD-INDEX をスクリプト再生成、DOC-MAP に添付フォルダを追記。doc-check／dd-health PASS。Manual Gate M1 と広島側の適用は上記「既知の未保証境界」へ移送済み

@@ -91,6 +91,7 @@
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
 | `doc/archived/DD/DD-048/` | 点線・破線と共通横罫線の確定シナリオ・検証証跡・Release引き渡し |
+| `doc/archived/DD/DD-049/` | 受理通知・remote-change・presence の契約（contract.md）・Codex 2 往復・2 クライアント証跡・alpha.6 検証結果と広島 DD-005-3 引き渡し |
 | `doc/archived/DD/DD-047/` | 行列罫線の確定契約・受け入れシナリオ・描画/性能/配布検証証跡 |
 | `doc/archived/DD/` | 完了済みDD（アーカイブ。DD-046: セル移動先の可視域修正・alpha.3のconsumer検証を含む） |
 
