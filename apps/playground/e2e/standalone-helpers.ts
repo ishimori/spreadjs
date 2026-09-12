@@ -21,10 +21,13 @@ export interface StandaloneEvent {
   changes?: Array<{ rowId: string; columnId: string; value: string; previousValue: string }>;
   phase?: string;
   message?: string;
-  /** DD-027-2 link-open（type==='link-open' のとき）。 */
-  rowId?: string;
-  columnId?: string;
+  /** DD-027-2 link-open（type==='link-open'）・DD-052-5 cell-hover（null=ホバー終了）で使う。 */
+  rowId?: string | null;
+  /** DD-027-2 link-open・DD-052-5 header-click／cell-hover で使う。 */
+  columnId?: string | null;
   value?: string;
+  /** DD-052-5 cell-hover のセル矩形（null=ホバー終了）。 */
+  rect?: { x: number; y: number; width: number; height: number } | null;
 }
 
 async function callApi<R>(page: Page, method: string, args: unknown[] = []): Promise<R> {
@@ -81,6 +84,10 @@ export async function colIdAt(page: Page, index: number): Promise<string | undef
 }
 export async function cellRectAt(page: Page, row: number, col: number): Promise<CellRect | null> {
   return callApi<CellRect | null>(page, 'cellRectAt', [row, col]);
+}
+/** DD-052-5: 列記号ヘッダーの矩形（RC5 header-click のクリック座標算出用）。 */
+export async function columnHeaderRectAt(page: Page, col: number): Promise<CellRect | null> {
+  return callApi<CellRect | null>(page, 'columnHeaderRectAt', [col]);
 }
 export async function activeCell(page: Page): Promise<{ row: number; col: number }> {
   return callApi<{ row: number; col: number }>(page, 'activeCell');

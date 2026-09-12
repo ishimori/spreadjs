@@ -87,6 +87,7 @@ import type { StandaloneSession } from './standalone-session';
 import { validateStandaloneOptions } from './standalone-options';
 import type { GridBackend } from './grid-backend';
 import type {
+  GridCellRect,
   GridCollaborationMountOptions,
   GridConnectionState,
   GridEvent,
@@ -784,6 +785,33 @@ export function createGridController(target: GridMountTarget, options: GridMount
     return colId !== undefined && columnTypeRegistry.isLinkColumn(String(colId));
   }
 
+  // ---- RC6（DD-052-5）: セルホバー通知（出入りで発火・同一セル内の移動は再発火しない）----
+  let hoveredCell: { readonly rowId: string; readonly columnId: string } | null = null;
+  /** hit（cell 以外は null）を見てホバー中セルが変わっていれば cell-hover を発火する。 */
+  function updateCellHover(hit: { readonly rowIndex: number; readonly colIndex: number } | null): void {
+    if (sync === undefined) {
+      return;
+    }
+    const transform = currentTransform();
+    let next: { rowId: string; columnId: string; rect: GridCellRect } | null = null;
+    if (hit !== null && transform !== undefined) {
+      const rowId = sync.view.rowIdAt(hit.rowIndex);
+      const columnId = sync.view.columnIdAt(hit.colIndex);
+      if (rowId !== undefined && columnId !== undefined) {
+        next = { rowId: String(rowId), columnId: String(columnId), rect: transform.cellRect(hit.rowIndex, hit.colIndex) };
+      }
+    }
+    if (next?.rowId === hoveredCell?.rowId && next?.columnId === hoveredCell?.columnId) {
+      return; // 同一セル（or 両方 null）のまま → 再発火しない
+    }
+    hoveredCell = next === null ? null : { rowId: next.rowId, columnId: next.columnId };
+    emit(
+      next === null
+        ? { type: 'cell-hover', rowId: null, columnId: null, rect: null }
+        : { type: 'cell-hover', rowId: next.rowId, columnId: next.columnId, rect: next.rect },
+    );
+  }
+
   // ---- DD-035 R4: 列単位 readOnly（readOnlyColumns）の判定（入口・chokepoint・textarea ロックで共有）----
   /** readOnlyColumns が 1 つでもあるか（無ければ以下の判定は全て即 false＝現行経路のコスト増ゼロ）。 */
   function hasReadOnlyColumns(): boolean {
@@ -1247,11 +1275,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       // 非ドラッグ: ヘッダー境界上でのみ resize カーソルへ切替（セル領域は cheap に既定へ戻す）。
       if (x >= HEADER_WIDTH && y >= HEADER_HEIGHT) {
+        const hasLinkColumns = columnTypeRegistry?.hasAnyLinkColumn() === true;
+        // RC6（DD-052-5）: セルホバー通知。既存の link 列 cursor 判定と hitTest を共有する（二重計算しない）。
+        const transformForHover = currentTransform();
+        const hoverHit = transformForHover?.hitTest(x, y);
+        updateCellHover(hoverHit?.area === 'cell' ? hoverHit : null);
         // DD-027-2: リンク列が 1 つでもあるときだけ列単位で cursor:pointer 判定（無ければ cheap path 不変・予算保護・AC9）。
-        if (columnTypeRegistry?.hasAnyLinkColumn() === true) {
-          const transform = currentTransform();
-          const hit = transform?.hitTest(x, y);
-          const desired = hit !== undefined && hit.area === 'cell' && isLinkColumnIndex(hit.colIndex) ? 'pointer' : '';
+        if (hasLinkColumns) {
+          const desired = hoverHit !== undefined && hoverHit.area === 'cell' && isLinkColumnIndex(hoverHit.colIndex) ? 'pointer' : '';
           if (scroller.style.cursor !== desired) {
             scroller.style.cursor = desired;
           }
@@ -1262,6 +1293,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         }
         return;
       }
+      updateCellHover(null); // RC6: ヘッダー/コーナー領域はホバー対象外
       const transform = currentTransform();
       if (transform === undefined) {
         return;
@@ -1271,6 +1303,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     { signal },
   );
+
+  // RC6（DD-052-5）: ポインタがグリッド外へ出たらホバーを終了する（出しっぱなしを防ぐ）。
+  scroller.addEventListener('pointerleave', () => updateCellHover(null), { signal });
 
   scroller.addEventListener(
     'pointerup',
@@ -1358,6 +1393,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       const hit = transform.hitTest(x, y);
       if (hit.area !== 'cell') {
+        // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
+        if (hit.area === 'column-header') {
+          const columnId = sync.view.columnIdAt(hit.colIndex);
+          if (columnId !== undefined) {
+            emit({ type: 'header-click', columnId: String(columnId) });
+          }
+        }
         editor.pointerdownCell(null);
         return;
       }

@@ -155,7 +155,37 @@ export type GridEvent = {
  | {
     readonly type: 'presence';
     readonly users: readonly GridPresenceUser[];
+}
+/**
+ * 列見出しのクリック通知（Experimental 0.x・DD-052-5 RC5・両モード共通）。列記号ヘッダー（A/B/C…・
+ * \`columnCaptions\` があればその見出し）を押下すると発火する。**並べ替えは行わない**（利用側が \`columnId\` を
+ * 受けて任意の並べ替え・表示切替を実装する＝責務境界）。行番号ヘッダー・左上コーナーのクリックでは発火しない。
+ * 既存のセルクリック（選択・編集開始）の挙動は変えない。
+ */
+ | {
+    readonly type: 'header-click';
+    readonly columnId: string;
+}
+/**
+ * セルのホバー通知（Experimental 0.x・DD-052-5 RC6・両モード共通）。ポインタの位置するセルが変わった
+ * ときだけ発火する（同一セル内の移動では再発火しない＝間引き済み）。グリッド外・見出し領域・ドラッグ中
+ * （範囲選択・列幅リサイズ）はホバー対象外で、その状態に入ると \`rowId\`/\`columnId\`/\`rect\` が全て \`null\` の
+ * イベントが 1 回発火する。\`rect\` はセルの viewport 矩形（px・スクロール反映済み）で、利用側がツールチップ等を
+ * 自前で描画するための位置情報（**SDK 自体はホバー表示を描画しない**）。
+ */
+ | {
+    readonly type: 'cell-hover';
+    readonly rowId: string | null;
+    readonly columnId: string | null;
+    readonly rect: GridCellRect | null;
 };
+/** セルの viewport 矩形（px・DD-052-5）。内部の CellRect（render package）は露出しない（R7）。 */
+export interface GridCellRect {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+}
 /**
  * 行構造変更の内容（DD-021-1）。insert は挿入アンカー（\`afterRowId\`・null=先頭）と新規 RowId 列（表示順・
  * \`crypto.randomUUID\` 採番）、delete は削除された RowId 列（実在・重複除去済み）。利用側はこれで行の増減を
