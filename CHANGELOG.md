@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.7`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.8`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.8` | `alpha` | `0.1.0-experimental` | DD-052-1〜5（ReadyCrew RC1・2・3・4・5・6・12・13・14）・DD-053（広島空港H10）。長文セル編集・型保持列・セル単位readOnly/行操作無効化・setRows・見出しクリック/ホバー通知・参加者一覧の join 時点反映 |
 | `0.1.0-alpha.7` | `alpha` | `0.1.0-experimental` | DD-050。厳格な consumer 設定（`exactOptionalPropertyTypes`・`noUncheckedIndexedAccess`）での型エラーを修正 |
 | `0.1.0-alpha.6` | `alpha` | `0.1.0-experimental` | DD-049。server-hono `onAccepted`・grid `remote-change` / `presence` / `presences()`・React 写像 |
 | `0.1.0-alpha.5` | `alpha` | `0.1.0-experimental` | DD-048。点線・破線と defaultRowBorder |
@@ -22,7 +23,7 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
-## [Unreleased]
+## [0.1.0-alpha.8] - 2026-09-13
 
 ### Added
 
@@ -67,6 +68,8 @@
   Enter と同じ「確定して下のセルへ移動」だったが、`wrapColumns` に含まれる列では Alt+Enter がキャレット位置へ改行を
   挿入し編集を続けるようになった（Excel と同じキー割当）。`wrapColumns` を指定していない列・`wrapColumns` 自体を
   使っていない consumer は無変更。**公開 API の追加・変更はない**（`.d.ts` snapshot 差分なし。既存オプションの挙動変更のみ）。
+- **配布**: 10 package を `0.1.0-alpha.8` へ更新。API 版は既存 `0.1.0-experimental` を維持する。実装完了後に Codex
+  CLI（xhigh・`doc/DD/DD-052/codex-review-result.md`）で差分全体をレビューし、指摘7件（P1×2・P2×5）を採用・修正済み。
 
 ## [0.1.0-alpha.7] - 2026-09-12
 
