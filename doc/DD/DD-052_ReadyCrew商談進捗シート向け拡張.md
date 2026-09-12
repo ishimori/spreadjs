@@ -12,7 +12,7 @@
 Risk Class: A（子DD-052-1 がエディター〔常駐 textarea・IME 状態機械〕の Enter 系キー処理を変える。子DD-052-2 は入力値の型変換を変える。他の子DDは起票時に再判定）
 Risk Triggers: IME状態機械/textarea の変更（RC1・RC2）／操作仕様の変更（Alt+Enter が「確定＋下移動」から「セル内改行」に変わり既存 consumer へ波及）／データ消失の防止（RC12: 入力の自動型変換で元の文字列が失われる）／公開 API（mount オプション・GridEvent・ref handle）の追加（RC3〜RC6・RC12・RC14）
 Human Spec Gate: required（論点1・3〜8。論点2 は 2026-09-12 ユーザー決定済み）
-Codex: high（本DD＝文書。2026-09-12 に ready_crew_db DD-124 と合わせて実行。本DDへの指摘なし・要件メモへ RC12〜RC14 を追加）／子DD-052-1・052-2 は xhigh
+Codex: high（本DD＝文書。2026-09-12 に ready_crew_db DD-124 と合わせて実行。本DDへの指摘なし・要件メモへ RC12〜RC14 を追加）／実装は 2026-09-13 に子DD-052-1〜5＋DD-053 の全差分をまとめて xhigh 実施（7件指摘・全採用・詳細はログ）
 Manual Gate: あり・クローズ非ブロック（M1 = 実 Microsoft IME で変換中・変換確定直後の Enter／Alt+Enter。子DD-052-1 で実施）
 External Review: なし
 Evidence Level: standard
@@ -116,3 +116,16 @@ Evidence Level: standard
 - Codex レビュー（high・ready_crew_db `doc/DD/DD-124/codex-review-result.md`。DD-124 と合わせて実行）: 本DDへの指摘なし（Risk A・IME 経路・DD-051 との書き分けは妥当）。consumer 側の指摘から RC12（型変換）・RC13（コールバック内 setData と Undo）・RC14（行操作の無効化）を要件メモへ追加し、本DDの表・論点1/7/8・子DD分割案へ反映
 - ユーザー決定: 論点2 (a)（Alt+Enter＝セル内改行を SDK 側で持つ）。consumer の対応環境は Chrome/Edge のみで可＝Tier 1 の拡大要求なし
 - Human Spec Gate（論点1・3〜8）を推奨案で確定。`doc/plan/stage2-backlog.md` §3.8 に RC7〜RC11 を記録。子DD DD-052-1〜5 を起票（`bash scripts/dd-index-gen.sh`・`bash scripts/doc-check.sh` 済み）。以降は子DDで実装を進める
+
+### 2026-09-13
+- ユーザー指示「DD-052・053 を連続で実施」に基づき、子DD-052-1〜5・DD-053 の実装を完了（各子DDのログ参照）。全回帰（unit 1356件・typecheck・consumer-strict・lint・E2E 218件）を確認した上で、実装差分全体（`e1d6553..HEAD`・6DD分）を対象に Codex CLI レビューを実施した
+- **Codex レビュー**: `doc/DD/DD-052/codex-review-request.md`（依頼書。6DD分の背景・決定事項・重点確認観点を個別記載）／`doc/DD/DD-052/codex-review-result.md`（結果）。`bash scripts/codex-review.sh --base e1d6553 --effort xhigh`。指摘7件（P1×2・P2×5）、**全件を妥当と判断し採用・修正**。各指摘は該当子DDの実装ファイルを直接読んで再現条件を裏付けたうえで修正し、修正のたびに一旦 revert して回帰テストが実際に red になることを確認してから再適用した（false-positive のテストを残さない）
+  1. [P1・DD-052-3] `syncCellLock()` の `hasReadOnlyCells()` 早期returnにより、readOnly 全解除後に textarea ロックが固着 → ガード除去
+  2. [P1・DD-052-4] `setRows` が削除済み RowId を未知行と誤認し `rowOrder` に重複挿入 → `deletedRowIds` 集合で除外
+  3. [P2・DD-052-2] `confirmSelect`/`confirmDate` が `stringColumns` を無視 → 両経路に `stringColumnStrings` 判定を追加
+  4. [P2・DD-052-4] boot 前の `setRows`→`setData` 呼び出し順が起動処理内で逆転 → 単一の順序保存キューへ統合
+  5. [P2・DD-052-4] `setRows` の Undo 記録が無関係な行の Redo 履歴まで全消去 → `recordProgrammaticOp`（重なるセルだけ個別に破棄）を新設
+  6. [P2・DD-052-3] dblclick 入口が RC3 のセル単位 readOnly を判定せず編集textareaへ既存値が読み込まれる → `isReadOnlyCellIndex` 判定を追加
+  7. [P2・DD-052-5] 範囲選択ドラッグ開始時に hover 終了（null）が発火せず開始セルの `cell-hover` が残留 → ドラッグ開始時に `updateCellHover(null)` を追加
+- 全7件に対し回帰テスト（unit: `standalone-session.test.ts`・`undo-stack.test.ts`／E2E: `cell-readonly-row-operations.spec.ts`・`string-columns.spec.ts`・`set-rows.spec.ts`・`header-click-cell-hover.spec.ts`）を追加し、フル回帰（unit 1360件・typecheck・consumer-strict・lint）を再確認した（E2E フルスイートは別途確認）
+- DD-053 が発見した既存バグ（K5・message storm）についても、独立した視点での確認を Codex へ依頼済み。結果: 「presence変更を戻した状態でも再現し、既存不具合という診断と整合」と確認（診断の妥当性を追認。修正は本レビューの対象外のまま `doc/plan/stage2-backlog.md` K5 に記録済み）

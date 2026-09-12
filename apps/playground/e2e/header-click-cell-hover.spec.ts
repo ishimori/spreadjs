@@ -82,3 +82,51 @@ test('RC6: セル間でポインタを動かすと cell-hover が出入りで発
     await context.close();
   }
 });
+
+test('Codex[P2]回帰: 範囲選択ドラッグを開始するとホバーが終了する（ドラッグ中に開始セルのホバーが残らない）', async ({
+  browser,
+}) => {
+  const { context, page } = await sa.openStandalone(browser);
+  try {
+    const rectA = await sa.cellRectAt(page, 3, 0);
+    const rectB = await sa.cellRectAt(page, 3, 1);
+    expect(rectA).not.toBeNull();
+    expect(rectB).not.toBeNull();
+    const rowId = await sa.rowIdAt(page, 3);
+    const colA = await sa.colIdAt(page, 0);
+    const scrollerBox = await page.locator('.nsheet-scroller').boundingBox();
+    expect(scrollerBox).not.toBeNull();
+
+    const centerOf = (rect: { x: number; y: number; width: number; height: number }) => ({
+      x: scrollerBox!.x + rect.x + rect.width / 2,
+      y: scrollerBox!.y + rect.y + rect.height / 2,
+    });
+    const a = centerOf(rectA!);
+    const b = centerOf(rectB!);
+
+    // まずセル A 上へポインタを移動してホバーさせる。
+    await page.mouse.move(a.x, a.y);
+    await expect
+      .poll(async () => (await sa.events(page)).filter((e) => e.type === 'cell-hover').at(-1))
+      .toMatchObject({ rowId, columnId: colA });
+
+    // そのまま押下して範囲選択ドラッグを開始する（Codex[P2] 修正前はここでホバー終了が発火せず、
+    // ドラッグ中も consumer のツールチップが開始セルに残ったままになっていた）。
+    await page.mouse.down();
+    await expect
+      .poll(async () => (await sa.events(page)).filter((e) => e.type === 'cell-hover').at(-1))
+      .toMatchObject({ rowId: null, columnId: null, rect: null });
+
+    // ドラッグでセル B へ動かしても、セル移動中は cell-hover（出入り通知）は再発火しない（drag 中は範囲選択の担当）。
+    await page.mouse.move(b.x, b.y);
+    await page.waitForTimeout(100);
+    expect((await sa.events(page)).filter((e) => e.type === 'cell-hover').at(-1)).toMatchObject({
+      rowId: null,
+      columnId: null,
+      rect: null,
+    });
+    await page.mouse.up();
+  } finally {
+    await context.close();
+  }
+});

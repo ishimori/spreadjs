@@ -26,6 +26,13 @@ async function textareaReadOnly(page: Page): Promise<boolean> {
   });
 }
 
+async function textareaValue(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const ta = document.querySelector('textarea.int-cell-editor');
+    return ta instanceof HTMLTextAreaElement ? ta.value : '';
+  });
+}
+
 test('RC3: 行データの readOnlyColumns で指定したセルだけ編集できない。他のセル・setData での解除は従来どおり', async ({
   browser,
 }) => {
@@ -69,6 +76,90 @@ test('RC3: 行データの readOnlyColumns で指定したセルだけ編集で�
     });
     await sa.selectCell(page, 0, 0);
     await expect.poll(async () => textareaReadOnly(page), { message: 'setData 後は readOnly が解除される' }).toBe(false);
+  } finally {
+    await context.close();
+  }
+});
+
+test('RC3 Codex[P1]回帰: readOnly セルを選択したまま全解除すると、以後どのセルへ移動しても入力できる（textarea ロック固着の再発防止）', async ({
+  browser,
+}) => {
+  const { context, page } = await openStandaloneWithQuery(browser, '');
+  try {
+    await page.evaluate(() => {
+      window.__standalone?.reinject({
+        rows: [
+          { rowId: 'lock-r1', cells: { 'col-a': 'A1', 'col-b': 'B1' }, readOnlyColumns: ['col-a'] },
+          { rowId: 'lock-r2', cells: { 'col-a': 'A2', 'col-b': 'B2' } },
+        ],
+      });
+    });
+    await expect.poll(async () => sa.displayCell(page, 'lock-r1', 'col-a')).toBe('A1');
+
+    // readOnly セルを選択（ロックがかかる）→ アクティブセルを動かさないまま readOnly 指定を全解除する
+    // （this の順序が重要: 解除前に別セルへ移動すると columnLocked が既に false になり、固着バグを検出できない）。
+    await sa.selectCell(page, 0, 0);
+    await expect.poll(async () => textareaReadOnly(page), { message: '選択直後はロックされている' }).toBe(true);
+    await page.evaluate(() => {
+      window.__standalone?.reinject({
+        rows: [
+          { rowId: 'lock-r1', cells: { 'col-a': 'A1', 'col-b': 'B1' } }, // readOnlyColumns を全解除
+          { rowId: 'lock-r2', cells: { 'col-a': 'A2', 'col-b': 'B2' } },
+        ],
+      });
+    });
+
+    // 別の可編集セルへ移動 → ロックが正しく解除され、入力できる（Codex[P1] 修正前は hasReadOnlyCells()===false に
+    // より syncCellLock が setInputLock を一切呼ばなくなり、columnLocked=true のまま固着していた）。
+    await sa.selectCell(page, 1, 1);
+    await expect.poll(async () => textareaReadOnly(page), { message: '全解除後に移動した別セルはロックされない' }).toBe(false);
+    await page.keyboard.type('unlocked');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => sa.displayCell(page, 'lock-r2', 'col-b')).toBe('unlocked');
+  } finally {
+    await context.close();
+  }
+});
+
+test('RC3 Codex[P2]回帰: ダブルクリックでも行データ指定のセル単位 readOnly を抑止する（列/行版と同じ入口ガード）', async ({
+  browser,
+}) => {
+  const { context, page } = await openStandaloneWithQuery(browser, '');
+  try {
+    await page.evaluate(() => {
+      window.__standalone?.reinject({
+        rows: [{ rowId: 'dbl-r1', cells: { 'col-a': 'A1', 'col-b': 'B1' }, readOnlyColumns: ['col-a'] }],
+      });
+    });
+    await expect.poll(async () => sa.displayCell(page, 'dbl-r1', 'col-a')).toBe('A1');
+
+    // 単クリックでの選択自体は readOnly でも従来どおり可能（DD-035 R4）なので、pointerdown 経由で activeCell が
+    // 動くこと自体は dblclick の抑止有無を区別しない。区別できるのは「編集セッションが実際に開いたか」＝
+    // 常駐 textarea に既存値（'BeginEdit'/mode:'existing' の initialValue）が積まれるかどうか
+    // （editor-state-machine.ts の handleDoubleClick→beginExistingEffects→port.setValue）。
+    const rect = await sa.cellRectAt(page, 0, 0); // dbl-r1 / col-a（readOnly）
+    expect(rect).not.toBeNull();
+    const scroller = page.locator('.nsheet-scroller');
+    await scroller.dblclick({ position: { x: rect!.x + rect!.width / 2, y: rect!.y + rect!.height / 2 } });
+    await page.waitForTimeout(150);
+    // readOnly セルは入口で抑止され編集セッションが開かない → textarea に既存値 'A1' が積まれない。
+    await expect
+      .poll(async () => textareaValue(page), { message: 'readOnly セルは dblclick で編集textareaへ既存値が積まれない' })
+      .toBe('');
+    // 抑止されている＝直後にタイプしても値は変わらない。
+    await page.keyboard.type('zz');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => sa.displayCell(page, 'dbl-r1', 'col-a')).toBe('A1');
+
+    // 対象外セル（col-b）は dblclick で編集セッションが開き、既存値 'B1' が textarea に積まれる（従来どおり）。
+    const rectB = await sa.cellRectAt(page, 0, 1);
+    expect(rectB).not.toBeNull();
+    await scroller.dblclick({ position: { x: rectB!.x + rectB!.width / 2, y: rectB!.y + rectB!.height / 2 } });
+    await expect.poll(async () => textareaValue(page)).toBe('B1');
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('edited');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => sa.displayCell(page, 'dbl-r1', 'col-b')).toBe('edited');
   } finally {
     await context.close();
   }

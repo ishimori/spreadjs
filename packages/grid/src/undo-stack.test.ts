@@ -114,6 +114,56 @@ describe('undo-stack: 深さ100・redo 破棄（AC6/AC4）', () => {
   });
 });
 
+// ---- RC4（DD-052-4・Codex P2）recordProgrammaticOp: setRows 由来の記録は無関係な redo を破棄しない -------
+
+describe('undo-stack: recordProgrammaticOp（setRows 用・redo は重複セルだけ破棄）', () => {
+  it('無関係な行の redo エントリは破棄しない（recordUserOp と違う点）', () => {
+    const ctrl = createUndoController();
+    ctrl.recordUserOp(null, [patch(1, 0, blank, str('b'))], 1); // row1 を編集
+    ctrl.beginUndo(0);
+    ctrl.resolveCompensationCommitted(2);
+    expect(ctrl.redoDepth()).toBe(1); // row1 の redo が積まれている
+
+    ctrl.recordProgrammaticOp([patch(0, 0, blank, str('from-setRows'))], 3); // 無関係な row0 を setRows で更新
+    expect(ctrl.redoDepth()).toBe(1); // row1 の redo はそのまま残る
+    expect(ctrl.canRedo(0)).toBe(true);
+    expect(ctrl.undoDepth()).toBe(1); // setRows 分も undo できる
+  });
+
+  it('上書きしたセルと重なる redo エントリだけを取り除く（古い値での巻き戻り事故防止）', () => {
+    const ctrl = createUndoController();
+    ctrl.recordUserOp(null, [patch(0, 0, blank, str('typed'))], 1); // row0/col0 を編集
+    ctrl.beginUndo(0);
+    ctrl.resolveCompensationCommitted(2);
+    expect(ctrl.redoDepth()).toBe(1);
+
+    // setRows が同じ row0/col0 を上書き → その redo エントリ（古い 'typed' への戻し）は無効化されるべき。
+    ctrl.recordProgrammaticOp([patch(0, 0, blank, str('from-setRows'))], 3);
+    expect(ctrl.redoDepth()).toBe(0);
+    expect(ctrl.canRedo(0)).toBe(false);
+  });
+
+  it('変化なし（before===after）の patches は記録しない（redo にも触れない）', () => {
+    const ctrl = createUndoController();
+    ctrl.recordUserOp(null, [patch(1, 0, blank, str('b'))], 1);
+    ctrl.beginUndo(0);
+    ctrl.resolveCompensationCommitted(2);
+    expect(ctrl.redoDepth()).toBe(1);
+
+    ctrl.recordProgrammaticOp([patch(0, 0, str('same'), str('same'))], 3);
+    expect(ctrl.undoDepth()).toBe(0); // noop は記録しない
+    expect(ctrl.redoDepth()).toBe(1); // 触れない
+  });
+
+  it('記録したエントリは通常どおり undo できる', () => {
+    const ctrl = createUndoController();
+    ctrl.recordProgrammaticOp([patch(0, 0, blank, str('injected'))], 5);
+    expect(ctrl.canUndo(0)).toBe(true);
+    const undo = ctrl.beginUndo(0);
+    expect(undo!.operation.changes).toEqual([{ rowId: ROWS[0], columnId: COLS[0], beforeRevision: 5, value: blank }]);
+  });
+});
+
 // ---- U-6 pending/ACK・U-7 元 op reject（AC5） -------------------------------------------------
 
 describe('undo-stack: pending/ACK・元 op reject（AC5）', () => {

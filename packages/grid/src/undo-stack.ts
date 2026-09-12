@@ -74,6 +74,14 @@ export interface UndoController {
    * @param ackedRevision standalone は即時確定 revision（ownedRevision 設定）。collab は null（onCommitted で後追い）。
    */
   recordUserOp(operationId: OperationId | null, patches: readonly UndoPatch[], ackedRevision: number | null): void;
+  /**
+   * RC4（DD-052-4・Codex P2）: `setRows` 等プログラム的な再注入用。`recordUserOp` と違い redo スタック全体は
+   * 破棄しない（無関係な行の Redo 履歴に触れない契約）。ただし今回上書きしたセルを指す redo エントリだけは
+   * 個別に取り除く（standalone は OCC 無効＝beforeRevision 未検証のため、残すと redo で古い値へ巻き戻ってしまう）。
+   * @param patches 変化のあったセルのみ（before≠after）。空なら記録しない。
+   * @param ackedRevision standalone の即時確定 revision（ownedRevision 設定）。
+   */
+  recordProgrammaticOp(patches: readonly UndoPatch[], ackedRevision: number): void;
   /** collab: own op（元 or 補償）が committed へ確定した（session-sync の own echo 検出）。 */
   onCommitted(operationId: OperationId, revision: number): void;
   /** collab: op が reject された（observer）。補償なら block 種別を返し、元op（未ACK）なら除去して undefined を返す。 */
@@ -217,6 +225,26 @@ export function createUndoController(maxDepth: number = UNDO_STACK_MAX_DEPTH): U
         updateOwnedRevisionForEntry(entry, ackedRevision); // standalone は即時確定
         entry.operationId = null;
       }
+    },
+
+    recordProgrammaticOp(patches, ackedRevision) {
+      const changed = patches.filter((p) => !scalarsEqual(p.before, p.after));
+      if (changed.length === 0) {
+        return;
+      }
+      const entry: UndoEntry = { operationId: null, patches: changed };
+      undoStack.push(entry);
+      if (undoStack.length > maxDepth) {
+        undoStack.shift();
+      }
+      // redo スタックは全破棄しない（recordUserOp と違う点）。今回上書きしたセルと重なるエントリだけを外す。
+      const touched = new Set(changed.map((p) => cellKey(p.rowId, p.columnId)));
+      for (let i = redoStack.length - 1; i >= 0; i -= 1) {
+        if (redoStack[i]!.patches.some((p) => touched.has(cellKey(p.rowId, p.columnId)))) {
+          redoStack.splice(i, 1);
+        }
+      }
+      updateOwnedRevisionForEntry(entry, ackedRevision);
     },
 
     onCommitted(operationId, revision) {

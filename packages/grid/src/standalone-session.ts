@@ -74,6 +74,8 @@ export interface StandaloneSession extends GridBackend {
    * 未知の RowId は新規行として末尾へ追加する。`readOnlyColumns` は明示指定した行だけ置き換える
    * （未指定ならその行の既存指定を保つ）。readOnly（列/行/セル）は `setData` と同様に無視して適用する
    * （プログラム的な再注入は利用者編集の抑止対象ではない）。未知列は静かにスキップする。
+   * 削除済み（`deleteRows` 済み）の RowId が再度渡された場合は再利用不可として静かに無視する
+   * （core の insertRows は既存 RowId の再利用に対応しない）。
    */
   setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult;
 }
@@ -238,12 +240,19 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     },
     setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult {
       const existingRowIds = new Set<string>();
+      // DD-052-4（Codex P1）: tombstone 済み（削除済み）の RowId は「未知」ではない。core の insertRows は
+      // 既存 RowId の再利用を前提としておらず（rowOrder に重複が入る）、渡すと displayRowOrder が同一行を
+      // 二重に返す実害があった。deletedRowIds として別集合に分け、新規行の判定にもセル diff にも使わない
+      // （＝削除済み RowId の再利用は静かに無視する。未知列と同じ「呼び出し側データ事故への防御」扱い）。
+      const deletedRowIds = new Set<string>();
       for (const rowId of doc.rowMeta.keys()) {
-        if (doc.rowMeta.get(rowId)?.tombstone !== true) {
+        if (doc.rowMeta.get(rowId)?.tombstone === true) {
+          deletedRowIds.add(String(rowId));
+        } else {
           existingRowIds.add(String(rowId));
         }
       }
-      const newRows = rows.filter((r) => !existingRowIds.has(r.rowId));
+      const newRows = rows.filter((r) => !existingRowIds.has(r.rowId) && !deletedRowIds.has(r.rowId));
       // 重複 RowId は先着で dedupe する（buildDocument と同じ防御・consumer データ事故対策）。
       const seenNew = new Set<string>();
       const uniqueNewRows = newRows.filter((r) => (seenNew.has(r.rowId) ? false : (seenNew.add(r.rowId), true)));
@@ -265,6 +274,9 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       const changes: UndoPatch[] = [];
       const setCellsChanges: SetCellsChange[] = [];
       for (const row of rows) {
+        if (deletedRowIds.has(row.rowId)) {
+          continue; // 削除済み RowId の再利用（上記参照）: readOnlyColumns 更新もセル diff も行わない
+        }
         // RC3: 明示指定した行だけ readOnlyColumns を置き換える（未指定は既存指定を保つ）。
         if (row.readOnlyColumns !== undefined) {
           const known = row.readOnlyColumns.filter((c) => knownColumns.has(c));

@@ -103,6 +103,9 @@ export async function redoDepth(page: Page): Promise<number> {
 export async function canUndo(page: Page): Promise<boolean> {
   return callApi<boolean>(page, 'canUndo');
 }
+export async function canRedo(page: Page): Promise<boolean> {
+  return callApi<boolean>(page, 'canRedo');
+}
 export async function isComposing(page: Page): Promise<boolean> {
   return callApi<boolean>(page, 'isComposing');
 }

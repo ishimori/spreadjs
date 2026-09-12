@@ -214,6 +214,9 @@ const readOnly = searchParams.get('readonly') === '1';
 const readOnlyColumns = (searchParams.get('readonlycols') ?? '').split(',').filter((c) => c !== '');
 // RC14（DD-052-3）: 行操作ショートカットの有効・無効を URL で指定できる（E2E 用）。例: `?rowops=0`（既定は有効＝1）。
 const rowOperations = searchParams.get('rowops') === '0' ? false : undefined;
+// RC12（DD-052-2）: 文字列として保つ列を URL で指定できる（E2E 用・main.ts と同方式・例 `?stringCol=col-a`）。
+const stringColParam = searchParams.get('stringCol');
+const stringColumns = stringColParam !== null && stringColParam !== '' ? stringColParam.split(',') : undefined;
 // DD-035 R2: 日付列を URL で指定できる（E2E 用）。形式: `?date=col-b,col-c!icon`（列末尾 `!icon` で openOn:'icon'）。
 function parseDateColumns(
   raw: string | null,
@@ -381,6 +384,7 @@ const handle: StandaloneHandle = {
         ...(readOnlyColumns.length > 0 ? { readOnlyColumns } : {}),
         ...(readOnlyRows.length > 0 ? { readOnlyRows } : {}),
         ...(rowOperations !== undefined ? { rowOperations } : {}),
+        ...(stringColumns !== undefined ? { stringColumns } : {}),
         ...(frozenRowCount !== undefined ? { frozenRowCount } : {}),
         ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
@@ -435,3 +439,21 @@ declare global {
 window.__standalone = handle;
 renderBar();
 handle.mount();
+
+// DD-052-4（Codex P2）回帰確認用（E2E専用）: boot（microtask）完了前に setRows→setData の順で同期呼び出しする
+// consumer を再現する（mount() 呼び出し直後＝同一 tick）。例: `?prebootorder=1`。
+// 修正前は起動処理が常に setData を先に適用していたため、実際の呼び出し順が逆転し、最後に呼んだはずの
+// setData の値が古い setRows の値で上書きされたまま固定されてしまっていた。
+if (searchParams.get('prebootorder') === '1') {
+  // ready 判定（rowAxis.count()>1）を満たすため 2 行以上にする（本題は行数ではなく呼び出し順）。
+  window.__gridInstance?.setRows([
+    { rowId: 'r0', cells: { 'col-a': 'from-setRows' } },
+    { rowId: 'r1', cells: { 'col-a': 'setRows-r1' } },
+  ]);
+  window.__gridInstance?.setData({
+    rows: [
+      { rowId: 'r0', cells: { 'col-a': 'from-setData' } },
+      { rowId: 'r1', cells: { 'col-a': 'setData-r1' } },
+    ],
+  });
+}

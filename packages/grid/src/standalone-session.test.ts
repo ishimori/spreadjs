@@ -183,6 +183,24 @@ describe('createStandaloneSession: RC4（DD-052-4）setRows（行単位の部分
     s.view.flush();
     expect(s.view.rowAxis.count()).toBe(3);
   });
+
+  it('削除済み（tombstone）RowId が再度渡されても新規行として再利用しない（Codex P1: rowOrder 重複防止）', () => {
+    const s = session();
+    s.start();
+    s.session.submitLocalOperation({ type: 'deleteRows', rowIds: [createRowId('r1')] });
+    // 削除済みの 'r1' を再利用しつつ、無関係な 'r2' も同時に更新する。
+    const result = s.setRows([
+      { rowId: 'r1', cells: { 'col-a': 'revived?' } },
+      { rowId: 'r2', cells: { 'col-a': 'A2-v2' } },
+    ]);
+    expect(result.insertedRowCount).toBe(0); // r1 は新規行として挿入されない
+    expect(result.changes).toHaveLength(1); // r2 の変更だけが記録される
+    expect(result.changes[0]).toMatchObject({ rowId: createRowId('r2') });
+    s.view.flush();
+    expect(s.view.rowAxis.count()).toBe(1); // r1(tombstone) を除き r2 のみ表示
+    expect(s.view.rowIndexOf(createRowId('r1'))).toBe(-1); // 重複挿入されていない
+    expect(s.view.cellDisplay(createRowId('r2'), createColumnId('col-a'))).toBe('A2-v2');
+  });
 });
 
 describe('createStandaloneSession: RC13（DD-052-4）beforeCellCommit は onCellCommit より前に呼ばれる', () => {

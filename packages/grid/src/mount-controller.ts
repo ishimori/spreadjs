@@ -168,11 +168,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let sync: GridBackend | undefined;
   // 単独モードの再注入（setData）用の具体参照。共同編集モードでは undefined のまま。
   let standalone: StandaloneSession | undefined;
-  // boot（microtask）完了前に setData が呼ばれたときの保留データ（Codex[P1]: mount 直後の同期 setData を捨てない）。
-  let pendingStandaloneData: GridStandaloneData | undefined;
-  // RC4（DD-052-4）: boot 完了前に setRows が呼ばれたときの保留分（同型の理由。setData と違い部分更新の累積のため
-  // 呼ばれた順に**全件**キューする＝最後の1回だけ採用する setData とは異なる）。
-  const pendingStandaloneRows: Array<readonly GridStandaloneRow[]> = [];
+  // boot（microtask）完了前に setData/setRows が呼ばれたときの保留分（Codex[P1]: mount 直後の同期呼び出しを
+  // 捨てない）。DD-052-4（Codex P2）: setData 用・setRows 用に別々のキューへ分けると、2 つの API を跨いだ
+  // 呼び出し順（例: setRows→setData の順で呼んだのに boot 側で setData を先に適用してしまう）が壊れるため、
+  // 呼ばれた順そのままを 1 本の queue に積む（setData は都度フル置換なので複数回積んでも最終状態は変わらない）。
+  const pendingStandaloneCalls: Array<
+    { readonly kind: 'data'; readonly data: GridStandaloneData } | { readonly kind: 'rows'; readonly rows: readonly GridStandaloneRow[] }
+  > = [];
   let editor: IntegrationEditor | undefined;
   let browserTransport: BrowserWebSocketTransport | undefined;
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
@@ -923,9 +925,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
       );
     }
   }
-  /** アクティブセルのロックを常駐 textarea へ同期する（activeCell 移動のたびに呼ぶ・同値なら無操作）。 */
+  /**
+   * アクティブセルのロックを常駐 textarea へ同期する（activeCell 移動のたびに呼ぶ・同値なら無操作）。
+   * DD-052-3（Codex P1）: `hasReadOnlyCells()` では早期 return しない。readOnly 指定を setData/setRows で
+   * 全解除した直後は false になるが、その回でロック解除の `setInputLock(false)` を呼ばないと textarea が
+   * readOnly のまま固着する。`setInputLock` 自体が同値なら無操作なので毎回呼んでも無コスト。
+   */
   function syncCellLock(): void {
-    if (editor !== undefined && hasReadOnlyCells()) {
+    if (editor !== undefined) {
       editor.setInputLock(isActiveCellReadOnly());
     }
   }
@@ -1429,6 +1436,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
         selectionDrag = { pointerId: event.pointerId };
         selectionCtrl.beginDrag(cell);
         scroller.setPointerCapture(event.pointerId);
+        // RC6（DD-052-5・Codex P2）: 範囲選択ドラッグ中は pointermove 中の hover 更新（updateCellHover）を
+        // 呼ばない分岐へ入るため、ドラッグ開始時点で明示的にホバーを終了させる（consumer のツールチップが
+        // 開始セルに残り続けるのを防ぐ）。
+        updateCellHover(null);
       }
       // 候補は既存処理の後に記録する（既存経路は無変更のまま上乗せ・pointerup で発火）。編集中クリックは linkArm=null。
       linkCandidate = linkArm;
@@ -1473,6 +1484,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
         }
         if (isReadOnlyColumnIndex(hit.colIndex)) {
           diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 列 ${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
+          return;
+        }
+        // RC3（DD-052-3・Codex P2）: 行データ指定のセル単位 readOnly も同じ入口抑止に含める（列/行版のみ判定
+        // していたため、行データで readOnly にしたセルを dblclick で開けてしまっていた）。
+        if (isReadOnlyCellIndex(hit.rowIndex, hit.colIndex)) {
+          diag.emit('info', 'readonly-cell-blocked', `readOnlyColumns（行データ指定）: セル row=${String(sync.view.rowIdAt(hit.rowIndex))} col=${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
           return;
         }
         // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列
@@ -1853,13 +1870,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * consumer が `onCellCommit` 内で同期的に `setData` を呼んでも、Undo 記録は既に完了しており、`setData` の
    * Undo 全消去（`undoCtrl.clear()`）が幽霊エントリを残さず正しく効く（従来は notify 後に記録していたため
    * 消去済みスタックへ記録してしまっていた）。
+   * @param isProgrammatic RC4（Codex P2）: true なら `setRows` 由来の再注入として記録し、無関係な行の
+   * Redo 履歴を破棄しない（`undoCtrl.recordProgrammaticOp`）。既定 false は利用者の手入力確定として扱い、
+   * 従来どおり Redo スタック全体を破棄する（`undoCtrl.recordUserOp`）。
    */
-  function recordStandaloneUndoEntry(backend: GridBackend, patches: UndoPatch[]): void {
+  function recordStandaloneUndoEntry(backend: GridBackend, patches: UndoPatch[], isProgrammatic = false): void {
     if (patches.length === 0) {
       return;
     }
     const first = patches[0]!;
-    undoCtrl.recordUserOp(null, patches, cellRevision(backend.session.committedDocument, first.rowId, first.columnId));
+    const ackedRevision = cellRevision(backend.session.committedDocument, first.rowId, first.columnId);
+    if (isProgrammatic) {
+      undoCtrl.recordProgrammaticOp(patches, ackedRevision);
+    } else {
+      undoCtrl.recordUserOp(null, patches, ackedRevision);
+    }
   }
 
   // ---- 行操作（Insert/Delete）公開層（DD-021-1）----
@@ -2576,7 +2601,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
             rowId: target.rowId,
             columnId: target.columnId,
             beforeRevision: target.beforeRevision, // 開いた時点で凍結（OCC は既存 reject 経路が裁く）
-            value: draftToScalar(value),
+            // RC12（DD-052-2・Codex P2）: stringColumns 指定列は選択式でも型変換をスキップする
+            // （textarea 経由の確定と同じ契約＝編集 UI に依存せず「空文字以外は常に string」）。
+            value: draftToScalar(value, stringColumnStrings.has(String(target.columnId))),
           },
         ],
       };
@@ -2684,7 +2711,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
             rowId: target.rowId,
             columnId: target.columnId,
             beforeRevision: target.beforeRevision,
-            value: draftToScalar(value), // 'YYYY-MM-DD' → kind:'date'（ADR-0012 正準）／'' → blank（クリア）
+            // RC12（DD-052-2・Codex P2）: stringColumns 指定列は日付ピッカーでも型変換をスキップする（他2経路と同じ契約）。
+            // 通常時は 'YYYY-MM-DD' → kind:'date'（ADR-0012 正準）／'' → blank（クリア）。
+            value: draftToScalar(value, stringColumnStrings.has(String(target.columnId))),
           },
         ],
       };
@@ -3238,16 +3267,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
     });
     sync = standalone;
     attachBackendRendering();
-    // boot 前に呼ばれた setData（キャッシュ済みデータの mount 直後注入等）を適用する（Codex[P1]）。
-    if (pendingStandaloneData !== undefined) {
-      const data = pendingStandaloneData;
-      pendingStandaloneData = undefined;
-      applyStandaloneData(data);
-    }
-    // RC4: boot 前に呼ばれた setRows を、呼ばれた順に適用する（setData 適用の後＝setData で全置換された上に重ねる）。
-    while (pendingStandaloneRows.length > 0) {
-      const rows = pendingStandaloneRows.shift()!;
-      applyStandaloneSetRows(rows);
+    // boot 前に呼ばれた setData/setRows（キャッシュ済みデータの mount 直後注入等）を、呼ばれた順に適用する
+    // （Codex[P1]・DD-052-4 Codex[P2]: setData/setRows のどちらから呼ばれても実際の呼び出し順を保つ）。
+    while (pendingStandaloneCalls.length > 0) {
+      const call = pendingStandaloneCalls.shift()!;
+      if (call.kind === 'data') {
+        applyStandaloneData(call.data);
+      } else {
+        applyStandaloneSetRows(call.rows);
+      }
     }
   }
 
@@ -3294,7 +3322,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     const result = standalone.setRows(rows);
     if (result.changes.length > 0) {
-      recordStandaloneUndoEntry(standalone, [...result.changes]);
+      recordStandaloneUndoEntry(standalone, [...result.changes], true);
     }
   }
 
@@ -3333,9 +3361,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
         applyStandaloneData(data);
         return;
       }
-      // 単独モードだが boot（microtask）未完了 → 保留し構築後に適用する（Codex[P1]・mount 直後注入を捨てない）。
+      // 単独モードだが boot（microtask）未完了 → 保留し構築後に順番どおり適用する（Codex[P1]・mount 直後注入を捨てない）。
       if (isStandalone && !destroyed) {
-        pendingStandaloneData = data; // 複数回呼ばれたら最後の 1 回を採用（最新状態）
+        pendingStandaloneCalls.push({ kind: 'data', data });
         return;
       }
       // 共同編集モードでは no-op（診断のみ）。
@@ -3349,7 +3377,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       // 単独モードだが boot（microtask）未完了 → 保留し構築後に順番どおり適用する（setData と同じ理由・Codex[P1]）。
       if (isStandalone && !destroyed) {
-        pendingStandaloneRows.push(rows);
+        pendingStandaloneCalls.push({ kind: 'rows', rows });
         return;
       }
       diag.emit('warn', 'setRows', 'setRows は単独モード専用（共同編集モードでは無視）');

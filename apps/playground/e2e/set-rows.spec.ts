@@ -66,3 +66,55 @@ test('RC4: setRows 直後の Undo は変更したセルだけを戻す', async (
     await context.close();
   }
 });
+
+test('Codex[P1]回帰: boot 前に setRows→setData の順で同期呼び出しても、実際の呼び出し順どおりに適用される', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    // ?prebootorder=1: standalone-main.ts が mount() 直後（同一 tick・boot の microtask 完了前）に
+    // setRows({from-setRows}) → setData({from-setData}) を同期実行する（修正前は起動処理が setData を
+    // 常に先に適用したため実際の呼び出し順が逆転し、最後に呼んだ setData の値が古い setRows の値で
+    // 上書きされたまま固定されてしまっていた）。
+    await page.goto('/standalone.html?prebootorder=1');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+
+    // 実際の呼び出し順どおりなら、最後に呼んだ setData が最終状態になる（setRows の値は残らない）。
+    await expect.poll(async () => sa.displayCell(page, 'r0', 'col-a')).toBe('from-setData');
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex[P2]回帰: setRows は無関係な行の Redo 履歴を破棄しない', async ({ browser }) => {
+  const { context, page } = await sa.openStandalone(browser);
+  try {
+    // row 5 を編集して Undo → Redo 可能な状態を作る。
+    await sa.selectCell(page, 5, 0);
+    await page.keyboard.type('typed-then-undone');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Control+z');
+    const rowId5 = await sa.rowIdAt(page, 5);
+    const seedValue5 = await sa.displayCell(page, rowId5!, 'col-a'); // undo 後の値（シード値）
+    expect(await sa.canRedo(page), 'undo 直後は redo 可能').toBe(true);
+
+    // 無関係な行（row 3）を setRows で更新する。
+    const rowId3 = await sa.rowIdAt(page, 3);
+    await page.evaluate(
+      (id) => window.__standalone?.applyRows([{ rowId: id!, cells: { 'col-a': 'via-setRows' } }]),
+      rowId3,
+    );
+    await expect.poll(async () => sa.displayCell(page, rowId3!, 'col-a')).toBe('via-setRows');
+
+    // row 5 の redo はそのまま残る（Codex[P2] 修正前は setRows が redo スタック全体を破棄していた）。
+    expect(await sa.canRedo(page), 'setRows 後も無関係な行の redo が残る').toBe(true);
+    await sa.selectCell(page, 5, 0);
+    await page.keyboard.press('Control+y');
+    await expect.poll(async () => sa.displayCell(page, rowId5!, 'col-a')).toBe('typed-then-undone');
+    expect(seedValue5).not.toBe('typed-then-undone');
+  } finally {
+    await context.close();
+  }
+});
