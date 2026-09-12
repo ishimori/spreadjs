@@ -474,14 +474,16 @@ export function OrderGrid() {
 
 - **props の変更契約（3 分類）**:
   - **識別系**（`mode`/`serverUrl`/`columnOrder`/`wrapColumns`/`documentId`/`displayName`/`clientId`、列スキーマ、
-    `frozenRowCount`/`frozenColumnCount`/`columnBackgrounds`/`rowBackgrounds`/`rowBorders`/`columnBorders`/`readOnlyRows`）の変更は
-    **自動 remount**（destroy→mount）。配列（`columnOrder` 等）は**値**で比較するので、毎 render 新しい配列リテラルを
-    渡しても内容が同じなら remount しない（安定参照が理想だが Facade が吸収する）。
+    `frozenRowCount`/`frozenColumnCount`/`columnBackgrounds`/`rowBackgrounds`/`rowBorders`/`columnBorders`/`readOnlyRows`/
+    `stringColumns`/`rowOperations`）の変更は**自動 remount**（destroy→mount）。配列（`columnOrder`/`stringColumns` 等）は
+    **値**で比較するので、毎 render 新しい配列リテラルを渡しても内容が同じなら remount しない（安定参照が理想だが
+    Facade が吸収する）。
   - **初期値系**（`initialData`/`initialColumnWidths`/`initialRowHeights`）は**初回 mount のみ**有効。mount 後の変更は
     無視され診断 warn が出る。**データ再注入は `ref.setData`**、レイアウト保存は `onLayout`→次回 mount の初期値へ。
   - **callback 系**（`onCellCommit`/`onLayout`/`onConnectionChange`/`onRemoteChange`/`onPresenceChange`/`onError`/`onEvent`/
     `onDiagnostic`）は remount せず最新参照へ差し替わる（毎 render 新しい関数を渡してよい）。
-- **命令 API（ref）**: `setData(data)`（standalone 再注入）／`focus()`／`connectionState()`／行操作・視点移動
+- **命令 API（ref）**: `setData(data)`（standalone 再注入）／`setRows(rows)`（standalone 行単位の部分更新・DD-052-4/DD-054。
+  言及しなかった行・Undo/Redo 履歴はそのまま）／`focus()`／`connectionState()`／行操作・視点移動
   （`insertRows`/`deleteRows`/`scrollToRow`/`scrollToColumn`/`setActiveCell`）／`presences()`（参加者一覧・未 mount は `[]`・DD-049）。
   `GridInstance` 本体は出さない。
 - **共同編集モード**: `mode="collaboration"`（省略時の既定）＋`serverUrl` を渡す。standalone props に `serverUrl` を

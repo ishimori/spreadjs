@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.8`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.9`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.9` | `alpha` | `0.1.0-experimental` | DD-054（ReadyCrew RC15）。React Facade へ `stringColumns`・`rowOperations`・`ref.setRows` を写す（alpha.8 の写像漏れ） |
 | `0.1.0-alpha.8` | `alpha` | `0.1.0-experimental` | DD-052-1〜5（ReadyCrew RC1・2・3・4・5・6・12・13・14）・DD-053（広島空港H10）。長文セル編集・型保持列・セル単位readOnly/行操作無効化・setRows・見出しクリック/ホバー通知・参加者一覧の join 時点反映 |
 | `0.1.0-alpha.7` | `alpha` | `0.1.0-experimental` | DD-050。厳格な consumer 設定（`exactOptionalPropertyTypes`・`noUncheckedIndexedAccess`）での型エラーを修正 |
 | `0.1.0-alpha.6` | `alpha` | `0.1.0-experimental` | DD-049。server-hono `onAccepted`・grid `remote-change` / `presence` / `presences()`・React 写像 |
@@ -22,6 +23,20 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [Unreleased]
+
+### Added
+
+- **react `stringColumns`・`rowOperations` props、`ref.setRows`（DD-054・ReadyCrew RC15）**: alpha.8 で grid Facade に
+  入った3点（DD-052-2 `stringColumns`・DD-052-3 `rowOperations`・DD-052-4 `GridInstance.setRows`）を React Facade
+  （`<NanairoSheetView>`）の props・ref handle から使えるようにした。`stringColumns`・`rowOperations` は
+  `wrapColumns`/`readOnlyColumns` と同じ識別系 props（mount 時固定・値が変わると remount・同値の新規リテラルでは
+  remount しない）。`ref.setRows(rows)` は grid の `setRows` へ直結し、未 mount 時は他の命令 API と同様
+  `handle-before-mount` 診断とともに無視される。公開 `.d.ts` snapshot 差分あり（3 点の追加のみ）。
+  あわせて、grid の mount オプション・`GridInstance` の公開メンバーのうち React Facade に写像されていないものを
+  `npm run typecheck` で機械検出する型レベルの網羅性チェックを `packages/react/src/index.ts` に追加した
+  （ランタイムに影響しない module-private な型のみ・.d.ts には出ない）。今回のような写像漏れの再発を防ぐ。
 
 ## [0.1.0-alpha.8] - 2026-09-13
 

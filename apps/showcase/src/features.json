@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-09-12",
+  "updated": "2026-09-13",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -72,9 +72,9 @@
       "id": "react",
       "title": "React 組み込み（<NanairoSheetView>）",
       "status": "available",
-      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。共同編集の確定変更は onRemoteChange、参加者一覧は onPresenceChange / ref.presences() で受け取れます。StrictMode・再mountでリークしません（react は peer 依存）。",
-      "source": "DD-025・DD-035・DD-036・DD-049",
-      "meta": "peer: react ^19 ／ unit＋実ブラウザーE2E（StrictMode・leak）検証済み"
+      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行単位の部分更新は ref.setRows（Undo/Redo 履歴を保つ）、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景・文字列として保つ列（stringColumns）・行操作ショートカットの無効化（rowOperations）は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。共同編集の確定変更は onRemoteChange、参加者一覧は onPresenceChange / ref.presences() で受け取れます。StrictMode・再mountでリークしません（react は peer 依存）。",
+      "source": "DD-025・DD-035・DD-036・DD-049・DD-054",
+      "meta": "peer: react ^19 ／ unit検証済み（DD-054 で grid mount オプション・GridInstance の型網羅性を機械検証）"
     },
     {
       "id": "persist",

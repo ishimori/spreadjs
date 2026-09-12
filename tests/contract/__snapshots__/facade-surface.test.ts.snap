@@ -967,7 +967,7 @@ export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<st
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData } from '@nanairo-sheet/grid';
+import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -1000,6 +1000,10 @@ export interface NanairoSheetViewCommonProps {
     readonly readOnlyColumns?: readonly string[];
     /** 読み取り専用行（grid readOnlyRows・DD-036 C3）。未知 RowId は grid 側で診断 warn のみ。 */
     readonly readOnlyRows?: readonly string[];
+    /** 文字列として保つ列（grid stringColumns・DD-052-2）。指定列は型変換をスキップし常に string で保持する。 */
+    readonly stringColumns?: readonly string[];
+    /** 行操作ショートカットの有効・無効（grid rowOperations・DD-052-3。既定 true）。公開 API 呼び出しは対象外。 */
+    readonly rowOperations?: boolean;
     /** 固定行数（grid frozenRowCount・DD-036 C1・既定 1）。 */
     readonly frozenRowCount?: number;
     /** 固定列数（grid frozenColumnCount・DD-036 C1・既定 1）。 */
@@ -1062,6 +1066,8 @@ export type NanairoSheetViewProps = NanairoSheetViewStandaloneProps | NanairoShe
 export interface NanairoSheetViewHandle {
     /** 単独グリッドモードの文書丸ごと再注入（grid GridInstance.setData 直結。collab は grid 側で no-op+warn）。 */
     setData(data: GridStandaloneData): void;
+    /** 単独グリッドモードの行単位の部分更新（grid GridInstance.setRows 直結・DD-052-4/DD-054）。collab は grid 側で no-op+warn。 */
+    setRows(rows: readonly GridStandaloneRow[]): void;
     /** グリッドへフォーカス（常駐 textarea）。 */
     focus(): void;
     /** 現在の接続状態（未 mount 時は 'stopped'）。 */

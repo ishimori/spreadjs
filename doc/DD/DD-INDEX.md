@@ -6,6 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
+| DD-054 | ReactFacadeへalpha8新オプションとsetRowsを写す | 進行中 | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC15。DD-052-2〜4 の React 写像漏れ。Phase 1〜2（写像・テスト・文書）完了、alpha.9配布待ち |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 

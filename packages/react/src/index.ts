@@ -29,6 +29,7 @@ import {
   type GridBorder,
   type GridColumnBorders,
   type GridColumnType,
+  type GridCommonMountOptions,
   type GridConnectionState,
   type GridDiagnosticHook,
   type GridErrorCode,
@@ -38,6 +39,7 @@ import {
   type GridPresenceUser,
   type GridRemoteChange,
   type GridStandaloneData,
+  type GridStandaloneRow,
 } from '@nanairo-sheet/grid';
 
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
@@ -77,6 +79,10 @@ export interface NanairoSheetViewCommonProps {
   readonly readOnlyColumns?: readonly string[];
   /** 読み取り専用行（grid readOnlyRows・DD-036 C3）。未知 RowId は grid 側で診断 warn のみ。 */
   readonly readOnlyRows?: readonly string[];
+  /** 文字列として保つ列（grid stringColumns・DD-052-2）。指定列は型変換をスキップし常に string で保持する。 */
+  readonly stringColumns?: readonly string[];
+  /** 行操作ショートカットの有効・無効（grid rowOperations・DD-052-3。既定 true）。公開 API 呼び出しは対象外。 */
+  readonly rowOperations?: boolean;
   /** 固定行数（grid frozenRowCount・DD-036 C1・既定 1）。 */
   readonly frozenRowCount?: number;
   /** 固定列数（grid frozenColumnCount・DD-036 C1・既定 1）。 */
@@ -150,6 +156,8 @@ export type NanairoSheetViewProps =
 export interface NanairoSheetViewHandle {
   /** 単独グリッドモードの文書丸ごと再注入（grid GridInstance.setData 直結。collab は grid 側で no-op+warn）。 */
   setData(data: GridStandaloneData): void;
+  /** 単独グリッドモードの行単位の部分更新（grid GridInstance.setRows 直結・DD-052-4/DD-054）。collab は grid 側で no-op+warn。 */
+  setRows(rows: readonly GridStandaloneRow[]): void;
   /** グリッドへフォーカス（常駐 textarea）。 */
   focus(): void;
   /** 現在の接続状態（未 mount 時は 'stopped'）。 */
@@ -168,6 +176,51 @@ export interface NanairoSheetViewHandle {
   /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
   presences(): readonly GridPresenceUser[];
 }
+
+// ---- 型レベルの網羅性チェック（DD-054 論点3）--------------------------------------------------
+// grid 側に mount オプション・GridInstance メソッドが増えたのに React 側の写像を足し忘れる事故
+// （本 DD の発端）を、コンパイル時（npm run typecheck）に機械検出する。ランタイムに影響しない
+// module-private な型のみで、export しないため .d.ts にも出ない（R7 非該当）。
+
+/** GridCommonMountOptions のキー名 → 対応する props 名（名前が変わるものだけ明示する）。 */
+interface MountOptionKeyRenames {
+  readonly columnWidths: 'initialColumnWidths';
+  readonly rowHeights: 'initialRowHeights';
+}
+type MappedMountOptionPropName<K extends keyof GridCommonMountOptions> =
+  K extends keyof MountOptionKeyRenames ? MountOptionKeyRenames[K] : K;
+/** GridCommonMountOptions のキーのうち、対応する props が NanairoSheetViewCommonProps に無いもの（空集合であるべき）。 */
+type UnmappedMountOptionKeys = {
+  // -? で optional 修飾を外す: 外さないと GridCommonMountOptions が全キー optional なため、
+  // マップ後の型も optional になり `[keyof T]` でのインデックスアクセスに undefined が混入する。
+  [K in keyof GridCommonMountOptions]-?: MappedMountOptionPropName<K> extends keyof NanairoSheetViewCommonProps
+    ? never
+    : K;
+}[keyof GridCommonMountOptions];
+
+/** GridInstance のメンバーのうち、React handle へ意図的に写さないもの（理由を併記）。 */
+type ExcludedGridInstanceKeys =
+  | 'documentId' // 識別用の読み取り専用値。ref handle は命令 API のみを出す契約（契約 §3）で対象外
+  | 'subscribe' // React は onEvent/onXxx props で個別配信する別経路（契約 §2）。ref handle には出さない
+  | 'destroy'; // lifecycle は effect cleanup が管理する（契約冒頭）。consumer に直接 destroy させない
+/** GridInstance のメンバーのうち、React handle に無いもの（除外リスト適用後・空集合であるべき）。 */
+type MissingHandleKeys = Exclude<keyof GridInstance, ExcludedGridInstanceKeys | keyof NanairoSheetViewHandle>;
+
+/** T が never でなければ型エラーにする（未対応のキーがあれば呼び出し元の型引数にコンパイルエラーとして出る）。 */
+type AssertNever<T extends never> = T;
+/**
+ * 型のみのコンパイル時アサーション（呼ばれない・パラメータ型のためだけに存在する）。`void` 参照だけで
+ * noUnusedLocals を満たし、tree-shaking で消える程度の空関数 1 つに留める（真に zero-cost にはしない）。
+ */
+function assertMountOptionsAndHandleAreComplete(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 型チェックのためだけの引数（呼ばれない）
+  _mountOptionsAllMapped: AssertNever<UnmappedMountOptionKeys>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 同上
+  _handleComplete: AssertNever<MissingHandleKeys>,
+): void {
+  // 型チェックのみ。呼ばれない。
+}
+void assertMountOptionsAndHandleAreComplete;
 
 /** callback 群だけを保持する内部型（最新参照を subscribe から呼ぶ・stale closure 回避）。 */
 interface CallbackBag {
@@ -229,6 +282,10 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     columnDisplayFormats: props.columnDisplayFormats === undefined ? null : canonicalJson(props.columnDisplayFormats),
     readOnly: props.readOnly ?? null,
     readOnlyColumns: props.readOnlyColumns === undefined ? null : [...props.readOnlyColumns].sort(),
+    // DD-052-2: stringColumns も readOnlyColumns と同じ集合＝ソート（順序に意味を持たせない）。
+    stringColumns: props.stringColumns === undefined ? null : [...props.stringColumns].sort(),
+    // DD-052-3: rowOperations は素の boolean（真偽が変われば remount）。
+    rowOperations: props.rowOperations ?? null,
     // DD-036: 行 readOnly は集合＝ソート。固定行列数は素の数値。列背景 Record はキー順非依存で正準化。
     readOnlyRows: props.readOnlyRows === undefined ? null : [...props.readOnlyRows].sort(),
     frozenRowCount: props.frozenRowCount ?? null,
@@ -297,6 +354,9 @@ function toMountOptions(
     columnDisplayFormats: props.columnDisplayFormats,
     readOnly: props.readOnly,
     readOnlyColumns: props.readOnlyColumns,
+    // DD-052-2/3: 未指定は渡さない（grid 側で未指定＝現行挙動）。
+    stringColumns: props.stringColumns,
+    rowOperations: props.rowOperations,
     // DD-036: 固定行列数・列背景・行 readOnly（未指定は渡さない＝grid 側で未指定＝現行挙動）。
     readOnlyRows: props.readOnlyRows,
     frozenRowCount: props.frozenRowCount,
@@ -381,6 +441,14 @@ function NanairoSheetViewImpl(
           return;
         }
         instance.setData(data);
+      },
+      setRows(rows: readonly GridStandaloneRow[]): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'setRows を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.setRows(rows);
       },
       focus(): void {
         const instance = instanceRef.current;
