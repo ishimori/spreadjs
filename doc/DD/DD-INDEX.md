@@ -6,7 +6,10 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-056 | 広島空港PoC向け拡張 | 検討中 | consumer 駆動（広島 DDP-001）。広島のセッションから起票。Human Spec Gate 以降は本リポのセッションで進める |
+| DD-056 | 広島空港PoC向け拡張 | 進行中 | consumer 駆動（広島 DDP-001）。設計（`DD-056/contract.md`）を Codex 設計レビュー（5件採用）後に Human Spec Gate で確定。子DD-056-1〜3 で実装中 |
+| DD-056-1 | 操作ごとの書込の認可 | 進行中 | 親=DD-056（consumer 駆動: 広島空港 H11）。契約の正本は `DD-056/contract.md` §3 |
+| DD-056-2 | 読み取り専用の実行時切替と送り切り | 進行中 | 親=DD-056（consumer 駆動: 広島空港 H12＋既存不具合 contract.md §4.5）。契約の正本は `DD-056/contract.md` §4 |
+| DD-056-3 | 実行中の文書の追加と撤去 | 検討中 | 親=DD-056（consumer 駆動: 広島空港 H13）。契約の正本は `DD-056/contract.md` §5。DD-056-1・056-2 の配布（alpha.11）の後に着手 |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
