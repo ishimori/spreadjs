@@ -34,6 +34,12 @@ export interface SequencerState {
   clientSequenceTable: Map<string, number>; // clientId → 最終処理 clientSequence
 }
 
+/**
+ * 認可段（DD-056 H11）の判定。true で受理段へ進め、false で `permission-denied` として reject する。
+ * 呼び出し側（Room → server-hono）が consumer のフックを包み、throw や不正な戻り値は false に倒してから渡す。
+ */
+export type OperationAuthorizer = (envelope: ClientOperationEnvelope) => boolean;
+
 /** submit の結果。Room がトランスポートへの配信（ACK / broadcast / reject）に写像する。 */
 export type SequencerOutcome =
   | { status: 'accepted'; ack: OperationAckMessage; envelope: ServerOperationEnvelope }
@@ -89,9 +95,10 @@ export class Sequencer {
 
   /**
    * submitOperation を §5 の処理順で処理する。
-   * 1 operationId 冪等 → 2 clientSequence → 3 baseRevision → 4 検証 → 5 適用（no-op は revision 非消費）。
+   * 1 operationId 冪等 → 2 clientSequence → 3 baseRevision → 3' 認可（DD-056）→ 4 検証 → 5 適用（no-op は revision 非消費）。
+   * `authorize` 省略時は認可段を素通りする（従来どおり）。
    */
-  submit(env: ClientOperationEnvelope): SequencerOutcome {
+  submit(env: ClientOperationEnvelope, authorize?: OperationAuthorizer): SequencerOutcome {
     // 1. operationId 冪等（clientSequence 検査より先＝DA D3）。既知なら同一 ACK を再返却し以降を行わない（S-F2）。
     const cachedRevision = this.state.ackCache.get(env.operationId);
     if (cachedRevision !== undefined) {
@@ -122,6 +129,13 @@ export class Sequencer {
           currentRevision: this.state.currentRevision,
         }),
       };
+    }
+
+    // 3'. 認可（DD-056 H11）。clientSequence は ② で消費済みのため、拒否しても同じクライアントの次の操作（seq+1）は通常どおり
+    // 処理される。受理済み操作の再送は ① で同じ ACK を返して終わる＝禁止の前に受理した操作は禁止の後に再送されても受理のまま。
+    // revision・operationLog・ackCache は動かさない（reject と同じ）。
+    if (authorize !== undefined && !authorize(env)) {
+      return { status: 'rejected', rejection: rejectMessage(env.operationId, 'permission-denied', {}) };
     }
 
     // 4. 検証（validateOperation を共有・SetCells 原子性で全違反を列挙・§3/§5-5）。

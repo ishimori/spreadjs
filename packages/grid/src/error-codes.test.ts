@@ -4,6 +4,7 @@ import {
   GRID_CONFLICT_CODES,
   GRID_ERROR_CODES,
   GridBootError,
+  toCompensationConflictCode,
   toGridConflictCode,
 } from './error-codes';
 import type { GridConflictCode } from './error-codes';
@@ -43,6 +44,7 @@ describe('toGridConflictCode: 内部 RejectCode/ConflictReason → 公開語彙'
       ['invalid-base-revision', 'revision-stale'],
       ['client-sequence-violation', 'sequence-violation'],
       ['duplicate-row', 'duplicate-row'],
+      ['permission-denied', 'permission-denied'], // DD-056 H11（サーバーの認可段の拒否）
     ];
     for (const [raw, expected] of cases) {
       expect(toGridConflictCode('rejected', raw)).toBe(expected);
@@ -68,6 +70,25 @@ describe('toGridConflictCode: 内部 RejectCode/ConflictReason → 公開語彙'
       toGridConflictCode('rejected', 'x'),
     ]);
     for (const code of produced) {
+      expect(GRID_CONFLICT_CODES).toContain(code);
+    }
+  });
+});
+
+describe('toCompensationConflictCode: Undo/Redo の補償 reject（DD-056 H11・Codex 設計レビュー P2-3）', () => {
+  it('認可段の拒否（permission-denied）は undo-blocked/redo-blocked より優先する', () => {
+    expect(toCompensationConflictCode('undo-blocked', 'permission-denied')).toBe('permission-denied');
+    expect(toCompensationConflictCode('redo-blocked', 'permission-denied')).toBe('permission-denied');
+  });
+
+  it('それ以外（OCC の stale・コードなし）は従来どおり undo-blocked/redo-blocked', () => {
+    expect(toCompensationConflictCode('undo-blocked', 'stale-cell-revision')).toBe('undo-blocked');
+    expect(toCompensationConflictCode('redo-blocked', 'stale-cell-revision')).toBe('redo-blocked');
+    expect(toCompensationConflictCode('undo-blocked', undefined)).toBe('undo-blocked');
+  });
+
+  it('結果は公開語彙集合に含まれる', () => {
+    for (const code of [toCompensationConflictCode('undo-blocked', 'permission-denied'), toCompensationConflictCode('redo-blocked', undefined)]) {
       expect(GRID_CONFLICT_CODES).toContain(code);
     }
   });

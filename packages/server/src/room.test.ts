@@ -281,3 +281,42 @@ describe('初期文書 document@0 の fresh join bootstrap（DD-026-1）', () =>
     expect(messagesOfType(empty.room.handleJoin(join('cB', 0)).outbound, 'bootstrap')).toHaveLength(0);
   });
 });
+
+describe('DD-056 H11: 認可の判定口（Room deps.authorize）', () => {
+  it('送信元の接続 ID が判定口へ渡り、拒否は送信元にだけ permission-denied を返す（他の接続へ配信しない）', () => {
+    const clock = createManualClock();
+    const sequencer = new Sequencer(freshSequencerState(COLUMNS), clock);
+    const calls: Array<{ connectionId: string; operationId: string }> = [];
+    let denied = new Set<string>();
+    const room = new Room(sequencer, {
+      clock,
+      idGenerator: createCounterIdGenerator(),
+      authorize: (env, connectionId) => {
+        calls.push({ connectionId, operationId: String(env.operationId) });
+        return !denied.has(connectionId);
+      },
+    });
+    const a = room.handleJoin(join('client-a')).connectionId;
+    const b = room.handleJoin(join('client-b')).connectionId;
+    denied = new Set([a]);
+
+    const rejected = room.handleMessage(a, {
+      type: 'submitOperation',
+      envelope: envelope({ clientId: 'client-a', clientSequence: 1, operationId: 'op-a', operation: insertRows(null, ['row-a']) }),
+    });
+    expect(rejected).toEqual([
+      { target: { kind: 'connection', connectionId: a }, message: { type: 'operationRejected', operationId: 'op-a', code: 'permission-denied', details: {} } },
+    ]);
+
+    const accepted = room.handleMessage(b, {
+      type: 'submitOperation',
+      envelope: envelope({ clientId: 'client-b', clientSequence: 1, operationId: 'op-b', operation: insertRows(null, ['row-b']) }),
+    });
+    expect(messagesOfType(accepted, 'operations')).toHaveLength(1);
+    expect(calls).toEqual([
+      { connectionId: a, operationId: 'op-a' },
+      { connectionId: b, operationId: 'op-b' },
+    ]);
+    expect(sequencer.currentRevision).toBe(1);
+  });
+});

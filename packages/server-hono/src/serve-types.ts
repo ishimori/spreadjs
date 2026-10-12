@@ -163,7 +163,10 @@ export interface ServeSubmitOptions {
   readonly documentId?: string;
 }
 
-/** reject コード（protocol-subset §3 と同一語彙）。 */
+/**
+ * reject コード（protocol-subset §3 と同一語彙）。`permission-denied` は認可フック（`authorizeOperation`・DD-056 H11）の拒否で、
+ * WebSocket 接続の操作にだけ返る（`ServerInstance.submit` は認可の判定対象外のため、submit の結果には現れない）。
+ */
 export type ServeRejectCode =
   | 'stale-cell-revision'
   | 'target-row-deleted'
@@ -172,7 +175,8 @@ export type ServeRejectCode =
   | 'unknown-column'
   | 'invalid-base-revision'
   | 'client-sequence-violation'
-  | 'duplicate-row';
+  | 'duplicate-row'
+  | 'permission-denied';
 
 /** `submit` の結果。reject は例外にせず結果で返す（durable 失敗・stop 後は Promise reject）。 */
 export type ServeSubmitResult =
@@ -271,3 +275,31 @@ export interface ServeAcceptedEvent {
  * 診断 `on-accepted-error`（warn）になり、受理・配信・永続化には影響しない。
  */
 export type ServeAcceptedHook = (event: ServeAcceptedEvent) => void | Promise<void>;
+
+// ---- H11: 操作ごとの書込の認可（DD-056）----
+
+/** `authorizeOperation` に渡る判定材料（DD-056 H11）。 */
+export interface ServeOperationAuthorizationRequest {
+  /** 操作の宛先文書（接続先の文書。クライアントの申告値ではない。複数文書 serve では文書ごとに正しい ID）。 */
+  readonly documentId: string;
+  /**
+   * 操作者。`authenticate` 指定時はサーバーが確定した actorId（申告値は使わない）。**未指定ならクライアントの申告値**
+   * （なりすませる）なので、役割で分ける判定に使うなら `authenticate` を指定すること。
+   */
+  readonly actorId: string;
+  /** 送信元クライアントの clientId（再接続で不変）。 */
+  readonly clientId: string;
+  /** 操作 ID（拒否された側の grid の `rejected` イベントの `conflict.operationId` と同じ値）。 */
+  readonly operationId: string;
+  /**
+   * 文書操作（setCells / insertRows / deleteRows）。参照したときに複製する（書き換えても受理される操作に影響しない。
+   * 参照しなければ複製のコストはかからない）。
+   */
+  readonly operation: ServeDocumentOperation;
+}
+
+/**
+ * 操作ごとの書込の認可フック（DD-056 H11）。`true` を返した操作だけを受理段へ進める。`true` 以外（false・undefined・Promise 等）と
+ * throw は拒否する（fail-closed）。**同期で速く**判定すること（sequencer の処理の途中で呼ばれる。DB を引く状態はメモリに写して使う）。
+ */
+export type ServeAuthorizeOperation = (request: ServeOperationAuthorizationRequest) => boolean;

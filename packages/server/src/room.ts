@@ -48,20 +48,28 @@ export interface Outbound {
 const DEFAULT_TTL_MILLIS = 15_000; // §9.3 初期値（Presence TTL 目安 15 秒）
 const PROTOCOL_VERSION = 1;
 
+/**
+ * 認可段（DD-056 H11）の判定口。接続 ID 付きで呼ばれ、true で受理段へ進める。接続 ID は Room が払い出す（クライアントは名乗れない）
+ * ため、サーバー起点の擬似接続を判定から外す等の区別に使える。sequencer の処理の途中（clientSequence 消費の後）で同期に呼ばれる。
+ */
+export type RoomOperationAuthorizer = (envelope: ClientOperationEnvelope, connectionId: string) => boolean;
+
 export class Room {
   private readonly sequencer: Sequencer;
   private readonly presence: PresenceRegistry;
   private readonly clock: Clock;
   private readonly idGenerator: IdGenerator;
+  private readonly authorize: RoomOperationAuthorizer | undefined;
   private readonly connections = new Map<string, { clientId: string }>();
   private durableBoundary: DurableBoundary | undefined;
 
   constructor(
     sequencer: Sequencer,
-    deps: { clock: Clock; idGenerator?: IdGenerator; ttlMillis?: number },
+    deps: { clock: Clock; idGenerator?: IdGenerator; ttlMillis?: number; authorize?: RoomOperationAuthorizer },
   ) {
     this.sequencer = sequencer;
     this.clock = deps.clock;
+    this.authorize = deps.authorize;
     this.idGenerator = deps.idGenerator ?? createCounterIdGenerator();
     this.presence = new PresenceRegistry({
       clock: deps.clock,
@@ -259,7 +267,12 @@ export class Room {
   }
 
   private handleSubmit(connectionId: string, envelope: ClientOperationEnvelope): Outbound[] {
-    const outcome = this.sequencer.submit(envelope);
+    const authorize = this.authorize;
+    // DD-056 H11: 認可の判定口へ送信元の接続 ID を束縛して sequencer の認可段（③'）へ渡す。未指定なら従来どおり素通り。
+    const outcome = this.sequencer.submit(
+      envelope,
+      authorize === undefined ? undefined : (env) => authorize(env, connectionId),
+    );
     switch (outcome.status) {
       case 'accepted':
         return [

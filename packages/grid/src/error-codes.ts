@@ -41,6 +41,7 @@ export const GRID_CONFLICT_CODES = [
   'row-count-invalid', // insertRows の count が 1 未満/非整数→実行前拒否（DD-021-1・submit なし）
   'row-delete-empty', // deleteRows の対象が空/全て非現存→実行前拒否（DD-021-1・submit なし）
   'value-not-allowed', // 選択式列（allowFreeText:false）へ editor 経路で非候補値を確定→未 submit（DD-027-1・submit なし・拒否値は診断へ）
+  'permission-denied', // サーバーの認可フック（server-hono authorizeOperation）が書込を拒否した（permission-denied・DD-056 H11）。Undo/Redo の補償操作でもこのコードを優先する
   'unknown', // 未知/未写像（前方互換フォールバック）
 ] as const;
 export type GridConflictCode = (typeof GRID_CONFLICT_CODES)[number];
@@ -69,6 +70,7 @@ const REJECT_CODE_MAP: Record<string, GridConflictCode> = {
   'invalid-base-revision': 'revision-stale',
   'client-sequence-violation': 'sequence-violation',
   'duplicate-row': 'duplicate-row',
+  'permission-denied': 'permission-denied', // DD-056 H11（サーバーの認可段の拒否）
 };
 
 /**
@@ -85,4 +87,16 @@ export function toGridConflictCode(reason: string, rawCode: string | undefined):
   // reason === 'rejected'（server 判定）: RejectCode を公開語彙へ写像する。
   const mapped = rawCode === undefined ? undefined : REJECT_CODE_MAP[rawCode];
   return mapped ?? 'unknown';
+}
+
+/**
+ * Undo/Redo の補償操作が server で reject されたときの公開コード（DD-056 H11・Codex 設計レビュー P2-3）。
+ * 補償の競合（OCC）は従来どおり `undo-blocked`／`redo-blocked` だが、**認可段の拒否（permission-denied）はそれを優先する**
+ * （consumer が「書込禁止で戻せなかった」を通常の補償競合と区別できるようにする。Undo 状態の後始末は呼び出し側で従来どおり行う）。
+ */
+export function toCompensationConflictCode(
+  block: 'undo-blocked' | 'redo-blocked',
+  rawCode: string | undefined,
+): GridConflictCode {
+  return rawCode === 'permission-denied' ? 'permission-denied' : block;
 }

@@ -78,7 +78,7 @@ import {
 import { decideRowStructureKey, rebaseRowIndex, resolveDeleteTargets } from './row-operations';
 import { createUndoController, decideUndoRedoKey } from './undo-stack';
 import type { UndoPatch } from './undo-stack';
-import { GridBootError, toGridConflictCode } from './error-codes';
+import { GridBootError, toCompensationConflictCode, toGridConflictCode } from './error-codes';
 import type { GridConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
@@ -1689,11 +1689,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
             // → 従来どおり cell-conflict 等へ写像して emit する（consumer は競合を従来語彙で受ける）。
             const block = undoCtrl.onRejected(event.entry.operationId);
             if (block !== undefined) {
-              diag.emit('warn', 'rejected', `code=${block} op=${String(event.entry.operationId)}`);
+              // DD-056 H11（Codex 設計レビュー P2-3）: 補償 op の認可拒否は undo-blocked/redo-blocked より permission-denied を優先する
+              // （エントリの除去＝Undo 状態の後始末は onRejected で済んでいる）。
+              const code = toCompensationConflictCode(block, event.entry.code);
+              diag.emit('warn', 'rejected', `code=${code} op=${String(event.entry.operationId)}`);
               emit({
                 type: 'rejected',
                 pendingCount: event.pendingCount,
-                conflict: { operationId: String(event.entry.operationId), reason: 'rejected', code: block },
+                conflict: { operationId: String(event.entry.operationId), reason: 'rejected', code },
               });
               return;
             }

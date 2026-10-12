@@ -48,6 +48,7 @@
 | `row-count-invalid` | クライアント実行前検査（DD-021-1・上限は Fable レビュー反映） | `insertRows` の `count` が **1〜100,000 の整数でない**（上限=SetCells セル数上限と同値の実行前ガード）。submit 前に拒否され `operationId` は空文字。単独モードは診断のみ |
 | `row-delete-empty` | クライアント実行前検査（DD-021-1） | `deleteRows` の対象が空/全て非現存（削除対象なし）。submit 前に拒否され `operationId` は空文字。単独モードは診断のみ |
 | `value-not-allowed` | クライアント editor 経路検査（DD-027-1） | 選択式列（`allowFreeText:false`）へ IME/textarea 確定経路で候補外の値を確定した。**未 submit**（文書無変更）で拒否され `operationId` は空文字。拒否値は診断（code=`value-not-allowed`）に含む。単独モードは診断のみ。paste/setData/リモート由来の非候補値は本検査を通らず保持される |
+| `permission-denied` | `permission-denied`（server の認可段・DD-056-1） | server-hono の `authorizeOperation` が書込を拒否した（受付締切後・確定後など）。送った側の画面は元に戻り、サーバーの revision・操作ログは進まない。**Undo／Redo の補償操作の拒否でも `undo-blocked`／`redo-blocked` より優先する**（`operationId` は補償 op の ID） |
 | `unknown` | 未写像/未知 | 上記いずれにも該当しない（前方互換フォールバック） |
 
 ## debug logging hook（`GridMountOptions.onDiagnostic`）
@@ -61,4 +62,7 @@ mount 本体へ波及しない。診断コード例: `boot-start` / `config-reso
 を配信する。接続単位の診断・汎用テレメトリ基盤は Stage 2（現状は `ServerInstance.connectionCount()` で代替）。
 その後に追加した server-hono の診断コード（一覧の正本は `ServeDiagnostic.code` の JSDoc）: `auth-rejected`（warn）/ `auth-error`（error）
 〔DD-026-2〕、`document-quarantined`（error）/ `document-unknown`（warn）/ `document-mismatch`（warn）〔DD-043〕、
-`on-accepted-error`（warn・`onAccepted` の throw／返した Promise の reject。受理・配信・永続化には影響しない）〔DD-049〕。
+`on-accepted-error`（warn・`onAccepted` の throw／返した Promise の reject。受理・配信・永続化には影響しない）〔DD-049〕、
+`operation-denied`（info・`authorizeOperation` が書込を拒否）/ `authorize-error`（error・フックの throw＝拒否）/
+`authorize-invalid-result`（error・true/false 以外〔Promise 等〕の戻り値・返した Promise の reject＝拒否）/
+`authorize-reentry`（error・フックの中から `submit`・`stop` を呼んだ＝何もせず reject）〔DD-056-1〕。

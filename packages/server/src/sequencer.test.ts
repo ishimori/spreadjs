@@ -280,3 +280,86 @@ describe('処理順の回帰防止（DA D3）— 順序入れ替えで F2/F3 が
     expect(wrongOrderRejectsDuplicate(1, cached, dupEnv)).toBe(true); // 誤順序なら reject（AC2 破綻）
   });
 });
+
+// ---- DD-056 H11: 認可段（③'）— 処理順・clientSequence の消費・拒否で状態を動かさない ----
+
+describe("DD-056 H11: 認可段（③'）", () => {
+  const cellA = (value: string) => setCells([{ rowId: row('row-1'), columnId: col('col-a'), value: str(value) }]);
+  const deny = (): boolean => false;
+  const allow = (): boolean => true;
+
+  it('拒否は permission-denied（details なし）。revision・operationLog・ackCache・文書は動かない', () => {
+    const seq = setup2Rows(); // currentRevision=2
+    const hashBefore = documentHash(seq.document);
+    const env = envelope({ clientId: 'cA', clientSequence: 1, operationId: 'denied', baseRevision: 2, operation: cellA('x') });
+    const rejected = expectRejected(seq.submit(env, deny));
+    expect(rejected.rejection).toEqual({ type: 'operationRejected', operationId: 'denied', code: 'permission-denied', details: {} });
+    expect(seq.currentRevision).toBe(2);
+    expect(seq.operationsSince(0).length).toBe(2);
+    expect(seq.ackedRevisionOf(env.operationId)).toBeUndefined(); // ackCache 非登録（reject と同じ＝再接続の突合せで「拒否済み」に分かれる）
+    expect(documentHash(seq.document)).toBe(hashBefore);
+  });
+
+  it('拒否でも clientSequence は消費する: 同じクライアントの次の操作（seq+1）は許可されれば受理される（sequence-violation にならない）', () => {
+    const seq = setup2Rows();
+    expectRejected(seq.submit(envelope({ clientId: 'cA', clientSequence: 1, operationId: 'd1', baseRevision: 2, operation: cellA('x') }), deny));
+    expect(seq.clientSequenceTable.get('cA')).toBe(1);
+    const next = seq.submit(envelope({ clientId: 'cA', clientSequence: 2, operationId: 'a2', baseRevision: 2, operation: cellA('y') }), allow);
+    expect(next.status).toBe('accepted');
+    expect(getCell(seq.document, row('row-1'), col('col-a'))?.value).toEqual(str('y'));
+  });
+
+  it('受理済み操作の再送は認可を呼ばずに同じ ACK を返す（禁止の前に受理した操作は禁止の後に再送されても受理のまま）', () => {
+    const seq = setup2Rows();
+    const env = envelope({ clientId: 'cA', clientSequence: 1, operationId: 'early', baseRevision: 2, operation: cellA('x') });
+    expect(seq.submit(env, allow).status).toBe('accepted'); // 禁止の前に受理
+    let called = 0;
+    const counting = (): boolean => {
+      called += 1;
+      return false; // 禁止の後
+    };
+    const resent = seq.submit(env, counting);
+    expect(resent.status).toBe('duplicate');
+    if (resent.status !== 'duplicate') throw new Error('unreachable');
+    expect(resent.ack).toEqual({ type: 'operationAck', operationId: 'early', revision: 3 });
+    expect(called).toBe(0);
+  });
+
+  it('clientSequence 違反・baseRevision 違反は認可より先に判定する（認可は呼ばれない）', () => {
+    const seq = setup2Rows();
+    let called = 0;
+    const counting = (): boolean => {
+      called += 1;
+      return false;
+    };
+    const gap = seq.submit(envelope({ clientId: 'cA', clientSequence: 2, operationId: 'gap', baseRevision: 2, operation: cellA('x') }), counting);
+    expect(expectRejected(gap).rejection.code).toBe('client-sequence-violation');
+    const ahead = seq.submit(envelope({ clientId: 'cA', clientSequence: 1, operationId: 'ahead', baseRevision: 99, operation: cellA('x') }), counting);
+    expect(expectRejected(ahead).rejection.code).toBe('invalid-base-revision');
+    expect(called).toBe(0);
+  });
+
+  it('認可は検証より先: 拒否中は検証違反（unknown-row）の操作も permission-denied になる。認可には envelope がそのまま渡る', () => {
+    const seq = setup2Rows();
+    const seen: ClientOperationEnvelope[] = [];
+    const recording = (env: ClientOperationEnvelope): boolean => {
+      seen.push(env);
+      return false;
+    };
+    const env = envelope({ clientId: 'cA', clientSequence: 1, operationId: 'ghost', baseRevision: 2, operation: setCells([{ rowId: row('no-such-row'), columnId: col('col-a'), value: str('x') }]) });
+    expect(expectRejected(seq.submit(env, recording)).rejection.code).toBe('permission-denied');
+    expect(seen).toEqual([env]);
+  });
+
+  it('許可なら従来どおり検証・適用へ進む（行の挿入・削除も同じ段を通る）', () => {
+    const seq = setup2Rows();
+    const kinds: string[] = [];
+    const recording = (env: ClientOperationEnvelope): boolean => {
+      kinds.push(env.operation.type);
+      return true;
+    };
+    expect(seq.submit(envelope({ clientId: 'cA', clientSequence: 1, operationId: 'i', baseRevision: 2, operation: insertRows(row('row-2'), ['row-3']) }), recording).status).toBe('accepted');
+    expect(seq.submit(envelope({ clientId: 'cA', clientSequence: 2, operationId: 'd', baseRevision: 3, operation: deleteRows([row('row-3')]) }), recording).status).toBe('accepted');
+    expect(kinds).toEqual(['insertRows', 'deleteRows']);
+  });
+});

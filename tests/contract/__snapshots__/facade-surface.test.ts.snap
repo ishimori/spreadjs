@@ -856,7 +856,7 @@ export type GridErrorCode = (typeof GRID_ERROR_CODES)[number];
  * クライアントが submit 前に拒否する実行前検査（range-too-large 等・DD-020-1）も同じ語彙で通知する
  * （実行前拒否は operationId が空文字＝submit されていない）。
  */
-export declare const GRID_CONFLICT_CODES: readonly ["cell-conflict", "row-unavailable", "column-unavailable", "revision-stale", "sequence-violation", "duplicate-row", "revalidation-failed", "dependency", "range-too-large", "paste-too-large", "paste-out-of-bounds", "undo-blocked", "redo-blocked", "row-anchor-unknown", "row-count-invalid", "row-delete-empty", "value-not-allowed", "unknown"];
+export declare const GRID_CONFLICT_CODES: readonly ["cell-conflict", "row-unavailable", "column-unavailable", "revision-stale", "sequence-violation", "duplicate-row", "revalidation-failed", "dependency", "range-too-large", "paste-too-large", "paste-out-of-bounds", "undo-blocked", "redo-blocked", "row-anchor-unknown", "row-count-invalid", "row-delete-empty", "value-not-allowed", "permission-denied", "unknown"];
 export type GridConflictCode = (typeof GRID_CONFLICT_CODES)[number];
 /**
  * boot 失敗を error phase の公開 code 付きで伝える内部エラー。mount-controller の boot が throw し、
@@ -871,6 +871,12 @@ export declare class GridBootError extends Error {
  * 公開 GridConflictCode へ写像する。未知 RejectCode は 'unknown'（前方互換）。
  */
 export declare function toGridConflictCode(reason: string, rawCode: string | undefined): GridConflictCode;
+/**
+ * Undo/Redo の補償操作が server で reject されたときの公開コード（DD-056 H11・Codex 設計レビュー P2-3）。
+ * 補償の競合（OCC）は従来どおり \`undo-blocked\`／\`redo-blocked\` だが、**認可段の拒否（permission-denied）はそれを優先する**
+ * （consumer が「書込禁止で戻せなかった」を通常の補償競合と区別できるようにする。Undo 状態の後始末は呼び出し側で従来どおり行う）。
+ */
+export declare function toCompensationConflictCode(block: 'undo-blocked' | 'redo-blocked', rawCode: string | undefined): GridConflictCode;
 
 // ==== packages/grid/src/format-rules.ts ====
 /**
@@ -1098,8 +1104,8 @@ export declare const NanairoSheetView: import("react").ForwardRefExoticComponent
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/server-hono の公開宣言 closure 1`] = `
 "// ==== packages/server-hono/src/index.ts ====
-import type { ServeAcceptedHook, ServeAuthenticate, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
-export type { ServeAcceptedCellChange, ServeAcceptedEvent, ServeAcceptedHook, ServeAcceptedOrigin, ServeAuthRequest, ServeAuthenticate, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
+import type { ServeAcceptedHook, ServeAuthenticate, ServeAuthorizeOperation, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
+export type { ServeAcceptedCellChange, ServeAcceptedEvent, ServeAcceptedHook, ServeAcceptedOrigin, ServeAuthRequest, ServeAuthenticate, ServeAuthorizeOperation, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationAuthorizationRequest, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
 /** 診断エントリの重大度（server-hono 診断 hook）。 */
 export type ServeDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 /** serve 診断エントリ（onDiagnostic opt-in 時のみ生成）。 */
@@ -1111,7 +1117,11 @@ export interface ServeDiagnostic {
      * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
      * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
      * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）／'on-accepted-error'（onAccepted が throw、
-     * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）。Cookie・トークン等の値は載せない。
+     * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）／'operation-denied'（authorizeOperation が
+     * 書込を拒否した・info・DD-056）／'authorize-error'（authorizeOperation が throw・拒否として扱う・error）／
+     * 'authorize-invalid-result'（authorizeOperation が true/false 以外〔Promise 等〕を返した・返した Promise が reject した・拒否として
+     * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop を呼んだ＝何もせず reject・error）。
+     * Cookie・トークン等の値は載せない。
      */
     readonly code: string;
     readonly message: string;
@@ -1165,6 +1175,22 @@ export interface ServeOptions {
      */
     readonly onAccepted?: ServeAcceptedHook;
     /**
+     * 操作ごとの書込の認可フック（DD-056 H11）。WebSocket 接続のクライアントから届いた文書操作（setCells / insertRows / deleteRows）
+     * 1 件ごとに、sequencer の**認可段**（operationId 冪等 → clientSequence → baseRevision → **認可** → 検証 → 適用）で同期に呼ばれる。
+     * \`true\` を返した操作だけを受理段へ進め、それ以外は \`permission-denied\` で拒否する。
+     * - **拒否しても止まらない**: 送信元にだけ拒否を返し（送った側の画面は元に戻る）、接続・サーバー・以降の書込は続く（fail-stop しない）。
+     *   clientSequence は消費するので、同じクライアントの次の操作は通常どおり判定される。revision・操作ログ・\`onAccepted\` は動かない。
+     * - **呼ばれない**: 受理済み操作の再送（同じ ACK を返す＝禁止の前に受理した操作は禁止の後に再送されても受理のまま）・
+     *   clientSequence／baseRevision の違反・\`ServerInstance.submit\`（サーバー起点は判定しない）・seed／\`initialDocument\`。
+     * - **fail-closed**: \`true\`（厳密一致）以外の戻り値と throw は拒否（診断 \`authorize-error\`／\`authorize-invalid-result\`）。Promise は待たずに
+     *   拒否し、その reject も捕捉する。**同期で速く**判定すること（DB を引く状態は consumer がメモリに写す）。
+     * - **再入しない**: フックの中から \`submit\`・\`stop\` を呼ぶと、何もせず Promise reject する（sequencer の処理の途中に投入させない。
+     *   診断 \`authorize-reentry\`。await しなくても未捕捉 rejection で serve を落とさない）。
+     * - \`actorId\` が信頼できるのは \`authenticate\` 指定時だけ。拒否した操作を記録したいときは、フックの中で false を返すときに積む。
+     * - 判定を変えた後に認可段へ届いた操作から効く（変えた時点で永続化待ちだった受理済みの操作は有効のまま）。
+     */
+    readonly authorizeOperation?: ServeAuthorizeOperation;
+    /**
      * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止・認証拒否の診断エントリが配信される。
      * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
      */
@@ -1202,9 +1228,10 @@ export interface ServerInstance {
      * 解決する。envelope は \`clientId: 'server'\`（予約）・\`actorId: options.actorId\`。利用者の Undo 対象にならない。
      * reject（OCC 等）は結果で返す。\`changes\` 空・\`actorId\` 空・durable 失敗・stop 後は Promise reject（同期 throw しない）。
      * DD-043: \`options.documentId\` で投入先の文書を指定する（未指定は既定文書・serve していない ID は Promise reject）。
+     * DD-056: \`authorizeOperation\` の判定対象外（サーバー起点は常に受理段へ進む）。\`authorizeOperation\` の中から呼ぶと Promise reject。
      */
     submit(operation: ServeSetCellsInput, options: ServeSubmitOptions): Promise<ServeSubmitResult>;
-    /** サーバーを停止し接続・永続化ハンドルを解放する。 */
+    /** サーバーを停止し接続・永続化ハンドルを解放する。\`authorizeOperation\` の中から呼ぶと Promise reject（DD-056）。 */
     stop(): Promise<void>;
 }
 /** 公開 API バージョン（Experimental 0.x・ADR-0015）。 */
@@ -1357,8 +1384,11 @@ export interface ServeSubmitOptions {
      */
     readonly documentId?: string;
 }
-/** reject コード（protocol-subset §3 と同一語彙）。 */
-export type ServeRejectCode = 'stale-cell-revision' | 'target-row-deleted' | 'unknown-anchor' | 'unknown-row' | 'unknown-column' | 'invalid-base-revision' | 'client-sequence-violation' | 'duplicate-row';
+/**
+ * reject コード（protocol-subset §3 と同一語彙）。\`permission-denied\` は認可フック（\`authorizeOperation\`・DD-056 H11）の拒否で、
+ * WebSocket 接続の操作にだけ返る（\`ServerInstance.submit\` は認可の判定対象外のため、submit の結果には現れない）。
+ */
+export type ServeRejectCode = 'stale-cell-revision' | 'target-row-deleted' | 'unknown-anchor' | 'unknown-row' | 'unknown-column' | 'invalid-base-revision' | 'client-sequence-violation' | 'duplicate-row' | 'permission-denied';
 /** \`submit\` の結果。reject は例外にせず結果で返す（durable 失敗・stop 後は Promise reject）。 */
 export type ServeSubmitResult = {
     readonly status: 'accepted';
@@ -1448,5 +1478,29 @@ export interface ServeAcceptedEvent {
  * 診断 \`on-accepted-error\`（warn）になり、受理・配信・永続化には影響しない。
  */
 export type ServeAcceptedHook = (event: ServeAcceptedEvent) => void | Promise<void>;
+/** \`authorizeOperation\` に渡る判定材料（DD-056 H11）。 */
+export interface ServeOperationAuthorizationRequest {
+    /** 操作の宛先文書（接続先の文書。クライアントの申告値ではない。複数文書 serve では文書ごとに正しい ID）。 */
+    readonly documentId: string;
+    /**
+     * 操作者。\`authenticate\` 指定時はサーバーが確定した actorId（申告値は使わない）。**未指定ならクライアントの申告値**
+     * （なりすませる）なので、役割で分ける判定に使うなら \`authenticate\` を指定すること。
+     */
+    readonly actorId: string;
+    /** 送信元クライアントの clientId（再接続で不変）。 */
+    readonly clientId: string;
+    /** 操作 ID（拒否された側の grid の \`rejected\` イベントの \`conflict.operationId\` と同じ値）。 */
+    readonly operationId: string;
+    /**
+     * 文書操作（setCells / insertRows / deleteRows）。参照したときに複製する（書き換えても受理される操作に影響しない。
+     * 参照しなければ複製のコストはかからない）。
+     */
+    readonly operation: ServeDocumentOperation;
+}
+/**
+ * 操作ごとの書込の認可フック（DD-056 H11）。\`true\` を返した操作だけを受理段へ進める。\`true\` 以外（false・undefined・Promise 等）と
+ * throw は拒否する（fail-closed）。**同期で速く**判定すること（sequencer の処理の途中で呼ばれる。DB を引く状態はメモリに写して使う）。
+ */
+export type ServeAuthorizeOperation = (request: ServeOperationAuthorizationRequest) => boolean;
 "
 `;

@@ -7,6 +7,7 @@
 // DD-026: consumer 統合の 3 つの口（U1 永続化ストアの差し替え・U2 認証フック・U3 サーバー起点操作）を公開型
 // （./serve-types・内部 package 非参照）で追加した。
 // DD-049: 受理通知フック（H2・onAccepted）を追加した。
+// DD-056: 操作ごとの書込の認可（H11・authorizeOperation）を追加した。
 
 import { adaptOpLogStore, adaptSnapshotStore } from './serve-adapters';
 import { startServer } from './server';
@@ -16,6 +17,7 @@ import type { StartDocumentConfig, StartDocumentsOptions } from './server';
 import type {
   ServeAcceptedHook,
   ServeAuthenticate,
+  ServeAuthorizeOperation,
   ServeDocumentConfig,
   ServeDocuments,
   ServeInitialDocument,
@@ -34,6 +36,7 @@ export type {
   ServeAcceptedOrigin,
   ServeAuthRequest,
   ServeAuthenticate,
+  ServeAuthorizeOperation,
   ServeCellScalar,
   ServeDeleteRowsOperation,
   ServeDocumentConfig,
@@ -46,6 +49,7 @@ export type {
   ServeInsertRowsOperation,
   ServeOpLogReadResult,
   ServeOpLogStore,
+  ServeOperationAuthorizationRequest,
   ServeOperationEnvelope,
   ServePersistedSnapshot,
   ServeQuarantinedDocument,
@@ -70,7 +74,11 @@ export interface ServeDiagnostic {
    * 'auth-error'（authenticate が throw＝500 拒否・error）／'document-quarantined'（起動時の復旧失敗で文書を serve から
    * 外した・error・DD-043）／'document-unknown'（serve していない documentId への接続・/config を 404 で拒否・warn）／
    * 'document-mismatch'（join の申告 documentId が接続先の文書と不一致・warn）／'on-accepted-error'（onAccepted が throw、
-   * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）。Cookie・トークン等の値は載せない。
+   * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）／'operation-denied'（authorizeOperation が
+   * 書込を拒否した・info・DD-056）／'authorize-error'（authorizeOperation が throw・拒否として扱う・error）／
+   * 'authorize-invalid-result'（authorizeOperation が true/false 以外〔Promise 等〕を返した・返した Promise が reject した・拒否として
+   * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop を呼んだ＝何もせず reject・error）。
+   * Cookie・トークン等の値は載せない。
    */
   readonly code: string;
   readonly message: string;
@@ -126,6 +134,22 @@ export interface ServeOptions {
    */
   readonly onAccepted?: ServeAcceptedHook;
   /**
+   * 操作ごとの書込の認可フック（DD-056 H11）。WebSocket 接続のクライアントから届いた文書操作（setCells / insertRows / deleteRows）
+   * 1 件ごとに、sequencer の**認可段**（operationId 冪等 → clientSequence → baseRevision → **認可** → 検証 → 適用）で同期に呼ばれる。
+   * `true` を返した操作だけを受理段へ進め、それ以外は `permission-denied` で拒否する。
+   * - **拒否しても止まらない**: 送信元にだけ拒否を返し（送った側の画面は元に戻る）、接続・サーバー・以降の書込は続く（fail-stop しない）。
+   *   clientSequence は消費するので、同じクライアントの次の操作は通常どおり判定される。revision・操作ログ・`onAccepted` は動かない。
+   * - **呼ばれない**: 受理済み操作の再送（同じ ACK を返す＝禁止の前に受理した操作は禁止の後に再送されても受理のまま）・
+   *   clientSequence／baseRevision の違反・`ServerInstance.submit`（サーバー起点は判定しない）・seed／`initialDocument`。
+   * - **fail-closed**: `true`（厳密一致）以外の戻り値と throw は拒否（診断 `authorize-error`／`authorize-invalid-result`）。Promise は待たずに
+   *   拒否し、その reject も捕捉する。**同期で速く**判定すること（DB を引く状態は consumer がメモリに写す）。
+   * - **再入しない**: フックの中から `submit`・`stop` を呼ぶと、何もせず Promise reject する（sequencer の処理の途中に投入させない。
+   *   診断 `authorize-reentry`。await しなくても未捕捉 rejection で serve を落とさない）。
+   * - `actorId` が信頼できるのは `authenticate` 指定時だけ。拒否した操作を記録したいときは、フックの中で false を返すときに積む。
+   * - 判定を変えた後に認可段へ届いた操作から効く（変えた時点で永続化待ちだった受理済みの操作は有効のまま）。
+   */
+  readonly authorizeOperation?: ServeAuthorizeOperation;
+  /**
    * 診断ログ hook（opt-in・既定無出力・最小）。指定すると serve 起動/停止・認証拒否の診断エントリが配信される。
    * 未指定なら診断は生成されない。汎用テレメトリ基盤は Stage 2（接続単位の診断は現状 connectionCount() で代替）。
    */
@@ -164,9 +188,10 @@ export interface ServerInstance {
    * 解決する。envelope は `clientId: 'server'`（予約）・`actorId: options.actorId`。利用者の Undo 対象にならない。
    * reject（OCC 等）は結果で返す。`changes` 空・`actorId` 空・durable 失敗・stop 後は Promise reject（同期 throw しない）。
    * DD-043: `options.documentId` で投入先の文書を指定する（未指定は既定文書・serve していない ID は Promise reject）。
+   * DD-056: `authorizeOperation` の判定対象外（サーバー起点は常に受理段へ進む）。`authorizeOperation` の中から呼ぶと Promise reject。
    */
   submit(operation: ServeSetCellsInput, options: ServeSubmitOptions): Promise<ServeSubmitResult>;
-  /** サーバーを停止し接続・永続化ハンドルを解放する。 */
+  /** サーバーを停止し接続・永続化ハンドルを解放する。`authorizeOperation` の中から呼ぶと Promise reject（DD-056）。 */
   stop(): Promise<void>;
 }
 
@@ -203,6 +228,7 @@ export async function serve(options: ServeOptions = {}): Promise<ServerInstance>
     initialDocument: options.initialDocument,
     authenticate: options.authenticate,
     onAccepted: options.onAccepted,
+    authorizeOperation: options.authorizeOperation,
     diagnostics: onDiagnostic !== undefined ? diag : undefined,
     documents: options.documents !== undefined ? adaptDocuments(options.documents) : undefined,
   });
@@ -215,10 +241,9 @@ export async function serve(options: ServeOptions = {}): Promise<ServerInstance>
     quarantined: running.quarantined,
     connectionCount: (documentId) => running.connectionCount(documentId),
     submit: (operation, submitOptions) => running.submit(operation, submitOptions.actorId, submitOptions.documentId),
-    stop: async () => {
-      await running.close();
-      diag('info', 'serve-stopped', `stopped ${running.url}`);
-    },
+    // 停止の診断（serve-stopped）は running.close() が出す。ここで await して包むと、認可フックの中からの stop が返す
+    // 「未捕捉にしない」reject 済み Promise から新しい未捕捉の Promise を作ってしまうため、そのまま返す（DD-056）。
+    stop: () => running.close(),
   };
 }
 

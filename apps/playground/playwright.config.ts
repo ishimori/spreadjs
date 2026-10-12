@@ -26,6 +26,11 @@ const WS_PORT = 8799;
 // 文書構成が違うため別プロセスで立てる。multi-document.spec.ts の WS_ORIGIN_MULTI と一致させること。
 const MULTI_DOC_WS_PORT = 8801;
 
+// DD-056 H11 認可フック E2E 専用の WS サーバーポートと、その書込禁止の制御口ポート（dev:authorize）。
+// authorize-operation.spec.ts の WS_ORIGIN_AUTHORIZE・CONTROL_ORIGIN と一致させること。
+const AUTHORIZE_WS_PORT = 8803;
+const AUTHORIZE_CONTROL_PORT = 8804;
+
 // 統合 E2E の WS サーバーは @nanairo-sheet/server-hono（DD-016 で collaboration-server を昇華）。
 const serverHonoDir = fileURLToPath(new URL('../../packages/server-hono', import.meta.url));
 
@@ -80,6 +85,17 @@ export default defineConfig({
       cwd: serverHonoDir,
       env: { PORT: String(MULTI_DOC_WS_PORT) },
       url: `http://127.0.0.1:${MULTI_DOC_WS_PORT}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      stdout: 'ignore',
+      stderr: 'pipe',
+    },
+    {
+      // DD-056 H11 認可フック E2E 用サーバー（authorizeOperation＋書込禁止の制御口）。制御口の起動を待てば serve も起動済み。
+      command: 'npm run dev:authorize',
+      cwd: serverHonoDir,
+      env: { PORT: String(AUTHORIZE_WS_PORT), CONTROL_PORT: String(AUTHORIZE_CONTROL_PORT) },
+      url: `http://127.0.0.1:${AUTHORIZE_CONTROL_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       stdout: 'ignore',

@@ -206,6 +206,41 @@ async function recalc(event: ServeAcceptedEvent): Promise<void> {
 - **失敗と待ち合わせ**: hook の戻り値は待たれない（fire-and-forget）。throw・reject は診断 `on-accepted-error`（warn）になり、
   受理・配信・永続化には影響しない。`server.submit` の起点では hook の後に submit の Promise が解決する。
 
+## 3e. 操作ごとに書込を拒否する（`authorizeOperation`・DD-056）
+
+受付締切・版の確定のあとに届いた書込（遅れて届いた入力・表示制御を回り込んだ入力）を、**サーバーで拒否**できる。
+拒否してもサーバーは止まらず（fail-stop しない）、送った側の画面だけが元に戻る（grid の `rejected`・`code: 'permission-denied'`）。
+状態（どの文書が締め切られたか等）は consumer が持ち、フックは操作ごとに同期で `true`（通す）／`false`（拒否）を返す。
+
+```ts
+import { serve } from '@nanairo-sheet/server-hono';
+
+const closedForDepartments = new Set<string>(); // 受付締切中の文書（DB の状態をメモリに写す）
+const confirmed = new Set<string>();            // 確定済みの文書
+
+const server = await serve({
+  documents,                                     // 3c の複数文書構成
+  authenticate,                                  // 3b。actorId をサーバーが確定する（役割で分けるなら必須）
+  authorizeOperation: ({ documentId, actorId }) => {
+    if (confirmed.has(documentId)) return false;                                   // 確定後は全員拒否
+    if (closedForDepartments.has(documentId) && !isStrategy(actorId)) return false; // 締切後は部署担当だけ拒否
+    return true;
+  },
+});
+```
+
+- **呼ばれる時点**: WebSocket 接続から届いた文書操作（setCells / insertRows / deleteRows）1 件ごと。sequencer の処理順
+  「operationId 冪等 → clientSequence → baseRevision → **認可** → 検証 → 適用」の認可段で呼ばれる。
+- **呼ばれない**: 受理済み操作の再送（禁止の前に受理した操作は禁止の後に再送されても受理のまま）・`server.submit`
+  （サーバー起点は判定しない）・seed／`initialDocument`。
+- **fail-closed**: `true` 以外の戻り値（Promise を含む）と throw は拒否（診断 `authorize-invalid-result`／`authorize-error`）。
+  **同期で速く**判定すること（DB を引く状態はメモリに写す）。拒否のたびに診断 `operation-denied`（info）。
+- **してはいけないこと**: フックの中から `server.submit`・`server.stop` を呼ぶ（何もせず reject・診断 `authorize-reentry`）。
+- **拒否した入力を残す**: 締切後に届いた入力を「未反映」として履歴に残したいときは、`false` を返すときに `request.operation`
+  （setCells の値など・複製）を記録キューへ積む（書込は非同期で）。
+- **注意**: `authenticate` を指定しないと `actorId` はクライアントの申告値（なりすませる）。判定を変えた時点で永続化待ちだった
+  受理済みの操作は有効なまま永続化される（判定の切り替えは、その後に届いた操作から効く）。
+
 ## 4. mount（グリッド）と日本語入力
 
 **size 済みの container**（幅・高さを持つ要素）へ mount する。`serverUrl` は必須。

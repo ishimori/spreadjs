@@ -21,7 +21,9 @@ export type RejectCode =
   | 'unknown-column'
   | 'invalid-base-revision'
   | 'client-sequence-violation'
-  | 'duplicate-row';
+  | 'duplicate-row'
+  // DD-056 H11: サーバーの認可段（sequencer ③'）が書込を拒否した。protocolVersion は据え置き（decode は任意の文字列を受ける＝追加は互換）。
+  | 'permission-denied';
 
 /** reject の details。code ごとに使うフィールドが異なる最小構造（any 不使用）。 */
 export interface RejectDetails {

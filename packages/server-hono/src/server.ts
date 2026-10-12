@@ -10,6 +10,8 @@
 // U3 サーバー起点操作（submit＝擬似接続 'server' として通常受理経路を通す）を本層に追加した。
 // DD-049 H2: 受理通知フック（onAccepted）を追加した。RoomBridge が受理 Outbound を dispatch した直後に fire-and-forget で呼ぶ
 // （Room/Sequencer/PersistentRoom は無改変・前値は copy-on-write の権威文書の参照を Room 投入直前に捕捉して求める）。
+// DD-056 H11: 操作ごとの書込の認可（authorizeOperation）を追加した。consumer のフックを Room の判定口へ包み、sequencer の認可段
+// （③'・clientSequence 消費の後・検証の前）で同期に判定する（拒否は permission-denied・fail-closed・サーバー起点 submit は判定しない）。
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -56,6 +58,7 @@ import type {
   Outbound,
   OutboundTarget,
   RecoveryReport,
+  RoomOperationAuthorizer,
   SequencerState,
   SnapshotData,
   SnapshotStore,
@@ -83,8 +86,11 @@ import type {
   ServeAcceptedHook,
   ServeAcceptedOrigin,
   ServeAuthenticate,
+  ServeAuthorizeOperation,
+  ServeDocumentOperation,
   ServeIdentity,
   ServeInitialDocument,
+  ServeOperationAuthorizationRequest,
   ServeSetCellsInput,
   ServeSubmitResult,
 } from './serve-types';
@@ -125,6 +131,7 @@ export interface StartServerOptions {
   initialDocument?: (() => Promise<ServeInitialDocument> | ServeInitialDocument) | undefined; // DD-026-1: 復旧できる状態が無いときの初期文書（document@0）
   authenticate?: ServeAuthenticate | undefined; // DD-026-2: upgrade 時の認証フック（null=401・throw=500）
   onAccepted?: ServeAcceptedHook | undefined; // DD-049 H2: 受理通知（durable・配信の後に fire-and-forget・失敗は診断 on-accepted-error）
+  authorizeOperation?: ServeAuthorizeOperation | undefined; // DD-056 H11: 操作ごとの書込の認可（sequencer の認可段 ③'・fail-closed）
   diagnostics?: DiagnosticSink | undefined; // serve() の onDiagnostic への橋渡し
   documents?: StartDocumentsOptions | undefined; // DD-043: 複数文書 serve（単一文書オプション群とは排他）
 }
@@ -733,6 +740,131 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
 }
 
+/**
+ * 認可フックの実行中の目印（DD-056 H11・serve 全体で 1 つ）。フックは sequencer の処理の途中（clientSequence 消費の後・適用の前）で
+ * 同期に呼ばれる。その中から同じ serve へ投入・停止させると、PersistentRoom が呼び出し前後の revision 差で永続化対象を決めるため、
+ * 再入した受理を二重に永続化しうる（oplog の revision 重複＝復旧不能）。目印が立っている間は ServerInstance の操作を reject する。
+ */
+interface AuthorizationGuard {
+  depth: number;
+}
+
+/**
+ * 認可フックの中から呼ばれたら reject する Promise を返す（呼んでよい状況なら undefined・DD-056 H11）。
+ * 返す Promise には SDK 側で空の rejection ハンドラを付け、診断 `authorize-reentry`（error）を出す: フックの中で呼んで await しない
+ * consumer の誤りでも、未捕捉 rejection で serve 全体（全文書）を落とさない（他のフックの失敗と同じく封じ込める）。
+ * 呼び出し側は従来どおり `await`／`.catch` で reject を受け取れる。
+ */
+function rejectInsideAuthorization(
+  guard: AuthorizationGuard,
+  what: string,
+  diagnostics: DiagnosticSink | undefined,
+): Promise<never> | undefined {
+  if (guard.depth === 0) {
+    return undefined;
+  }
+  const message = `${what}: authorizeOperation の中からは呼べません（sequencer の処理の途中に再入させない・DD-056）`;
+  reportServeProblem(diagnostics, 'error', 'authorize-reentry', message);
+  const rejected = Promise.reject(new Error(message));
+  rejected.catch(() => {}); // 未捕捉 rejection にしない（上の診断で可視化済み）
+  return rejected;
+}
+
+/** serve の診断を出す（sink 未指定・sink の失敗でも黙らせず console へ。どんな値でも throw しない・P08）。 */
+function reportServeProblem(
+  diagnostics: DiagnosticSink | undefined,
+  level: 'warn' | 'error',
+  code: string,
+  message: string,
+): void {
+  try {
+    if (diagnostics !== undefined) {
+      diagnostics(level, code, message);
+      return;
+    }
+  } catch {
+    // 下の console へ出す
+  }
+  console.error(`collaboration-server: [${code}] ${message}`);
+}
+
+/**
+ * consumer の認可フックを Room の判定口へ包む（DD-056 H11・contract.md §3.2）。
+ * - サーバー起点の擬似接続（`ServerInstance.submit`）は判定しない（接続 ID はサーバーが払い出すためクライアントは名乗れない）。
+ * - `true` の厳密一致だけを許可とし、throw・`true`／`false` 以外は拒否して診断へ出す（fail-closed）。
+ * - 返された thenable は待たずに拒否し、その失敗は捕捉する（未捕捉 rejection でプロセスを落とさない・Codex 設計レビュー P1-1）。
+ * - 判定材料の `operation` は参照されたときに複製する（書き換えても受理される操作に影響しない）。
+ */
+function createOperationAuthorizer(
+  hook: ServeAuthorizeOperation,
+  documentId: string,
+  guard: AuthorizationGuard,
+  diagnostics: DiagnosticSink | undefined,
+): RoomOperationAuthorizer {
+  return (envelope, connectionId) => {
+    if (connectionId === SERVER_CONNECTION_ID) {
+      return true;
+    }
+    const label =
+      `documentId=${documentId} actorId=${envelope.actorId} operationId=${String(envelope.operationId)} ` +
+      `operation=${envelope.operation.type}`;
+    let result: unknown;
+    let threw = false;
+    guard.depth += 1;
+    try {
+      result = hook(buildAuthorizationRequest(documentId, envelope));
+    } catch (error) {
+      threw = true;
+      reportServeProblem(diagnostics, 'error', 'authorize-error', `authorizeOperation が throw しました（拒否として扱う・${label}）: ${describeThrown(error)}`);
+    } finally {
+      guard.depth -= 1;
+    }
+    if (!threw && result === true) {
+      return true;
+    }
+    if (!threw && result !== false) {
+      reportInvalidAuthorizationResult(result, label, diagnostics);
+    }
+    diagnostics?.('info', 'operation-denied', `authorizeOperation が書込を拒否しました（permission-denied・${label}）`);
+    return false;
+  };
+}
+
+/** 認可フックの不正な戻り値（boolean 以外）を診断へ出す。thenable は失敗も捕捉する（DD-056 H11・Codex 設計レビュー P1-1）。 */
+function reportInvalidAuthorizationResult(result: unknown, label: string, diagnostics: DiagnosticSink | undefined): void {
+  if (!isPromiseLike(result)) {
+    reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が boolean 以外（${typeof result}）を返しました（拒否として扱う・${label}）`);
+    return;
+  }
+  reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が Promise を返しました（同期で true/false を返すこと。待たずに拒否する・${label}）`);
+  try {
+    result.then(undefined, (error: unknown) => {
+      reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が返した Promise が reject しました（判定は拒否済み・${label}）: ${describeThrown(error)}`);
+    });
+  } catch (error) {
+    // then 自体が throw する thenable（自作の不正な実装）でもサーバーを止めない。
+    reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が返した thenable の then が throw しました（${label}）: ${describeThrown(error)}`);
+  }
+}
+
+/** 認可フックへ渡す判定材料（DD-056 H11）。`operation` は参照されたときに 1 度だけ複製する。 */
+function buildAuthorizationRequest(
+  documentId: string,
+  envelope: ClientOperationEnvelope,
+): ServeOperationAuthorizationRequest {
+  let copied: ServeDocumentOperation | undefined;
+  return {
+    documentId,
+    actorId: envelope.actorId,
+    clientId: envelope.clientId,
+    operationId: String(envelope.operationId),
+    get operation(): ServeDocumentOperation {
+      copied ??= structuredClone(envelope.operation);
+      return copied;
+    },
+  };
+}
+
 /** 1 文書分の起動仕様（内部・DD-043）。単一文書構成は N=1 のこの仕様へ写像する。 */
 interface DocumentSpec {
   documentId: string;
@@ -809,11 +941,15 @@ async function createDocumentRuntime(
     snapshotIntervalOps?: number | undefined;
     diagnostics?: DiagnosticSink | undefined;
     onAccepted?: ServeAcceptedHook | undefined;
+    /** 操作ごとの書込の認可（DD-056 H11）。未指定なら認可段は素通り。 */
+    authorizeOperation?: ServeAuthorizeOperation | undefined;
+    /** 認可フックの実行中の目印（serve 全体で共有・DD-056 H11）。 */
+    authorizationGuard: AuthorizationGuard;
     /** serve 全体で共有する submitOperation の配信ループ（DD-049 Codex 第 2 回 P2）。 */
     deliveryLoop: SubmitDeliveryLoop;
   },
 ): Promise<DocumentRuntime> {
-  const { clock, ttlMillis, diagnostics, onAccepted, deliveryLoop } = deps;
+  const { clock, ttlMillis, diagnostics, onAccepted, deliveryLoop, authorizeOperation, authorizationGuard } = deps;
   const documentId = spec.documentId;
   const columnOrderStrings = spec.columnOrder;
   const columnOrder = columnOrderStrings.map((c) => createColumnId(c));
@@ -874,6 +1010,10 @@ async function createDocumentRuntime(
       clock,
       idGenerator: { next: () => randomUUID() }, // connectionId は実 UUID
       ttlMillis,
+      // DD-056 H11: consumer の認可フックを sequencer の認可段（③'）へ。seed（下の seedInitialRows）は Room を通らないため判定しない。
+      ...(authorizeOperation !== undefined
+        ? { authorize: createOperationAuthorizer(authorizeOperation, documentId, authorizationGuard, diagnostics) }
+        : {}),
     });
     // fresh（復元でも初期文書でも restoreFrom でもない）ときだけ seed する。永続化有効時は seed op を durable に oplog へ追記し、
     // 次回再起動の復旧で seed 済み文書を再現できるようにする（seed が oplog に無いと edit の baseRevision が破綻する）。
@@ -1064,12 +1204,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   const clock: Clock = { now: () => Date.now() }; // アダプター層のみ実クロック（指示 1）
   // DD-005 統合データセット指定時は列順・シードを 50,000行×200列へ切り替える（既存の小規模デモとは排他）。
   const datasetConfig = resolveDataset(options.integrationDataset);
+  // DD-056 H11: 認可フックの実行中の目印（serve 全体で 1 つ）。フックの中からの submit・stop を reject する。
+  const authorizationGuard: AuthorizationGuard = { depth: 0 };
   const runtimeDeps = {
     clock,
     ttlMillis,
     snapshotIntervalOps: options.snapshotIntervalOps,
     diagnostics,
     onAccepted: options.onAccepted,
+    authorizeOperation: options.authorizeOperation,
+    authorizationGuard,
     // DD-049（Codex 第 2 回 P2）: 全文書の submitOperation 配信を 1 本のループへ直列化する（onAccepted を入れ子にしない）。
     deliveryLoop: new SubmitDeliveryLoop(),
   };
@@ -1287,6 +1431,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   let closed = false;
   /** サーバー起点 SetCells（DD-026-3）。DD-043: `documentId` 未指定は既定文書、serve していない ID は reject。 */
   const submit = (operation: ServeSetCellsInput, actorId: string, documentId?: string): Promise<ServeSubmitResult> => {
+    const insideAuthorization = rejectInsideAuthorization(authorizationGuard, 'submit', diagnostics);
+    if (insideAuthorization !== undefined) {
+      return insideAuthorization; // DD-056 H11: 認可フックの中からの投入は sequencer へ再入させない
+    }
     if (closed) {
       return Promise.reject(new Error('submit: server stopped'));
     }
@@ -1315,8 +1463,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     recovery: runtimes.get(defaultDocumentId)?.recovery,
     submit,
     close: () => {
+      const insideAuthorization = rejectInsideAuthorization(authorizationGuard, 'stop', diagnostics);
+      if (insideAuthorization !== undefined) {
+        return insideAuthorization; // DD-056 H11: 認可フックの中から止めさせない（処理中の受理の永続化を壊さない）
+      }
       closed = true;
-      return closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets);
+      // 停止の診断はここで出す（serve() の stop が await で包んで新しい Promise を作ると、上の reject 済み Promise の
+      // 「未捕捉にしない」処理が効かなくなるため、serve() 側は本 Promise をそのまま返す・DD-056）。
+      return closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets).then(() => {
+        diagnostics?.('info', 'serve-stopped', `stopped ${url}`);
+      });
     },
   };
 }

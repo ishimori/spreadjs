@@ -25,6 +25,33 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [0.1.0-alpha.11] - 2026-10-12
+
+### Added
+
+- **server-hono `authorizeOperation`（操作ごとの書込の認可・DD-056-1・広島空港 H11）**: WebSocket 接続から届いた文書操作
+  （setCells / insertRows / deleteRows）を、sequencer の新しい**認可段**（operationId 冪等 → clientSequence → baseRevision →
+  **認可** → 検証 → 適用）で consumer のフックに判定させる新しい serve オプション。`true` を返した操作だけを受理し、それ以外は
+  新しい拒否コード **`permission-denied`** で送信元にだけ拒否を返す。**拒否してもサーバーは止まらない**（fail-stop しない・接続も
+  切らない）。clientSequence は消費するため、同じクライアントの次の操作は通常どおり判定される。revision・操作ログ・`onAccepted` は
+  動かない。受理済み操作の再送・`ServerInstance.submit`（サーバー起点）・seed は判定しない。`true` 以外の戻り値（Promise を含む）と
+  throw は拒否（fail-closed・返された Promise の reject も捕捉する）。フックの中からの `submit`・`stop` は何もせず reject する
+  （sequencer の処理の途中に再入させない）。公開型 `ServeOperationAuthorizationRequest`・`ServeAuthorizeOperation` を追加し、
+  `ServeRejectCode` に `'permission-denied'` を足した。診断コード `operation-denied`（info）・`authorize-error`・
+  `authorize-invalid-result`・`authorize-reentry`（error）を追加。
+- **grid 公開競合コード `permission-denied`（DD-056-1）**: サーバーの認可段の拒否を `rejected` イベントの `conflict.code` で
+  `permission-denied` として通知する（送った側の画面は既存の reject と同じく元に戻る）。Undo／Redo の補償操作が認可で拒否された
+  場合も `undo-blocked`／`redo-blocked` より `permission-denied` を優先する。
+- protocol: `RejectCode` に `'permission-denied'` を追加（protocolVersion は 1 のまま。旧クライアントは未知のコードとして
+  通常の巻き戻し＋`conflict.code: 'unknown'` になる）。
+- 公開 `.d.ts` snapshot の差分は追加のみ（`GridConflictCode` の union に 1 値を足したため、consumer 側で全コードを網羅する
+  `switch` の exhaustiveness 検査を書いている場合は `permission-denied` の分岐が要る）。
+
+### Changed
+
+- server-hono: 停止の診断 `serve-stopped` を出す位置を `serve()` の包みから内部の停止処理へ移した（出る条件・内容は同じ。
+  認可フックの中からの `stop()` の reject を未捕捉にしないため・DD-056-1）。
+
 ## [0.1.0-alpha.10] - 2026-09-13
 
 ### Fixed
