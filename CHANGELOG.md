@@ -6,13 +6,15 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.10`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.12`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.12` | `alpha` | `0.1.0-experimental` | DD-056-3（広島空港 H13）。実行中の文書追加・撤去、受理済み操作と snapshot の終了待機 |
+| `0.1.0-alpha.11` | `alpha` | `0.1.0-experimental` | DD-056-1・2（広島空港 H11・H12）。操作ごとの認可、読み取り専用の実行時切替・送り切り |
 | `0.1.0-alpha.10` | `alpha` | `0.1.0-experimental` | DD-055（ReadyCrew RC16・RC17）。候補欄（選択式・日付）を可視域に収める・高い行の編集欄がセル全体を覆う |
 | `0.1.0-alpha.9` | `alpha` | `0.1.0-experimental` | DD-054（ReadyCrew RC15）。React Facade へ `stringColumns`・`rowOperations`・`ref.setRows` を写す（alpha.8 の写像漏れ） |
 | `0.1.0-alpha.8` | `alpha` | `0.1.0-experimental` | DD-052-1〜5（ReadyCrew RC1・2・3・4・5・6・12・13・14）・DD-053（広島空港H10）。長文セル編集・型保持列・セル単位readOnly/行操作無効化・setRows・見出しクリック/ホバー通知・参加者一覧の join 時点反映 |
