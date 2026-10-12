@@ -171,6 +171,7 @@ await server.submit(op, { actorId: 'system', documentId: 'plan-2027' }); // 宛�
   （プロセスを止めずに版を切り替える）。撤去は接続を切り、受理済みの操作の永続化と `onAccepted` を待ってから保存先を閉じる。
   **保存先は消さない**（同じ保存先で足し直すと続きから復旧する＝新しい版は新しい ID にする）。外した文書への再接続は 404 で、
   未送信の操作は受け付けない。`server.documentIds` は読むたびに最新。
+  保存先の close 失敗は reject するが、両ストアの後始末を試し、失敗した文書は保持する。同じ ID の removeDocument または stop で再試行でき、後始末が完了するまで同じ ID の addDocument は reject する。
 
   ```ts
   // 版を確定して新しい版を作る（前の版は全員が読み取り専用になっている前提）。

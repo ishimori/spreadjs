@@ -48,7 +48,7 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-const join = (clientId: string): ClientMessage => ({
+const join = (clientId: string): Extract<ClientMessage, { type: 'join' }> => ({
   type: 'join',
   protocolVersion: 1,
   documentId: createDocumentId('doc-1'),
@@ -75,15 +75,49 @@ function asWebSocket(fake: FakeSocket): WebSocket {
   return fake as unknown as WebSocket; // テスト用の偽物（RoomBridge が触るメンバーだけを実装）
 }
 
-function buildBridge(): { bridge: RoomBridge; sequencer: Sequencer; room: Room } {
+function buildBridge(diagnostics?: (level: string, code: string, message: string) => void): { bridge: RoomBridge; sequencer: Sequencer; room: Room } {
   const clock = { now: () => 0 };
   const sequencer = new Sequencer(freshSequencerState(COLUMNS), clock);
   const room = new Room(sequencer, { clock, idGenerator: createCounterIdGenerator() });
-  const bridge = new RoomBridge(room, 'doc-1', new SubmitDeliveryLoop());
+  const bridge = new RoomBridge(room, 'doc-1', new SubmitDeliveryLoop(), diagnostics);
   return { bridge, sequencer, room };
 }
 
 describe('RoomBridge の撤去の受信停止（DD-056 H13・Codex 設計レビュー P2-1）', () => {
+  it('join の不一致診断から撤去しても、処理中の join が旧 Room へ再参加しない', () => {
+    const { bridge, room } = buildBridge((_level, code) => {
+      if (code === 'document-mismatch') {
+        bridge.retire(1001, 'document removed');
+      }
+    });
+    const ws = new FakeSocket();
+    bridge.onConnect(asWebSocket(ws), undefined);
+    ws.frame({ ...join('client-a'), documentId: createDocumentId('other-doc') });
+    expect(ws.closedWith?.code).toBe(1001);
+    expect(room.activeConnectionIds()).toHaveLength(0);
+    expect(bridge.connectionCount()).toBe(0);
+  });
+
+  it('操作の不一致診断から撤去しても、処理中の操作を旧 Room が受理しない', () => {
+    const { bridge, sequencer, room } = buildBridge((_level, code) => {
+      if (code === 'document-mismatch') {
+        bridge.retire(1001, 'document removed');
+      }
+    });
+    const ws = new FakeSocket();
+    bridge.onConnect(asWebSocket(ws), { actorId: 'authenticated', displayName: 'Member' });
+    ws.frame(join('client-a'));
+    const operation = submitInsert('client-a', 1, 'row-1');
+    if (operation.type !== 'submitOperation') {
+      throw new Error('submitOperation fixture required');
+    }
+    ws.frame({ ...operation, envelope: { ...operation.envelope, documentId: createDocumentId('other-doc'), actorId: 'spoofed' } });
+    expect(ws.closedWith?.code).toBe(1001);
+    expect(sequencer.currentRevision).toBe(0);
+    expect(room.activeConnectionIds()).toHaveLength(0);
+    expect(bridge.connectionCount()).toBe(0);
+  });
+
   it('撤去の後に届いた join・submitOperation（未 join の接続を含む）は旧 Room に入らず、接続はすべて 1001 で切る', () => {
     const { bridge, sequencer, room } = buildBridge();
     const joined = new FakeSocket();

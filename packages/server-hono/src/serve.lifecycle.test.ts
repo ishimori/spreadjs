@@ -80,6 +80,72 @@ const versionDoc = (overrides: Partial<ServeDocumentConfig> = {}): ServeDocument
 });
 
 describe('ServerInstance.addDocument / removeDocument（DD-056 H13）', () => {
+  it('復旧ストアから stop に再入しても追加の終了と保存先の close を待つ', async () => {
+    const server = await start(baseOnly());
+    const oplog = new MemoryServeOpLog();
+    const snapshots = new MemoryServeSnapshots();
+    let release: (() => void) | undefined;
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    let closes = 0;
+    oplog.close = async () => { closes += 1; };
+    snapshots.loadLatest = () => {
+      stopping = server.stop().then(() => { stopped = true; });
+      return new Promise((resolve) => { release = () => resolve(undefined); });
+    };
+    const outcome = server.addDocument('v2', versionDoc({ oplog, snapshotStore: snapshots })).then(
+      () => 'resolved', (error: unknown) => String(error),
+    );
+    await waitFor(() => release !== undefined, 'loadLatest started');
+    await delay(30);
+    const stoppedBeforeRelease = stopped;
+    release?.();
+    await stopping;
+    expect(await outcome).toMatch(/停止しました/);
+    expect(stoppedBeforeRelease).toBe(false);
+    expect(closes).toBe(1);
+  });
+
+  it('撤去の close 失敗でも両ストアを試し、同じ ID の追加を止め、撤去を再試行できる', async () => {
+    const server = await start(baseOnly());
+    const oplog = new MemoryServeOpLog();
+    const snapshots = new MemoryServeSnapshots();
+    let oplogCloses = 0;
+    let snapshotCloses = 0;
+    oplog.close = async () => {
+      oplogCloses += 1;
+      if (oplogCloses === 1) throw new Error('injected close failure');
+    };
+    snapshots.close = async () => { snapshotCloses += 1; };
+    await server.addDocument('v2', versionDoc({ oplog, snapshotStore: snapshots }));
+    await expect(server.removeDocument('v2')).rejects.toThrow(/close/);
+    expect(snapshotCloses).toBe(1);
+    await expect(server.addDocument('v2', versionDoc())).rejects.toThrow(/後始末/);
+    await server.removeDocument('v2');
+    expect(oplogCloses).toBe(2);
+    expect(snapshotCloses).toBe(1); // 成功済みの close は重ねて呼ばない
+    await server.addDocument('v2', versionDoc());
+    expect(server.documentIds).toContain('v2');
+  });
+
+  it('close に失敗した撤去文書も stop の後始末対象に残る', async () => {
+    const server = await start(baseOnly());
+    const oplog = new MemoryServeOpLog();
+    const snapshots = new MemoryServeSnapshots();
+    let oplogCloses = 0;
+    let snapshotCloses = 0;
+    oplog.close = async () => {
+      oplogCloses += 1;
+      if (oplogCloses === 1) throw new Error('injected close failure');
+    };
+    snapshots.close = async () => { snapshotCloses += 1; };
+    await server.addDocument('v2', versionDoc({ oplog, snapshotStore: snapshots }));
+    await expect(server.removeDocument('v2')).rejects.toThrow(/close/);
+    await server.stop();
+    expect(oplogCloses).toBe(2);
+    expect(snapshotCloses).toBe(1);
+  });
+
   it('AC1: 実行中に足した文書へ 2 クライアントが参加して編集・収束し、documentIds と /config に載る', async () => {
     const diags: ServeDiagnostic[] = [];
     const server = await start(baseOnly({ onDiagnostic: (entry) => diags.push(entry) }));

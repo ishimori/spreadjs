@@ -294,6 +294,8 @@ interface ServerInstance {
 | 保存先 | 消さない。同じ保存先で `addDocument` し直すと続きから復旧する（同じ ID で足し直せば古い接続の再送も受け付ける＝別の版は別の ID にする） |
 | removeDocument の拒否 | serve していない ID／追加・撤去の処理中の ID／`stop()` 後は Promise reject。既定文書も外せる（外した後の documentId なしの接続は 404・起動時の検疫と同じ） |
 | stop との競合 | `stop()` は処理中の追加・撤去が終わるのを待ってから閉じる。`stop()` の後に復旧を終えた追加は、作った文書を閉じて reject する |
+| callback からの再入 | 追加は復旧ストア等の consumer callback を呼ぶ前に待機対象へ登録する。文書不一致の診断後にも撤去・切断状態を再確認し、処理中の join・操作を旧 Room へ入れない（消えた認証情報を申告値で補わない） |
+| close の失敗 | 両ストアの後始末を独立に試し、成功済みの close は重ねて呼ばない。失敗した runtime は後始末対象に保持し、同じ ID の `removeDocument` または `stop` で再試行する。後始末が終わるまで同じ ID の追加は reject。失敗は Promise reject で返す |
 | 診断 | `document-added`・`document-removed`（info） |
 
 ### 5.3 内部の変更

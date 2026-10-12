@@ -365,7 +365,8 @@ export class RoomBridge {
         this.closeSocket(ws, 1008, 'reserved clientId');
         return;
       }
-      if (!this.acceptDocument(ws, message)) {
+      if (!this.acceptDocument(ws, message) || this.retired || !this.metaByWs.has(ws)) {
+        // 不一致の診断から consumer が文書を撤去することもある。callback の後で接続を引き直し、処理中の join も捨てる。
         return;
       }
       const { connectionId, outbound } = this.room.handleJoin(message);
@@ -381,8 +382,9 @@ export class RoomBridge {
     // 別文書を名乗る envelope を送って oplog を汚染できる＝次回起動の復旧が entry の documentId 照合で失敗し、
     // その文書が丸ごと検疫される・Codex P1）。
     const normalized = this.normalizeDocument(ws, message);
-    if (normalized === undefined) {
-      return; // 厳格接続の不一致＝切断済み
+    if (normalized === undefined || this.retired || !this.metaByWs.has(ws)) {
+      // 厳格接続の不一致、または正規化の診断から撤去された。消えた identity で処理中の操作を受理しない（DD-056 H13）。
+      return;
     }
     // DD-026-2: 認証済み接続は申告の actorId/userId/displayName を信用せず、identity で上書きしてから Room へ渡す。
     const identity = this.metaByWs.get(ws)?.identity;
@@ -1562,6 +1564,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   // ---- DD-056 H13: 実行中の文書の追加と撤去（contract.md §5）----
   /** 追加・撤去の処理中の文書 ID（同じ ID への並行の追加・撤去を拒否する）。 */
   const documentsInTransition = new Set<string>();
+  /** 登録から外したが保存先の後始末がまだの文書（close 失敗でも保持し、remove の再試行・stop で閉じる）。 */
+  const retiringRuntimes = new Map<string, DocumentRuntime>();
   /** 処理中の追加・撤去（stop がこれらの終了を待ってから閉じる）。 */
   const transitions = new Set<Promise<void>>();
   /** 追加・撤去の処理を登録し、終わったら外す（stop の待ち合わせ用）。 */
@@ -1594,17 +1598,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (documentsInTransition.has(documentId)) {
       return Promise.reject(new Error(`addDocument: documentId '${documentId}' は追加・撤去の処理中です`));
     }
+    if (retiringRuntimes.has(documentId)) {
+      return Promise.reject(new Error(`addDocument: documentId '${documentId}' は保存先の後始末が未完了です`));
+    }
     documentsInTransition.add(documentId);
-    const work = (async (): Promise<void> => {
+    // consumer の復旧 callback に入る前に trackTransition を済ませる。callback から stop へ再入してもこの追加を待つ。
+    const work = Promise.resolve().then(async (): Promise<void> => {
       try {
         const spec: DocumentSpec = { documentId, columnOrder: [...config.columnOrder], ...omitUndefined(config) };
         validateDocumentSpec(spec, ` [documentId=${documentId}]`);
         const runtime = await createDocumentRuntime(spec, runtimeDeps); // 失敗時は開いた保存先を閉じてから throw する
         if (closed) {
           // stop() の後に復旧を終えた: 登録せずに閉じる（保存先のハンドルを残さない）。
-          await runtime.close().catch((error: unknown) => {
-            console.error(`collaboration-server: addDocument cleanup after stop failed: ${errorMessage(error)}`);
-          });
+          retiringRuntimes.set(documentId, runtime);
+          await runtime.close(); // 失敗時も stop の後始末対象に残る
+          retiringRuntimes.delete(documentId);
           throw new Error(`addDocument: documentId '${documentId}' の追加中に server が停止しました`);
         }
         runtimes.set(documentId, runtime);
@@ -1618,7 +1626,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       } finally {
         documentsInTransition.delete(documentId);
       }
-    })();
+    });
     return trackTransition(work);
   };
 
@@ -1637,17 +1645,19 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     if (documentsInTransition.has(documentId)) {
       return Promise.reject(new Error(`removeDocument: documentId '${documentId}' は追加・撤去の処理中です`));
     }
-    const runtime = runtimes.get(documentId);
+    const runtime = runtimes.get(documentId) ?? retiringRuntimes.get(documentId);
     if (runtime === undefined) {
       return Promise.reject(new Error(`removeDocument: documentId '${documentId}' は serve していません`));
     }
     documentsInTransition.add(documentId);
+    retiringRuntimes.set(documentId, runtime); // close 成功までは同じ ID の追加を禁止し、stop の後始末対象に残す
     runtimes.delete(documentId); // ① 以後の upgrade・/config・/snapshot は 404、submit は reject
     runtime.bridge.retire(1001, 'document removed'); // ②③
     const work = (async (): Promise<void> => {
       try {
         await runtime.bridge.whenDrained(); // ④
         await runtime.close(); // ⑤
+        retiringRuntimes.delete(documentId);
         diagnostics?.('info', 'document-removed', `document '${documentId}' を外しました`);
       } finally {
         documentsInTransition.delete(documentId);
@@ -1687,7 +1697,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       // 「未捕捉にしない」処理が効かなくなるため、serve() 側は本 Promise をそのまま返す・DD-056）。
       // DD-056 H13: 処理中の追加・撤去の終了を待ってから閉じる（stop の後に復旧を終えた追加は自分で閉じて reject する）。
       return Promise.all([...transitions])
-        .then(() => closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets))
+        .then(() => closeServer(server, wss, sweepTimer, new Map([...runtimes, ...retiringRuntimes]), pendingAuthSockets))
         .then(() => {
           diagnostics?.('info', 'serve-stopped', `stopped ${url}`);
         });

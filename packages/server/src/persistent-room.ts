@@ -212,6 +212,9 @@ export class PersistentRoom {
   private snapshotWrite: Promise<void> | undefined;
   /** close 開始後は新しい snapshot 生成を始めない（DD-056 H13・Codex 設計レビュー P2-2）。 */
   private closing = false;
+  /** 成功済みのストア close は重ねて呼ばず、失敗したものだけ再試行する（DD-056 H13）。 */
+  private oplogClosed = false;
+  private snapshotStoreClosed = false;
   private lastSnapshotError: unknown;
   private readonly frontier: DurableFrontier;
   private poisoned = false; // append 失敗後は write を全停止（欠番防止・P1-5）
@@ -384,8 +387,26 @@ export class PersistentRoom {
     while (this.snapshotWrite !== undefined) {
       await this.snapshotWrite; // 生成の終了（成功・失敗とも catch 済み）を待つ。finally の再判定は closing で止まる
     }
-    await this.oplog.close();
-    await this.snapshotStore.close();
+    const failures: unknown[] = [];
+    if (!this.oplogClosed) {
+      try {
+        await this.oplog.close();
+        this.oplogClosed = true;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (!this.snapshotStoreClosed) {
+      try {
+        await this.snapshotStore.close();
+        this.snapshotStoreClosed = true;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'PersistentRoom: store close failed');
+    }
   }
 
   /** テスト用: 手動 snapshot 生成（生成トリガーを待たずに現在状態を永続化する）。 */

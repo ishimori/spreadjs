@@ -157,7 +157,8 @@ export interface ServeOptions {
    */
   readonly onDiagnostic?: ServeDiagnosticHook;
   /**
-   * 複数文書 serve（DD-043・ADR-0025・v1 は起動時に決めた N 枚固定）。1 プロセスで複数の文書（Book / board）を持てる。
+   * 複数文書 serve（DD-043・ADR-0025）。1 プロセスで複数の文書（Book / board）を持てる。起動時の構成に加え、
+   * DD-056 の addDocument・removeDocument で実行中に追加・撤去できる。
    * 指定した場合、単一文書オプション（`documentId` / `columnOrder` / `seedRows` / `persistenceDir` / `oplog` /
    * `snapshotStore` / `initialDocument`）とは**併用できない**（文書構成の供給元は 1 つ）。
    * - 接続は `/ws?documentId=...`・`/config?documentId=...` で文書を名乗る（無指定は `defaultDocumentId`）。
@@ -189,7 +190,8 @@ export interface ServerInstance {
    * 実行中に文書を足す（Experimental 0.x・DD-056 H13）。構成の検証・保存先の復旧（履歴があれば続きから）・初期文書（`initialDocument`／
    * `seedRows`）は起動時の文書と同じで、済んだら解決する。以後 `?documentId=` で接続でき、`submit({ documentId })` が使える。
    * 単一文書・複数文書のどちらの構成でも使える（足した文書への接続は `?documentId=` で文書を名乗る）。
-   * 空の ID・serve 中の ID・追加／撤去の処理中の ID・`stop()` 後・復旧の失敗は Promise reject（検疫には入れず、開いた保存先は閉じる）。
+   * 空の ID・serve 中の ID・追加／撤去の処理中または後始末未完了の ID・`stop()` 後・復旧の失敗は Promise reject
+   * （検疫には入れず、開いた保存先は閉じる）。
    * `authorizeOperation` の中から呼ぶと reject。
    */
   addDocument(documentId: string, config: ServeDocumentConfig): Promise<void>;
@@ -200,6 +202,8 @@ export interface ServerInstance {
    * 復旧する＝別の版は別の ID にする）。外した文書のクライアントは再接続が 404 で失敗し続け、未送信の操作は送られない（切断の上限を
    * 超えると `stopped`）。既定文書も外せる（以後の documentId なしの接続は 404）。serve していない ID・処理中の ID・`stop()` 後は
    * Promise reject。`authorizeOperation` の中から呼ぶと reject。
+   * 保存先の close が失敗しても両ストアの後始末を試す。失敗した文書は保持し、同じ ID の removeDocument または stop で再試行する。
+   * 後始末が終わるまで同じ ID の addDocument は reject。成功済みのストア close は重ねて呼ばない。
    */
   removeDocument(documentId: string): Promise<void>;
   /** 現在の接続数（診断用）。`documentId` 指定でその文書のみ、未指定は全文書の合計。 */
