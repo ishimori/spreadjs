@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-10-12 | 2026-10-12 | 進行中 | consumer 駆動（広島 DDP-001）。設計（`DD-056/contract.md`）を Codex 設計レビュー（5件採用）後に Human Spec Gate で確定。子DD-056-1〜3 で実装中 |
+| 2026-10-12 | 2026-10-12 | 完了 | H11〜H13を子3件で実装・レビュー反映。alpha.11/12配布、unit1441件・E2E249件green。実IMEと広島取り込みは未保証境界・handoffへ |
 
 > アプローチ: 標準（アンブレラ。要件の範囲・API の形・子DD分割を決め、実装は子DDで行う）
 > リスク: あり（認可に当たるサーバー側の書込禁止 — H11）
@@ -13,7 +13,7 @@ Risk Class: A（H11 は sequencer の処理順に認可段を足し、拒否コ�
 Risk Triggers: protocol（拒否コードの追加・拒否時のクライアントの巻き戻し）／永続化（実行中の文書の追加・撤去と保存先の close 順序）／データ消失の防止（開き直しで未送信の操作が消える経路・外した文書への再送）／公開 API（ServerInstance・grid／React handle）の追加
 Human Spec Gate: done（2026-10-12 ユーザー決定。論点1〜5 は推奨どおり＋既存不具合〔contract.md §4.5〕を DD-056-2 で直す。決定事項参照）
 Codex: 2026-10-12 ユーザー指示「設計・実装が終わる都度 Codex レビュー、指摘は妥当性を判断して Claude が修正」。設計 high（P1×2・P2×3 全採用）→ 実装は子DDごとに xhigh（2026-10-12 ユーザー決定）
-Manual Gate: なし（サーバー単体と 2 クライアント E2E で判定できる見込み）
+Manual Gate: H12の実IME T1は推奨・クローズ非ブロック。未実施を子DD-056-2の未保証境界とIME台帳へ移送（サーバー側は実WSと2ブラウザーE2Eで検証）
 External Review: なし
 Evidence Level: standard
 ```
@@ -107,19 +107,24 @@ consumer（広島空港 予算管理システムの PoC。2026-10-22 の商談�
 ### Phase 2: 子DDで実装・配布
 
 - [x] 子DD（DD-056-1 H11・DD-056-2 H12＋§4.5・DD-056-3 H13）を起票する（2026-10-12）
-- [ ] DD-056-1 の全Phase完了確認（実装・Codex xhigh の反映）
-- [ ] DD-056-2 の全Phase完了確認（実装・Codex xhigh の反映）
-- [ ] alpha.11 を配布する（DD-056-1・056-2）
-- [ ] DD-056-3 の全Phase完了確認（実装・Codex xhigh の反映）
-- [ ] alpha.12 を配布する（DD-056-3）
-- [ ] 広島へ配布版を伝える（要件メモの「取り込み結果」列は広島側で更新する）
-- [ ] 🔬 機械検証: 子DDごとの対象テスト → green
+- [x] DD-056-1 の全Phase完了確認（実装・Codex xhigh の反映）
+- [x] DD-056-2 の全Phase完了確認（実装・Codex xhigh の反映）
+- [x] alpha.11 を配布する（DD-056-1・056-2）
+- [x] DD-056-3 の全Phase完了確認（実装・Codex xhigh の反映）
+- [x] alpha.12 を配布する（DD-056-3）
+- [x] 広島へ配布版を伝える（`DD-056/handoff.md`とZIPを本チャットで引き渡す。「取り込み結果」列とconsumerの更新は広島側で行う）
+- [x] 🔬 機械検証: 子DDごとの対象テスト → green
 
 ### 完了前チェック
 
-- [ ] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
-- [ ] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ。深掘りが要る場合の手法: doc/da-method.md）
-- [ ] 🔬 全回帰1回
+- [x] 受け入れ基準を1項目ずつ照合（`DD-056/verification.md`のAC1〜10）
+- [x] 😈 セルフレビュー1巡（変換待ちの編集同一性、診断・復旧callbackからの再入、保存先のclose失敗・再試行を確認。子DDログとengineering-patterns #26へ記録）
+- [x] 🔬 全回帰1回（最終unit1441件・playground E2E249件・型検査・consumer-strict・lint）
+
+## 既知の未保証境界
+
+- H12の実機Microsoft IME×Chrome T1は未実施。synthetic順序A/Bのgreenは実OS IMEの保証を含まない（子DD-056-2・IME台帳）。広島PoCの取り込み・予算業務シナリオ・実画面・商談受入も未実施で、`DD-056/handoff.md`へ引き渡す。
+- 認可の拒否状態の復元、版と文書IDの対応、新版への案内はconsumerの責務。別版は別IDを使う。Git push・registry publishは実施していない。
 
 ## ログ
 
@@ -136,3 +141,6 @@ consumer（広島空港 予算管理システムの PoC。2026-10-22 の商談�
 - 並行して自分でも穴を探し、次を設計へ足した: 認可フックの中から `submit` 等を呼ぶと sequencer の処理中に再入し、同じ受理を二重に永続化しうる → フック内からの `submit`・`addDocument`・`removeDocument`・`stop` は reject（§3.2）／`authenticate` 未指定の `actorId` は申告値（§3.2）／撤去と upgrade の handshake の競合（§5.2）／拒否の通知喪失＋再起動で「遅れて受理」になりうる境界（§3.5）／広島 DDP-004 の受け入れ基準5（締切後の入力を「未反映」として履歴に残す）はフックの中で記録できる（§3.2）
 - 設計の過程で、DD-056 より前からある不具合を見つけた: Tier 1 で変換確定の直後に別セル・グリッド外をクリックしても確定されない（§4.5。状態機械だけで決定的に再現。E2E の synthetic IME が順序A のため自動テストに出ていなかった）。H11〜H13 の外なので扱いをゲートで決める
 - **Human Spec Gate（ユーザー決定）**: 論点1〜5 は推奨どおり。既存の不具合（§4.5）は DD-056-2 で一緒に直す。H13 は H11・H12 の配布（alpha.11）に続けて実装する（alpha.12）。実装の Codex レビューは子DDごとに xhigh。決定事項へ記録し、contract.md を「確定」に改め、子DD DD-056-1〜3 を起票した
+- SessionLimitからCodexで継続し、H12の退避済み修正を復元・レビュー5件を記録（`b4db4f7`）。H11はレビュー3件を反映済み。H13は実装 `31b0f16` のxhighレビュー3件を全採用・修正（`68d377c`）。各レビューの依頼・結果を親添付に保存した。
+- alpha.11は `be4b938` の専用チェックアウトから生成してH13を混入させず、alpha.12はH13レビュー修正後の `68d377c` から再生成した。どちらも10tarball・manifest closureDirty=false・pack内容・SHA-256 PASS、実tarballの独立consumer E2E10件PASS。alpha.12はconsumer-harnessもPASS。ZIPは各12entries、最新版は `release/nanairo-sheet-0.1.0-alpha.12.zip`。
+- 最終の全workspace typecheck・consumer-strict・lint、unit/invariants/contract135ファイル1441件・playground E2E249件green。公開型は追加のみ、JSDoc・契約・CHANGELOG・quick-start・featureカタログ・ADRを同期した。受け入れ基準の照合は `DD-056/verification.md`、引き渡しは `DD-056/handoff.md`。実IMEのT1と広島取り込みは未保証境界へ移送して親・子3件を完了・アーカイブする。

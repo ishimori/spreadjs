@@ -62,6 +62,8 @@ IME のカバレッジ（憲章 §20.2 の Tier 1 IME は Microsoft IME と Goog
 > 記録粒度は当時の DD 記録に依るため、シナリオ列は「相当」表記で対応付けている。以降の新規行は §2 の 5 点を
 > 明示的に通して記録する。
 
+| 2026-10-12 | T1（DD-056-2: setReadOnly・flush・変換確定直後のクリック確定） | DD-056-2 | Windows / headless Chromium 149（Playwright bundle） / OS IMEなし | **synthetic（実IME T1は未実施）** | readonly-switch-flush 11件＋React readOnly 1件 PASS。編集対象追跡・変換待ちの1回限りの確定・候補欄/cut抑止・接続終端を含む。実機T1はクローズ非ブロックとして未保証境界へ移送 | synthetic 順序A/B。実機観測なし | `doc/archived/DD/DD-056-2_読み取り専用の実行時切替と送り切り.md`・`doc/archived/DD/DD-056/verification.md` |
+
 ## 4. 運用ルール
 
 1. **T1 DD の起票者は Manual Gate として本台帳への記録タスクを DD に組み込む**（kpi-ledger §2 と同じ防御。

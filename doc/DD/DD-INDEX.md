@@ -6,10 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-056 | 広島空港PoC向け拡張 | 進行中 | consumer 駆動（広島 DDP-001）。設計（`DD-056/contract.md`）を Codex 設計レビュー（5件採用）後に Human Spec Gate で確定。子DD-056-1〜3 で実装中 |
-| DD-056-1 | 操作ごとの書込の認可 | 進行中 | 親=DD-056（consumer 駆動: 広島空港 H11）。契約の正本は `DD-056/contract.md` §3 |
-| DD-056-2 | 読み取り専用の実行時切替と送り切り | 進行中 | 親=DD-056（consumer 駆動: 広島空港 H12＋既存不具合 contract.md §4.5）。契約の正本は `DD-056/contract.md` §4 |
-| DD-056-3 | 実行中の文書の追加と撤去 | 検討中 | 親=DD-056（consumer 駆動: 広島空港 H13）。契約の正本は `DD-056/contract.md` §5。DD-056-1・056-2 の配布（alpha.11）の後に着手 |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
@@ -23,6 +19,10 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-056 | 広島空港PoC向け拡張 | H11〜H13を子3件で実装・レビュー反映。alpha.11/12配布、unit1441件・E2E249件green。実IMEと広島取り込みは未保証境界・handoffへ |
+| DD-056-1 | 操作ごとの書込の認可 | H11の認可フック・permission-deniedを実装。xhigh指摘3件修正、全回帰green、alpha.11配布 |
+| DD-056-2 | 読み取り専用の実行時切替と送り切り | H12・確定直後の入力漏れを実装。xhigh 指摘5件修正・全E2E249件green・alpha.11配布。実IME T1未実施は未保証境界へ |
+| DD-056-3 | 実行中の文書の追加と撤去 | H13を実装。xhigh指摘3件修正、unit1441件・E2E249件green、alpha.12配布。引き渡しは親DD添付 |
 | DD-055 | 候補欄のはみ出しと長文編集欄の高さ | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC16・RC17。候補欄（選択式・日付）を可視域に収め、高い行の編集欄がセル全体を覆うよう修正。Codex high 指摘なし。0.1.0-alpha.10で配布済み |
 | DD-054 | ReactFacadeへalpha8新オプションとsetRowsを写す | consumer 駆動（ReadyCrew DD-124）。要件正本は ready_crew_db `doc/DD/DD-124/sdk-requirements.md` RC15。DD-052-2〜4 の React 写像漏れを解消し、0.1.0-alpha.9で配布済み |
 | DD-053 | 参加しただけの利用者を参加者一覧に載せる | 広島 DD-005-3 で発見。実装・全検証green・Codexレビュー（DD-052一式とまとめて実施・本DD該当分の指摘なし）済み。0.1.0-alpha.8で配布済み |
