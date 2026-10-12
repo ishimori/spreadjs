@@ -112,13 +112,13 @@ await serve({
 | 他の接続 | 何も届かない（拒否は配信されない） |
 | 戻り値 | `true`（厳密一致）だけを許可とする。それ以外は拒否し、`true`／`false` 以外なら診断 `authorize-invalid-result`（error）を出す |
 | throw | 拒否として扱い、診断 `authorize-error`（error・例外の name と message・documentId・operationId）を出す。接続は切らない |
-| Promise・thenable | 待たずに拒否する（`true` ではない）。**返された Promise／thenable の失敗は捕捉して**診断 `authorize-invalid-result` に含める（未捕捉の rejection で Node のプロセスが落ちるのを防ぐ・Codex 設計レビュー P1-1・coding-standards の rejection 捕捉規約） |
+| Promise・thenable | 待たずに拒否する（`true` ではない）。**返された Promise／thenable（関数型の thenable を含む）の失敗は捕捉して**診断 `authorize-invalid-result` に含める（未捕捉の rejection で Node のプロセスが落ちるのを防ぐ・Codex 設計レビュー P1-1・実装レビュー P1）。`then` の取得・呼び出しが throw する不正な値（getter・Proxy）も拒否にし、接続は保つ（診断 `authorize-error`・実装レビュー P2） |
 | 同期 | **判定は同期で速く**（メモリ上の状態を引くだけ）。DB を引く必要がある状態は consumer がメモリに持つ |
 | 再入の禁止 | フックの中から `ServerInstance` の `submit`・`addDocument`・`removeDocument`・`stop` を呼ぶと、何もせず Promise reject する（診断 `authorize-reentry`・error）。フックは sequencer の処理の途中（clientSequence 消費の後・適用の前）で呼ばれるため、そこで同じ文書へ投入すると同じ受理を二重に永続化しうる（PersistentRoom は呼び出し前後の revision 差で永続化対象を決める）。返す Promise には SDK 側で空の rejection ハンドラを付ける（await しない誤りでも未捕捉 rejection で serve 全体を落とさない。呼び出し側は従来どおり reject を受け取れる） |
 | 操作者の信頼性 | `actorId` が信頼できるのは `authenticate` を指定したときだけ（未指定ならクライアントの申告値＝なりすませる）。役割で分ける判定に使うなら `authenticate` が必須 |
 | 拒否の記録 | 拒否した操作の内容（例: 締切後に届いた入力の値）を consumer が残したいときは、フックの中で false を返すときに記録する（同期にキューへ積み、書込は非同期で）。受理済み操作の再送ではフックが呼ばれないため、通常の運用で同じ操作の拒否が二重に記録されることはない |
 | 判定の切り替え | 判定を変えた後に③'へ到達した操作から効く。変えた時点で既に受理済み（永続化待ち）の操作は有効なまま永続化・配信・`onAccepted` される |
-| 診断 | 拒否のたびに `operation-denied`（info・documentId・actorId・operationId・操作の種別）。`onDiagnostic` 未指定なら出さない |
+| 診断 | 拒否のたびに `operation-denied`（info・documentId・actorId・operationId・操作の種別）。`onDiagnostic` 未指定なら出さない。認可段の診断（`operation-denied`・`authorize-*`）は **sequencer の処理が終わってから（マイクロタスクで）配る**: `onDiagnostic` の中から `submit` してよい（処理の途中へ再入しない。同期に配ると、永続化ありで同じ受理を二重に永続化しうる＝実装レビュー P1）。再入の目印は包み全体（フックの呼び出し・戻り値の検査）で保持する |
 | 複製 | `operation` は参照されたときに複製する（判定に使わない consumer には複製のコストがかからない） |
 | 未指定 | 従来どおり（認可段は素通り・追加コストなし） |
 | 複数文書 | serve 全体で 1 つ。`documentId` で文書を見分ける |

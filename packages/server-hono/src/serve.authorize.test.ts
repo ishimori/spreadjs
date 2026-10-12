@@ -233,6 +233,95 @@ describe('serve({ authorizeOperation })（DD-056 H11）', () => {
     expect(outside.status).toBe('accepted');
   });
 
+  it('Codex 実装レビュー P1: 永続化ありで onDiagnostic（operation-denied）から submit しても、処理の途中へ再入せず操作ログが重複しない', async () => {
+    let locked = true;
+    const oplog = new MemoryServeOpLog();
+    let serverRef: ServerInstance | undefined;
+    const fromDiagnostic: Array<Promise<unknown>> = [];
+    const server = await serve({
+      port: 0,
+      seedRows: 2,
+      oplog,
+      snapshotStore: new MemoryServeSnapshots(),
+      authorizeOperation: () => !locked,
+      onDiagnostic: (entry) => {
+        if (entry.code === 'operation-denied' && serverRef !== undefined) {
+          // 拒否を記録する consumer が、診断の中からサーバー起点の書込をする（修正前は sequencer の処理中に再入し [1,2,2] になった）。
+          fromDiagnostic.push(
+            serverRef.submit(
+              { type: 'setCells', changes: [{ rowId: 'row-2', columnId: 'col-c', value: { kind: 'string', value: 'AUDIT' } }] },
+              { actorId: 'system' },
+            ),
+          );
+        }
+      },
+    });
+    serverRef = server;
+    cleanups.push(() => server.stop());
+    const { a, b } = await connectPair(server);
+    a.session.submitLocalOperation(setCellA('denied'));
+    await waitFor(() => a.session.conflictQueue.length === 1, 'rejected');
+    await waitFor(() => fromDiagnostic.length === 1, 'diagnostic delivered after the sequencer');
+    const settled = await Promise.allSettled(fromDiagnostic);
+    expect(settled[0]?.status).toBe('fulfilled'); // 診断は処理の後に配られるため、そこからの submit は通常どおり受理される
+    await waitFor(() => b.session.committedDocument.revision === 2, 'audit write broadcast');
+    locked = false;
+    expect(oplog.entries.map((e) => e.revision)).toEqual([1, 2]); // 重複・欠番なし（拒否された操作は入っていない）
+    expect(committedCellA(b)).toBeUndefined();
+  });
+
+  it('Codex 実装レビュー P1/P2: 関数型の thenable の reject も捕捉し、then の getter が throw しても拒否で接続を保つ', async () => {
+    const diags: ServeDiagnostic[] = [];
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    cleanups.push(() => {
+      process.off('unhandledRejection', onUnhandled);
+    });
+    const returns: Array<() => unknown> = [
+      () => {
+        const rejected = Promise.reject(new Error('function thenable failed'));
+        return Object.assign(() => undefined, { then: rejected.then.bind(rejected) }); // 関数型の thenable
+      },
+      () => ({
+        get then(): unknown {
+          throw new Error('then getter failed'); // 不正な getter（Proxy 等の代わり）
+        },
+      }),
+      () => true,
+    ];
+    let next = 0;
+    const server = await serve({
+      port: 0,
+      seedRows: 2,
+      authorizeOperation: (): boolean => {
+        const produce = returns[next];
+        next += 1;
+        // @ts-expect-error JS consumer が型を無視して thenable・不正なオブジェクトを返す誤りを模す
+        return produce?.();
+      },
+      onDiagnostic: (entry) => diags.push(entry),
+    });
+    cleanups.push(() => server.stop());
+    const { a } = await connectPair(server);
+    a.session.submitLocalOperation(setCellA('f1'));
+    a.session.submitLocalOperation(setCellA('f2'));
+    await waitFor(() => a.session.conflictQueue.length === 2, 'both rejected without dropping the connection');
+    expect(a.session.conflictQueue.map((c) => c.code)).toEqual(['permission-denied', 'permission-denied']);
+    expect(server.connectionCount()).toBe(2);
+    a.session.submitLocalOperation(setCellA('ok'));
+    await waitFor(() => a.session.committedDocument.revision === 2, 'accepted afterwards');
+    await waitFor(
+      () => diags.some((d) => d.code === 'authorize-invalid-result' && d.message.includes('function thenable failed')),
+      'function thenable rejection captured',
+    );
+    expect(diags.some((d) => d.code === 'authorize-error' && d.message.includes('then getter failed'))).toBe(true);
+    await delay(50);
+    expect(unhandled).toEqual([]);
+  });
+
   it('AC8: authenticate の actorId と接続先の documentId が渡り、判定材料の operation を書き換えても受理される操作は変わらない', async () => {
     const requests: Array<{ documentId: string; actorId: string; clientId: string; operationId: string }> = [];
     const server = await serve({

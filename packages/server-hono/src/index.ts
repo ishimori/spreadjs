@@ -141,8 +141,9 @@ export interface ServeOptions {
    *   clientSequence は消費するので、同じクライアントの次の操作は通常どおり判定される。revision・操作ログ・`onAccepted` は動かない。
    * - **呼ばれない**: 受理済み操作の再送（同じ ACK を返す＝禁止の前に受理した操作は禁止の後に再送されても受理のまま）・
    *   clientSequence／baseRevision の違反・`ServerInstance.submit`（サーバー起点は判定しない）・seed／`initialDocument`。
-   * - **fail-closed**: `true`（厳密一致）以外の戻り値と throw は拒否（診断 `authorize-error`／`authorize-invalid-result`）。Promise は待たずに
-   *   拒否し、その reject も捕捉する。**同期で速く**判定すること（DB を引く状態は consumer がメモリに写す）。
+   * - **fail-closed**: `true`（厳密一致）以外の戻り値と throw は拒否（診断 `authorize-error`／`authorize-invalid-result`）。Promise（関数型の
+   *   thenable を含む）は待たずに拒否し、その reject も捕捉する。**同期で速く**判定すること（DB を引く状態は consumer がメモリに写す）。
+   *   認可の診断は sequencer の処理が終わってから配る（`onDiagnostic` の中から `submit` してよい）。
    * - **再入しない**: フックの中から `submit`・`stop` を呼ぶと、何もせず Promise reject する（sequencer の処理の途中に投入させない。
    *   診断 `authorize-reentry`。await しなくても未捕捉 rejection で serve を落とさない）。
    * - `actorId` が信頼できるのは `authenticate` 指定時だけ。拒否した操作を記録したいときは、フックの中で false を返すときに積む。

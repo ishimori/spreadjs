@@ -735,9 +735,17 @@ function acceptedCellChanges(operation: DocumentOperation, before: SheetDocument
   });
 }
 
-/** hook の戻り値が thenable か（async hook の reject を拾うため・DD-049 H2）。 */
+/**
+ * hook の戻り値が thenable か（async hook の reject を拾うため・DD-049 H2）。関数型の thenable も対象にする（DD-056 Codex P1）。
+ * `then` の getter・Proxy が throw しうるため、呼び出し側は例外を隔離した中で使うこと。
+ */
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    'then' in value &&
+    typeof value.then === 'function'
+  );
 }
 
 /**
@@ -764,7 +772,8 @@ function rejectInsideAuthorization(
     return undefined;
   }
   const message = `${what}: authorizeOperation の中からは呼べません（sequencer の処理の途中に再入させない・DD-056）`;
-  reportServeProblem(diagnostics, 'error', 'authorize-reentry', message);
+  // 診断は処理が終わってから配る（onDiagnostic がさらに submit しても同期の再帰にしない・Codex P1）。
+  reportServeProblem(deferDiagnostics(diagnostics), 'error', 'authorize-reentry', message);
   const rejected = Promise.reject(new Error(message));
   rejected.catch(() => {}); // 未捕捉 rejection にしない（上の診断で可視化済み）
   return rejected;
@@ -801,50 +810,99 @@ function createOperationAuthorizer(
   guard: AuthorizationGuard,
   diagnostics: DiagnosticSink | undefined,
 ): RoomOperationAuthorizer {
+  // 認可段の診断は sequencer の処理が終わってから配る（consumer の onDiagnostic から submit されても処理の途中へ再入させず、
+  // 「拒否の診断 → submit → 再入の診断 → …」の同期の再帰も作らない・DD-056 実装レビュー Codex P1）。
+  const later = deferDiagnostics(diagnostics);
   return (envelope, connectionId) => {
     if (connectionId === SERVER_CONNECTION_ID) {
       return true;
     }
-    const label =
-      `documentId=${documentId} actorId=${envelope.actorId} operationId=${String(envelope.operationId)} ` +
-      `operation=${envelope.operation.type}`;
-    let result: unknown;
-    let threw = false;
+    // 再入ガードは包み全体（フックの呼び出し・戻り値の検査・thenable の処理）で保持する（Codex P1・診断の遅延配送と二重の防御）。
     guard.depth += 1;
     try {
-      result = hook(buildAuthorizationRequest(documentId, envelope));
+      return judgeOperation(hook, documentId, envelope, later);
     } catch (error) {
-      threw = true;
-      reportServeProblem(diagnostics, 'error', 'authorize-error', `authorizeOperation が throw しました（拒否として扱う・${label}）: ${describeThrown(error)}`);
+      // 包みそのものの想定外の失敗（戻り値の検査で getter・Proxy が throw した等）も拒否へ倒し、接続は保つ（fail-closed・Codex P2）。
+      reportServeProblem(
+        later,
+        'error',
+        'authorize-error',
+        `authorizeOperation の判定中に失敗しました（拒否として扱う・documentId=${documentId}）: ${describeThrown(error)}`,
+      );
+      return false;
     } finally {
       guard.depth -= 1;
     }
-    if (!threw && result === true) {
-      return true;
-    }
-    if (!threw && result !== false) {
-      reportInvalidAuthorizationResult(result, label, diagnostics);
-    }
-    diagnostics?.('info', 'operation-denied', `authorizeOperation が書込を拒否しました（permission-denied・${label}）`);
-    return false;
   };
 }
 
-/** 認可フックの不正な戻り値（boolean 以外）を診断へ出す。thenable は失敗も捕捉する（DD-056 H11・Codex 設計レビュー P1-1）。 */
-function reportInvalidAuthorizationResult(result: unknown, label: string, diagnostics: DiagnosticSink | undefined): void {
+/**
+ * 診断を同期の処理が終わってから配る sink（DD-056）。sequencer の処理の途中で consumer のコード（onDiagnostic）を走らせない。
+ * warn・error は sink 未指定・sink の失敗でも console へ出す（reportServeProblem と同じ）。info は sink があるときだけ。
+ */
+function deferDiagnostics(diagnostics: DiagnosticSink | undefined): DiagnosticSink {
+  return (level, code, message) => {
+    queueMicrotask(() => {
+      if (level === 'warn' || level === 'error') {
+        reportServeProblem(diagnostics, level, code, message);
+        return;
+      }
+      try {
+        diagnostics?.(level, code, message);
+      } catch {
+        // 診断 sink の失敗は無視する。
+      }
+    });
+  };
+}
+
+/** 認可フックを 1 回呼んで判定する（再入ガードの内側で呼ぶ・throw しうる箇所は呼び出し側の try が拒否へ倒す）。 */
+function judgeOperation(
+  hook: ServeAuthorizeOperation,
+  documentId: string,
+  envelope: ClientOperationEnvelope,
+  diagnostics: DiagnosticSink,
+): boolean {
+  const label =
+    `documentId=${documentId} actorId=${envelope.actorId} operationId=${String(envelope.operationId)} ` +
+    `operation=${envelope.operation.type}`;
+  let result: unknown;
+  try {
+    result = hook(buildAuthorizationRequest(documentId, envelope));
+  } catch (error) {
+    reportServeProblem(diagnostics, 'error', 'authorize-error', `authorizeOperation が throw しました（拒否として扱う・${label}）: ${describeThrown(error)}`);
+    reportDenied(diagnostics, label);
+    return false;
+  }
+  if (result === true) {
+    return true;
+  }
+  if (result !== false) {
+    reportInvalidAuthorizationResult(result, label, diagnostics);
+  }
+  reportDenied(diagnostics, label);
+  return false;
+}
+
+/** 拒否の診断（info）。sink は deferDiagnostics で包んだもの（同期には何も呼ばない）。 */
+function reportDenied(diagnostics: DiagnosticSink, label: string): void {
+  diagnostics('info', 'operation-denied', `authorizeOperation が書込を拒否しました（permission-denied・${label}）`);
+}
+
+/**
+ * 認可フックの不正な戻り値（boolean 以外）を診断へ出す。thenable（関数型を含む）は待たずに拒否し、失敗を捕捉する
+ * （未捕捉 rejection でプロセスを落とさない・DD-056 Codex 設計レビュー P1-1／実装レビュー P1）。`then` の取得・呼び出しの例外は
+ * 呼び出し側（createOperationAuthorizer）の try が拒否へ倒す。
+ */
+function reportInvalidAuthorizationResult(result: unknown, label: string, diagnostics: DiagnosticSink): void {
   if (!isPromiseLike(result)) {
     reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が boolean 以外（${typeof result}）を返しました（拒否として扱う・${label}）`);
     return;
   }
   reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が Promise を返しました（同期で true/false を返すこと。待たずに拒否する・${label}）`);
-  try {
-    result.then(undefined, (error: unknown) => {
-      reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が返した Promise が reject しました（判定は拒否済み・${label}）: ${describeThrown(error)}`);
-    });
-  } catch (error) {
-    // then 自体が throw する thenable（自作の不正な実装）でもサーバーを止めない。
-    reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が返した thenable の then が throw しました（${label}）: ${describeThrown(error)}`);
-  }
+  result.then(undefined, (error: unknown) => {
+    reportServeProblem(diagnostics, 'error', 'authorize-invalid-result', `authorizeOperation が返した Promise が reject しました（判定は拒否済み・${label}）: ${describeThrown(error)}`);
+  });
 }
 
 /** 認可フックへ渡す判定材料（DD-056 H11）。`operation` は参照されたときに 1 度だけ複製する。 */
