@@ -135,8 +135,11 @@ interface ResolvedConfig {
 interface FlushWaiter {
   readonly resolve: (result: GridFlushResult) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
-  /** 呼んだ時点の編集中のセルの確定がまだ（IME 変換中で確定を待っている等）。 */
-  editPending: boolean;
+  /**
+   * 呼んだ時点の編集（ime-editing-session の editingTarget の参照）。確定・取消・別セルへの移動で編集が入れ替われば null にする
+   * （後から始まった別の編集には触れない・Codex 実装レビュー P2）。null なら確定を待つ編集はない。
+   */
+  editTarget: object | null;
 }
 
 /** GridMountOptions を受けて grid を container へ配線し、GridInstance を返す（同期 return・boot は非同期進行）。 */
@@ -274,8 +277,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // 待つ印。待つ間も readOnly=true で文書を変える他の入口は止め、状態機械が出す編集中セルの確定（editorSubmit 経由）だけを
   // 送信の関所で通す（contract.md §4.3）。
   let readOnlyDeferred = false;
-  // DD-056 H12: editorSubmit（状態機械の Commit → ime-editing-session → submit）の呼び出し中か（上の「確定だけ通す」の判定用）。
-  let inEditorSubmit = false;
+  // DD-056 H12（Codex 実装レビュー P1）: 終わり待ちの間に送信の関所を通してよいのは「切り替えを頼まれた時点の編集」の確定 1 回だけ。
+  // 編集の同一性は ime-editing-session の editingTarget オブジェクトの参照（BeginEdit ごとに作り直される）で見分ける。
+  let deferredLockEditTarget: object | null = null;
+  // DD-056 H12: 上の許可を消費して submit している最中か（submitSetCells・submitToBackend の関所が見る）。
+  let inDeferredLockCommit = false;
   // DD-056 H12: flush の待ち合わせ（呼び出しごとに 1 件）と、状態の変化を受けた判定の予約（macrotask・coalesce）。
   const flushWaiters = new Set<FlushWaiter>();
   let editStateCheckTimer: ReturnType<typeof setTimeout> | undefined;
@@ -650,14 +656,17 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // ---- DD-056 H12: 読み取り専用の実行時切替（setReadOnly）・送り切り（flush）・pendingCount（contract.md §4）----
 
-  /** 変換の終わり待ちの間に、状態機械が出した編集中セルの確定（editorSubmit 経由）か（送信の関所で通す判定）。 */
+  /** 変換の終わり待ちの間に、切り替えを頼まれた時点の編集を確定している最中か（送信の関所で通す判定・1 回で消費済み）。 */
   function isDeferredEditorCommit(): boolean {
-    return readOnlyDeferred && inEditorSubmit;
+    return readOnlyDeferred && inDeferredLockCommit;
   }
 
-  /** 編集が進行中か（Navigation 以外＝変換中・変換確定の直後・変換していない編集）。editor 未生成は false。 */
-  function isEditInProgress(): boolean {
-    return editor !== undefined && editor.session.getPhase() !== 'Navigation';
+  /**
+   * 進行中の編集の同一性（ime-editing-session の editingTarget の参照。BeginEdit ごとに作り直され、確定・取消・移動で null に戻る）。
+   * 編集していなければ null。flush の待ち合わせと変換の終わり待ちの許可が「呼んだ時点の編集」を見分けるのに使う。
+   */
+  function currentEdit(): object | null {
+    return editor?.session.getEditingTarget() ?? null;
   }
 
   /** IME 変換中か（textarea に触れてはいけない間・I-3）。 */
@@ -666,13 +675,33 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   /**
+   * 変換の終わり待ちの間に、切り替えを頼まれた時点の編集が終わって Navigation へ戻ったか（Codex 実装レビュー P1）。true の間は
+   * 新しい編集を始めさせない（editor の論理ロック＝isInputLocked。textarea の readOnly 属性は次の判定で付く）。
+   */
+  function isDeferredLockIdle(): boolean {
+    return readOnlyDeferred && editor !== undefined && !isComposingNow() && editor.session.getPhase() === 'Navigation';
+  }
+
+  /**
    * 編集中のセルを「確定して移動しない」で確定し、候補欄を閉じる（実際の blur と同じ順序＝状態機械の確定 → 候補欄・contract.md §4.2）。
    * 変換確定の直後（EditingAwaitFinalInput）も確定する。変換中は何もせず false。確定した・確定するものが無ければ true。
    * IME イベントとは別のタスク（consumer の API 呼び出し・macrotask の判定）から呼ぶこと。
    */
   function commitInProgressEdit(): boolean {
-    if (editor !== undefined && editor.commitEdit() === 'composing') {
+    // DD-056（Codex 実装レビュー P1）: 接続が終端した後は確定しない（ClientSession.submitLocalOperation が throw する＝flush の reject や
+    // macrotask の未捕捉例外になる）。編集はそのまま残し、確定できなかったとして扱う。
+    if (sync?.session.isStopped === true) {
       return false;
+    }
+    if (editor !== undefined) {
+      try {
+        if (editor.commitEdit() === 'composing') {
+          return false;
+        }
+      } catch (error) {
+        diag.emit('error', 'commit-edit-failed', `編集中のセルの確定に失敗しました: ${errorMessage(error)}`);
+        return false;
+      }
     }
     closeSelectDropdown?.();
     closeDatePicker?.();
@@ -683,7 +712,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
   function applyReadOnlyLock(): void {
     // 先に確定する: 直接の呼び出しでは readOnly=false のまま通常経路で、変換の終わり待ちからは関所の許可つき（editorSubmit 経由）で送る。
     commitInProgressEdit();
+    closeSelectDropdown?.(); // 接続の終端で確定しなかったときも候補欄は閉じる（閉じていれば何もしない）
+    closeDatePicker?.();
     readOnlyDeferred = false;
+    deferredLockEditTarget = null;
     readOnly = true;
     editor?.setReadOnly(true);
     syncCellLock();
@@ -705,6 +737,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
           // 文書を変える他の入口はすぐ止め、textarea は変換が終わってから（I-3）。変換の終わりは editor の変化で判定し直す。
           readOnly = true;
           readOnlyDeferred = true;
+          // 送信の関所で通すのは、いま変換中の編集の確定 1 回だけ（Codex 実装レビュー P1）。
+          deferredLockEditTarget = currentEdit();
+          // 候補欄（選択式の候補リスト・日付）は今閉じる（textarea には触れない）。開いたままだと、変換の後の候補クリックが
+          // 編集中の値を取り消してから読み取り専用で断られ、入力が失われる（Codex 実装レビュー P1）。
+          closeSelectDropdown?.();
+          closeDatePicker?.();
           sync?.view.markViewportDirty();
           diag.emit('info', 'readonly-deferred', 'setReadOnly(true): IME 変換中のため、変換が終わってから編集中のセルを確定して textarea を読み取り専用にする');
         }
@@ -719,6 +757,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     readOnly = false;
     readOnlyDeferred = false; // 変換の終わり待ちの切り替えは取り消す
+    deferredLockEditTarget = null;
     editor?.setReadOnly(false);
     syncCellLock();
     sync?.view.markViewportDirty();
@@ -744,20 +783,33 @@ export function createGridController(target: GridMountTarget, options: GridMount
     waiter.resolve(result);
   }
 
-  /** flush の待ち合わせを判定する。呼んだ時点の編集中セルが確定できていなければ確定を試みる（変換中なら待つ）。 */
+  /** waiter が呼んだ時点の編集がまだ続いているか（確定・取消・移動で終わっていれば、後から始まった別の編集は待たない）。 */
+  function isWaiterEditPending(waiter: FlushWaiter): boolean {
+    return waiter.editTarget !== null && waiter.editTarget === currentEdit();
+  }
+
+  /**
+   * flush の待ち合わせを判定する。接続の終端を先に見る（終端後は確定しない・Codex 実装レビュー P1）。呼んだ時点の編集が続いていれば
+   * 確定を試み（変換中なら待つ）、終わっていれば後から始まった別の編集には触れない（Codex 実装レビュー P2）。
+   */
   function evaluateFlushWaiters(): void {
     if (flushWaiters.size === 0) {
       return;
     }
-    if (!destroyed && [...flushWaiters].some((waiter) => waiter.editPending) && commitInProgressEdit()) {
-      for (const waiter of flushWaiters) {
-        waiter.editPending = false;
+    const stopped = sync?.session.isStopped === true;
+    for (const waiter of flushWaiters) {
+      if (!isWaiterEditPending(waiter)) {
+        waiter.editTarget = null;
       }
     }
-    const stopped = sync?.session.isStopped === true;
+    if (!destroyed && !stopped && [...flushWaiters].some((waiter) => waiter.editTarget !== null) && commitInProgressEdit()) {
+      for (const waiter of flushWaiters) {
+        waiter.editTarget = null;
+      }
+    }
     const pendingCount = sync?.session.pendingCount ?? 0;
     for (const waiter of [...flushWaiters]) {
-      const result = decideFlush({ destroyed, stopped, pendingCount, editPending: waiter.editPending });
+      const result = decideFlush({ destroyed, stopped, pendingCount, editPending: waiter.editTarget !== null });
       if (result !== undefined) {
         settleFlushWaiter(waiter, result);
       }
@@ -790,12 +842,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     const timeoutMs = resolveFlushTimeout(options?.timeoutMs);
     return new Promise<GridFlushResult>((resolve) => {
-      const waiter: FlushWaiter = { resolve, timer: undefined, editPending: isEditInProgress() };
+      const waiter: FlushWaiter = { resolve, timer: undefined, editTarget: currentEdit() };
       flushWaiters.add(waiter);
       waiter.timer = setTimeout(() => {
         settleFlushWaiter(
           waiter,
-          timeoutResult({ pendingCount: sync?.session.pendingCount ?? 0, editPending: waiter.editPending }),
+          timeoutResult({ pendingCount: sync?.session.pendingCount ?? 0, editPending: isWaiterEditPending(waiter) }),
         );
       }, timeoutMs);
       // 呼び出し時に 1 回判定する（consumer の API 呼び出し＝IME イベントとは別のタスクなので、ここで確定してよい）。
@@ -2657,12 +2709,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
           }
         }
       }
-      // DD-056 H12: 状態機械が出す編集中セルの確定であることを送信の関所へ伝える（変換の終わり待ちの間はこの確定だけを通す）。
-      inEditorSubmit = true;
+      // DD-056 H12: 変換の終わり待ちの間は「切り替えを頼まれた時点の編集」の確定だけを送信の関所で通す（1 回で消費する）。
+      // 確定中の editingTarget は ime-editing-session が submit の後に外すため、ここで参照を比べられる。
+      const allowDuringDeferredLock =
+        readOnlyDeferred &&
+        deferredLockEditTarget !== null &&
+        editor !== undefined &&
+        editor.session.getEditingTarget() === deferredLockEditTarget;
+      if (allowDuringDeferredLock) {
+        deferredLockEditTarget = null;
+      }
+      inDeferredLockCommit = allowDuringDeferredLock;
       try {
         return submitSetCells(op);
       } finally {
-        inEditorSubmit = false;
+        inDeferredLockCommit = false;
       }
     };
 
@@ -2766,6 +2827,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     const confirmSelect = (): void => {
       if (selectDropdown === undefined || !selectDropdown.isOpen() || selectOpenTarget === null) {
+        return;
+      }
+      // DD-056 H12（Codex 実装レビュー P1）: 表示専用（変換の終わり待ちを含む）では候補の確定を、下の編集の取り消しより前に断る
+      // （取り消してから送信の関所で断ると、編集中の値も候補も残らない）。候補欄は閉じ、編集中の値はそのまま残す。
+      if (readOnly) {
+        diag.emit('info', 'readonly-blocked', 'readOnly: 選択式の候補の確定を抑止（編集中の値はそのまま）');
+        cancelSelect();
         return;
       }
       const target = selectOpenTarget; // Escape 投入より前に確保する（以降の副作用で null 化されても安全）
@@ -2892,6 +2960,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
      */
     const confirmDate = (value: string): void => {
       if (datePicker === undefined || !datePicker.isOpen() || dateOpenTarget === null) {
+        return;
+      }
+      // DD-056 H12: 表示専用（変換の終わり待ちを含む）では確定しない（confirmSelect と同じ。開いた後に切り替わった場合の防御）。
+      if (readOnly) {
+        diag.emit('info', 'readonly-blocked', 'readOnly: 日付の確定を抑止');
+        cancelDate();
         return;
       }
       const target = dateOpenTarget;
@@ -3121,7 +3195,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-035 R4: アクティブセルが readOnly 列にある間、編集 DOM イベントの dispatch を論理遮断する（物理遮断＝readOnly 属性は
       // onChange の syncColumnLock が同期）。DD-035 R6（Codex P1）: 命令 API が初回描画前で保留中の間も入力を遮断する
       // （保留の適用先が確定する前の打鍵を旧セルへ確定させない）。readOnlyColumns 未指定かつ保留なしなら常に false。
-      isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly(),
+      // DD-056 H12（Codex 実装レビュー P1）: 変換の終わり待ちの間、切り替えを頼まれた時点の編集が終わったら新しい編集を始めさせない
+      // （textarea の readOnly 属性は次の判定で付く。それまでの論理遮断）。
+      isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly() || isDeferredLockIdle(),
+      // DD-056 H12（Codex 実装レビュー P2）: 変換の終わり待ちの間は textarea の既定の cut も止める（readOnly 属性をまだ付けられないため）。
+      isNativeEditBlocked: () => readOnlyDeferred,
       // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
       isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
       // RC12（DD-052-2）: 文字列として保つ列は編集確定時の型変換をスキップする。
@@ -3637,7 +3715,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       for (const waiter of [...flushWaiters]) {
         settleFlushWaiter(
           waiter,
-          decideFlush({ destroyed: true, stopped: false, pendingCount: pendingAtDestroy, editPending: waiter.editPending }) ?? {
+          decideFlush({ destroyed: true, stopped: false, pendingCount: pendingAtDestroy, editPending: waiter.editTarget !== null }) ?? {
             status: 'stopped',
             pendingCount: pendingAtDestroy,
           },

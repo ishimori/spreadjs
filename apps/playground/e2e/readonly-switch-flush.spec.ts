@@ -8,6 +8,9 @@
 //   ④ 変換中に setReadOnly(true) → 変換が終わるまで textarea は触られず、終わった後に確定して読み取り専用になる（AC4）
 //   ⑤ flush(): 送り切ると flushed、オフラインで上限を過ぎると timeout（AC5）
 //   ⑥ 既存不具合の修正: 順序B の確定直後に別セルをクリック → 元のセルへ確定して移る／グリッド外のクリック → 確定（AC6）
+//   ⑦〜⑪ Codex 実装レビュー（2 回目）の指摘の回帰: 変換の終わり待ちで送るのは切り替え時の編集 1 件だけ（⑦）・候補欄を閉じて
+//   入力を失わない（⑧）・flush は呼んだ時点の編集だけを確定する（⑨）・既定の cut を止める（⑩）・接続の終端後は確定しない（⑪）。
+//   いずれも判定の macrotask より先に同じタスクで synthetic イベントを流す（実際の打鍵より速い順序で関所の穴を突く）。
 // ⚠️ synthetic composition は実 IME ではない（順序と状態遷移の配線の確認）。実 IME は Manual Gate（T1・推奨）。
 
 import { fileURLToPath } from 'node:url';
@@ -26,10 +29,10 @@ function evidencePath(fileName: string): string {
   return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-056/${fileName}`, import.meta.url));
 }
 
-async function openClient(browser: Browser, name: string): Promise<{ context: BrowserContext; page: Page }> {
+async function openClient(browser: Browser, name: string, extraQuery = ''): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
-  await page.goto(`/poc-integration.html?name=${encodeURIComponent(name)}&server=${encodeURIComponent(WS_ORIGIN)}`);
+  await page.goto(`/poc-integration.html?name=${encodeURIComponent(name)}&server=${encodeURIComponent(WS_ORIGIN)}${extraQuery}`);
   await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
   await expect
     .poll(async () => (await ih.snapshot(page)).ready, { timeout: 30_000, message: `${name} が ready にならない` })
@@ -275,6 +278,212 @@ test.describe('DD-056 H12 読み取り専用の実行時切替・送り切り', 
       await page.locator('#int-status').click(); // グリッドの外（blur）
       await expect.poll(() => ih.committedCell(page, second.rowId, second.columnId), { timeout: 10_000 }).toBe(outside);
       expect((await ih.snapshot(page)).activeCell).toEqual({ row: 3, col: 2 }); // 移動しない
+    } finally {
+      await alice.context.close();
+    }
+  });
+
+  test('⑦ 変換中の setReadOnly(true) の後、判定より先に確定して次のセルへ入力しても、送るのは切り替え時の編集だけ', async ({ browser }) => {
+    const alice = await openClient(browser, 'Alice');
+    try {
+      const page = alice.page;
+      const first = await cellId(page, 0, 0);
+      const next = await cellId(page, 1, 0);
+      const nextBefore = await ih.committedCell(page, next.rowId, next.columnId);
+      await ih.selectCell(page, 0, 0);
+      const text = `春季${Date.now() % 1000}`;
+      const intruder = `after-lock-${Date.now()}`;
+      await composeOpen(page, text);
+      // 同じタスクで: 切り替え → 変換確定（順序A）→ Enter で確定して下へ → 次のセルへ入力 → Enter。
+      await page.evaluate(
+        ({ data, typed }: { data: string; typed: string }) => {
+          const ta = document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement;
+          (window as unknown as { __gridInstance: { setReadOnly(v: boolean): void } }).__gridInstance.setReadOnly(true);
+          ta.dispatchEvent(new CompositionEvent('compositionend', { data, bubbles: true }));
+          ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data, isComposing: false, bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+          ta.value = typed;
+          ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: typed, isComposing: false, bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+        },
+        { data: text, typed: intruder },
+      );
+      await expect.poll(() => ih.committedCell(page, first.rowId, first.columnId), { timeout: 10_000 }).toBe(text);
+      await expect.poll(() => textareaReadOnly(page)).toBe(true);
+      await page.waitForTimeout(300);
+      expect(await ih.committedCell(page, next.rowId, next.columnId)).toBe(nextBefore); // 次のセルの入力は確定されない
+      expect((await ih.snapshot(page)).editingTarget).toBeNull(); // 新しい編集も始まっていない
+    } finally {
+      await setReadOnly(alice.page, false).catch(() => {});
+      await alice.context.close();
+    }
+  });
+
+  test('⑧ 変換中の setReadOnly(true) は候補欄を閉じ、変換の後に候補をクリックしても編集中の値を失わない', async ({ browser }) => {
+    const stamp = Date.now() % 1000;
+    const text = `冬季${stamp}`; // 候補の前方一致で候補欄が出る（自由入力併存列なので候補外の値もそのまま確定できる）
+    // 選択式にする列の ID を先に読む（未知の列を指定すると config error で mount しない）。
+    const probe = await openClient(browser, 'Probe');
+    const columnId = await ih.colIdAt(probe.page, 2);
+    await probe.context.close();
+    if (columnId === undefined) {
+      throw new Error('列 2 が無い');
+    }
+    const select = encodeURIComponent(`${columnId}:${text}A|${text}B!free`);
+    const alice = await openClient(browser, 'Alice', `&select=${select}`);
+    try {
+      const page = alice.page;
+      const target = await cellId(page, 1, 2);
+      await ih.selectCell(page, 1, 2);
+      await composeOpen(page, text);
+      await expect.poll(() => ih.selectOpen(page), { message: '変換中に候補欄が出る' }).toBe(true);
+      // 同じタスクで: 切り替え → 変換確定（順序B）→ 候補の pointerdown（判定の macrotask より先）。
+      await page.evaluate(
+        ({ data, option }: { data: string; option: string }) => {
+          const ta = document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement;
+          (window as unknown as { __gridInstance: { setReadOnly(v: boolean): void } }).__gridInstance.setReadOnly(true);
+          ta.dispatchEvent(new CompositionEvent('compositionend', { data, bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+          document
+            .querySelector(`.ns-select-option[data-value="${option}"]`)
+            ?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+        },
+        { data: text, option: `${text}A` },
+      );
+      await expect.poll(() => ih.committedCell(page, target.rowId, target.columnId), { timeout: 10_000 }).toBe(text);
+      await expect.poll(() => textareaReadOnly(page)).toBe(true);
+      expect(await ih.selectOpen(page)).toBe(false);
+    } finally {
+      await setReadOnly(alice.page, false).catch(() => {});
+      await alice.context.close();
+    }
+  });
+
+  test('⑨ 変換中に呼んだ flush() は同じ編集を確定するが、その編集を取り消した後に始めた別のセルの編集は確定しない', async ({ browser }) => {
+    const alice = await openClient(browser, 'Alice');
+    try {
+      const page = alice.page;
+      // 対照: 変換中に flush() → 変換を確定 → 同じ編集が確定されて flushed。
+      const kept = await cellId(page, 2, 0);
+      await ih.selectCell(page, 2, 0);
+      const keptText = `梅${Date.now() % 1000}`;
+      await composeOpen(page, keptText);
+      await page.evaluate(() => {
+        const w = window as unknown as { __gridInstance: { flush(o?: { timeoutMs?: number }): Promise<unknown> }; __dd056Flush?: Promise<unknown> };
+        w.__dd056Flush = w.__gridInstance.flush({ timeoutMs: 10_000 });
+      });
+      await composeEndOrderB(page, keptText);
+      expect(await page.evaluate(() => (window as unknown as { __dd056Flush: Promise<unknown> }).__dd056Flush)).toEqual({ status: 'flushed' });
+      expect(await ih.committedCell(page, kept.rowId, kept.columnId)).toBe(keptText);
+
+      // 本題: 変換中に flush() → 同じタスクで変換確定 → Escape で取り消し → 下のセルで新しい編集を始める。
+      const cancelled = await cellId(page, 3, 1);
+      const other = await cellId(page, 4, 1);
+      const cancelledBefore = await ih.committedCell(page, cancelled.rowId, cancelled.columnId);
+      const otherBefore = await ih.committedCell(page, other.rowId, other.columnId);
+      await ih.selectCell(page, 3, 1);
+      const text = `桜${Date.now() % 1000}`;
+      const typed = `other-${Date.now()}`;
+      await composeOpen(page, text);
+      await page.evaluate(
+        ({ data, value }: { data: string; value: string }) => {
+          const w = window as unknown as { __gridInstance: { flush(o?: { timeoutMs?: number }): Promise<unknown> }; __dd056Flush?: Promise<unknown> };
+          const ta = document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement;
+          w.__dd056Flush = w.__gridInstance.flush({ timeoutMs: 10_000 });
+          ta.dispatchEvent(new CompositionEvent('compositionend', { data, bubbles: true }));
+          ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data, isComposing: false, bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+          ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', bubbles: true, cancelable: true }));
+          ta.value = value;
+          ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: value, isComposing: false, bubbles: true }));
+        },
+        { data: text, value: typed },
+      );
+      expect(await page.evaluate(() => (window as unknown as { __dd056Flush: Promise<unknown> }).__dd056Flush)).toEqual({ status: 'flushed' });
+      const s = await ih.snapshot(page);
+      expect(s.editingTarget).toEqual(other); // 後から始めた編集は確定されず、編集中のまま
+      expect(s.draft).toBe(typed);
+      await page.waitForTimeout(300);
+      expect(await ih.committedCell(page, other.rowId, other.columnId)).toBe(otherBefore);
+      expect(await ih.committedCell(page, cancelled.rowId, cancelled.columnId)).toBe(cancelledBefore); // 取り消した編集も送られない
+      await page.keyboard.press('Escape'); // 後片付け
+    } finally {
+      await alice.context.close();
+    }
+  });
+
+  test('⑩ 変換の終わり待ちの間は textarea の既定の cut も止め、変換の後に確定して読み取り専用になる', async ({ browser }) => {
+    const alice = await openClient(browser, 'Alice');
+    try {
+      const page = alice.page;
+      const target = await cellId(page, 4, 0);
+      await ih.selectCell(page, 4, 0);
+      const text = `蓮${Date.now() % 1000}`;
+      await composeOpen(page, text);
+      await setReadOnly(page, true);
+      const prevented = await page.evaluate(() => {
+        const ta = document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement;
+        const event = new ClipboardEvent('cut', { bubbles: true, cancelable: true, clipboardData: new DataTransfer() });
+        ta.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      expect(prevented, '終わり待ちの cut は既定動作を止める（readOnly 属性の代わり）').toBe(true);
+      expect(await textareaReadOnly(page)).toBe(false); // 変換中の textarea の属性は触らない（I-3）
+      await composeEndOrderB(page, text);
+      await expect.poll(() => ih.committedCell(page, target.rowId, target.columnId), { timeout: 10_000 }).toBe(text);
+      await expect.poll(() => textareaReadOnly(page)).toBe(true);
+    } finally {
+      await setReadOnly(alice.page, false).catch(() => {});
+      await alice.context.close();
+    }
+  });
+
+  test('⑪ 接続の終端（stopped）の後の flush()・setReadOnly(true) は編集を確定せず、reject も未捕捉の例外も出さない', async ({ browser }) => {
+    const alice = await openClient(browser, 'Alice');
+    const pageErrors: string[] = [];
+    alice.page.on('pageerror', (error) => {
+      pageErrors.push(error.message);
+    });
+    try {
+      const page = alice.page;
+      await ih.simulateDrop(page);
+      await expect.poll(async () => (await ih.snapshot(page)).online).toBe(false);
+      // 切断中の未送信の上限（100 件）を超えさせて stopped にする（行の挿入は 1 回で 1 操作。サーバーへは届かない）。
+      // 末尾の行の後ろへ足す（先頭へ足すと表示中の行がずれてスクロール位置が動く）。
+      const lastRowId = await ih.rowIdAt(page, 4);
+      await page.evaluate((afterRowId) => {
+        const inst = (window as unknown as { __gridInstance: { insertRows(o: { afterRowId: string | null }): void } }).__gridInstance;
+        for (let i = 0; i < 101; i += 1) {
+          inst.insertRows({ afterRowId: afterRowId ?? null });
+        }
+      }, lastRowId);
+      await expect.poll(() => ih.connectionState(page)).toBe('stopped');
+
+      // flush(): 編集中のセルを確定しようとせず（確定先が throw する）、stopped を返す。編集は残す。
+      await ih.selectCell(page, 0, 1);
+      await page.keyboard.type('stopped-edit');
+      const result = await flush(page, 2_000);
+      expect(result.status).toBe('stopped');
+      expect(result.pendingCount).toBeGreaterThanOrEqual(101);
+      expect((await ih.snapshot(page)).editingTarget).not.toBeNull();
+
+      // setReadOnly(true)（変換していない編集）: 確定せずに読み取り専用へ切り替わる（throw しない）。
+      await setReadOnly(page, true);
+      expect(await textareaReadOnly(page)).toBe(true);
+      await setReadOnly(page, false);
+      await page.keyboard.press('Escape');
+
+      // 変換中の setReadOnly(true): 変換の後の判定（macrotask）でも確定せず、未捕捉の例外を出さない。
+      await ih.selectCell(page, 1, 1);
+      const text = `霧${Date.now() % 1000}`;
+      await composeOpen(page, text);
+      await setReadOnly(page, true);
+      await composeEndOrderB(page, text);
+      await expect.poll(() => textareaReadOnly(page)).toBe(true);
+      await page.waitForTimeout(200);
+      expect(pageErrors).toEqual([]);
     } finally {
       await alice.context.close();
     }

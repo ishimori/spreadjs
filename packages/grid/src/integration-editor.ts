@@ -96,6 +96,12 @@ export interface IntegrationEditorConfig {
    */
   readonly isInputLocked?: () => boolean;
   /**
+   * textarea の既定の cut を止めるか（DD-056 H12）。true の間は、cut の裁定（onClipboardCut）が消費しなかったときも既定動作を止める
+   * （textarea もクリップボードも変えない）。textarea の readOnly 属性をまだ付けられない間（IME 変換の終わり待ち）に使う。
+   * 未指定なら常に false（既存挙動を保つ）。
+   */
+  readonly isNativeEditBlocked?: () => boolean;
+  /**
    * RC1・RC2（DD-052-1）: 折り返し（wrap）列か（ColumnId 文字列で判定）。true の列を編集中は Alt+Enter がセル内
    * 改行になり、textarea が内容に合わせて下へ伸びる（上限＋内部スクロール）。未指定なら常に false（既存挙動を保つ）。
    */
@@ -432,6 +438,10 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     if (tsv !== null && tsv !== undefined) {
       event.clipboardData?.setData('text/plain', tsv);
       event.preventDefault();
+      return;
+    }
+    if (config.isNativeEditBlocked?.() === true) {
+      event.preventDefault(); // DD-056 H12: readOnly 属性の代わりに既定の cut を止める（textarea・クリップボードとも不変）
     }
   });
   on('paste', (event) => {
