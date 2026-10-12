@@ -167,8 +167,19 @@ await server.submit(op, { actorId: 'system', documentId: 'plan-2027' }); // 宛�
   従来どおり `serve()` が reject する**（0 文書での起動成功を装わない）。
 - **排他**: `documents` と単一文書オプション（`documentId`/`columnOrder`/`seedRows`/`persistenceDir`/`oplog`/`snapshotStore`/
   `initialDocument`）は併用できない。文書ごとの排他規則は単一文書と同じ。
-- **v1 の範囲**: 文書集合の変更はプロセス再起動で行う（動的な作成・後片付け・実行時の文書単位隔離は未提供）。実行時の恒久失敗は
-  従来どおりプロセス単位の fail-stop。将来の無限 Book・複数台への振り分けは `resolve` の差し替えと前段の routing で到達する（ADR-0025）。
+- **実行中の追加と撤去（DD-056）**: `await server.addDocument(id, config)` で文書を足し、`await server.removeDocument(id)` で外す
+  （プロセスを止めずに版を切り替える）。撤去は接続を切り、受理済みの操作の永続化と `onAccepted` を待ってから保存先を閉じる。
+  **保存先は消さない**（同じ保存先で足し直すと続きから復旧する＝新しい版は新しい ID にする）。外した文書への再接続は 404 で、
+  未送信の操作は受け付けない。`server.documentIds` は読むたびに最新。
+
+  ```ts
+  // 版を確定して新しい版を作る（前の版は全員が読み取り専用になっている前提）。
+  await server.addDocument(`budget-${dept}-v2`, { columnOrder, oplog, snapshotStore, initialDocument: () => fromConfirmed(dept) });
+  await server.removeDocument(`budget-${dept}-v1`);
+  notifyClients({ open: `budget-${dept}-v2` }); // クライアントは新しい documentId で開き直す
+  ```
+- **範囲**: 実行時の恒久失敗は従来どおりプロセス単位の fail-stop。将来の無限 Book・複数台への振り分けは `resolve` の差し替えと
+  前段の routing で到達する（ADR-0025）。
 
 ## 3d. 受理通知で集計を再計算する（`onAccepted`・DD-049）
 

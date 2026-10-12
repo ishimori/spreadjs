@@ -25,6 +25,28 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [0.1.0-alpha.12] - 2026-10-12
+
+### Added
+
+- **server-hono `ServerInstance.addDocument`・`removeDocument`（実行中の文書の追加と撤去・DD-056-3・広島空港 H13）**: serve を
+  止めずに文書を足し・外す。追加は起動時の文書と同じ構成・復旧（保存先に履歴があれば続きから）・初期文書の作成まで済んだら解決し、
+  以後 `?documentId=` で接続できる。撤去は ① 以後の接続・`/config`・`submit` を拒否（404・reject）② その文書の接続をすべて切る
+  （close code 1001。切断中に届いたフレームも捨てる）③ 受理済みの操作の永続化・配信・`onAccepted` を待つ ④ 保存先を閉じる
+  （実行中の snapshot 生成の終了を待つ）の順で行い、**保存先は消さない**（同じ保存先で足し直すと続きから復旧する）。外した文書の
+  クライアントの再接続・再送は受け付けない。重複・処理中・`stop()` 後は reject し、`stop()` は処理中の追加・撤去の終わりを待つ。
+  `documentIds`・`quarantined` は読むたびに最新になった（検疫した ID を足し直せたら外れる）。診断コード `document-added`・
+  `document-removed`（info）を追加。公開 `.d.ts` の差分は追加のみ。
+
+### Fixed
+
+- **server-hono 停止・撤去で実行中の snapshot 生成を待たずに保存先を閉じていた（DD-056-3）**: snapshot は fire-and-forget で
+  生成されるため、`stop()` の後にストアへ書き込みうった。close で新しい生成を止め、実行中の生成の終了を待ってから閉じる。
+- **server-hono consumer の oplog ストアを、直列化キューに残った append の途中で閉じうった（DD-056-3）**: adapter の close が
+  キューの完了を待ってから consumer の `close` を呼ぶ。
+- **server-hono 切断した接続から切断ハンドシェイク中に届いた join で、同じ接続のまま再参加できた（DD-056-3）**: 不正なフレーム・
+  文書の不一致などで切った接続、TTL で外した接続から後で届いたフレームを捨てる。
+
 ## [0.1.0-alpha.11] - 2026-10-12
 
 ### Added

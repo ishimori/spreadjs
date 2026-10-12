@@ -1163,7 +1163,7 @@ export declare const NanairoSheetView: import("react").ForwardRefExoticComponent
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/server-hono の公開宣言 closure 1`] = `
 "// ==== packages/server-hono/src/index.ts ====
-import type { ServeAcceptedHook, ServeAuthenticate, ServeAuthorizeOperation, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
+import type { ServeAcceptedHook, ServeAuthenticate, ServeAuthorizeOperation, ServeDocumentConfig, ServeDocuments, ServeInitialDocument, ServeOpLogStore, ServeQuarantinedDocument, ServeSetCellsInput, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult } from './serve-types';
 export type { ServeAcceptedCellChange, ServeAcceptedEvent, ServeAcceptedHook, ServeAcceptedOrigin, ServeAuthRequest, ServeAuthenticate, ServeAuthorizeOperation, ServeCellScalar, ServeDeleteRowsOperation, ServeDocumentConfig, ServeDocumentOperation, ServeDocumentResolver, ServeDocuments, ServeIdentity, ServeInitialDocument, ServeInitialRow, ServeInsertRowsOperation, ServeOpLogReadResult, ServeOpLogStore, ServeOperationAuthorizationRequest, ServeOperationEnvelope, ServePersistedSnapshot, ServeQuarantinedDocument, ServeRejectCode, ServeSetCellsChange, ServeSetCellsInput, ServeSetCellsOperation, ServeSnapshotStore, ServeSubmitOptions, ServeSubmitResult, } from './serve-types';
 /** 診断エントリの重大度（server-hono 診断 hook）。 */
 export type ServeDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -1179,7 +1179,8 @@ export interface ServeDiagnostic {
      * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）／'operation-denied'（authorizeOperation が
      * 書込を拒否した・info・DD-056）／'authorize-error'（authorizeOperation が throw・拒否として扱う・error）／
      * 'authorize-invalid-result'（authorizeOperation が true/false 以外〔Promise 等〕を返した・返した Promise が reject した・拒否として
-     * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop を呼んだ＝何もせず reject・error）。
+     * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop・addDocument・removeDocument を呼んだ＝何もせず
+     * reject・error）／'document-added'・'document-removed'（addDocument・removeDocument の完了・info・DD-056 H13）。
      * Cookie・トークン等の値は載せない。
      */
     readonly code: string;
@@ -1274,13 +1275,32 @@ export interface ServerInstance {
     readonly documentId: string;
     /**
      * 実際に serve 中の文書 ID（DD-043）。起動時の検疫で外れた文書は含まない。単一文書構成では \`[documentId]\`。
+     * DD-056: **読むたびに最新**（\`addDocument\`・\`removeDocument\` を反映する）。
      */
     readonly documentIds: readonly string[];
     /**
      * 起動時の復旧に失敗して serve から外した文書（DD-043 D3・複数文書構成のみ）。単一文書構成の復旧失敗は
-     * 従来どおり \`serve()\` 自体が reject する（0 文書での起動成功を装わない）。
+     * 従来どおり \`serve()\` 自体が reject する（0 文書での起動成功を装わない）。DD-056: 読むたびに最新（同じ ID を
+     * \`addDocument\` で足し直せたら外れる）。
      */
     readonly quarantined: readonly ServeQuarantinedDocument[];
+    /**
+     * 実行中に文書を足す（Experimental 0.x・DD-056 H13）。構成の検証・保存先の復旧（履歴があれば続きから）・初期文書（\`initialDocument\`／
+     * \`seedRows\`）は起動時の文書と同じで、済んだら解決する。以後 \`?documentId=\` で接続でき、\`submit({ documentId })\` が使える。
+     * 単一文書・複数文書のどちらの構成でも使える（足した文書への接続は \`?documentId=\` で文書を名乗る）。
+     * 空の ID・serve 中の ID・追加／撤去の処理中の ID・\`stop()\` 後・復旧の失敗は Promise reject（検疫には入れず、開いた保存先は閉じる）。
+     * \`authorizeOperation\` の中から呼ぶと reject。
+     */
+    addDocument(documentId: string, config: ServeDocumentConfig): Promise<void>;
+    /**
+     * 実行中に文書を外す（Experimental 0.x・DD-056 H13）。① 以後の接続・\`/config\`・\`submit\` を拒否（404・reject）② その文書の接続を
+     * すべて切る（close code 1001。切断中に届いたフレームも捨てる）③ 受理済みの操作の永続化・配信・\`onAccepted\` が済むのを待つ
+     * ④ 保存先を閉じる（実行中の snapshot 生成の終了を待つ）→ 解決。**保存先は消さない**（同じ保存先で \`addDocument\` し直すと続きから
+     * 復旧する＝別の版は別の ID にする）。外した文書のクライアントは再接続が 404 で失敗し続け、未送信の操作は送られない（切断の上限を
+     * 超えると \`stopped\`）。既定文書も外せる（以後の documentId なしの接続は 404）。serve していない ID・処理中の ID・\`stop()\` 後は
+     * Promise reject。\`authorizeOperation\` の中から呼ぶと reject。
+     */
+    removeDocument(documentId: string): Promise<void>;
     /** 現在の接続数（診断用）。\`documentId\` 指定でその文書のみ、未指定は全文書の合計。 */
     connectionCount(documentId?: string): number;
     /**

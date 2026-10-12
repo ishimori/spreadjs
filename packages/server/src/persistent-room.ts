@@ -208,6 +208,10 @@ export class PersistentRoom {
   private readonly snapshotIntervalOps: number;
   private opsSinceSnapshot = 0;
   private snapshotInProgress = false;
+  /** 実行中の snapshot 生成（close が終了を待つ・DD-056 H13）。 */
+  private snapshotWrite: Promise<void> | undefined;
+  /** close 開始後は新しい snapshot 生成を始めない（DD-056 H13・Codex 設計レビュー P2-2）。 */
+  private closing = false;
   private lastSnapshotError: unknown;
   private readonly frontier: DurableFrontier;
   private poisoned = false; // append 失敗後は write を全停止（欠番防止・P1-5）
@@ -311,8 +315,8 @@ export class PersistentRoom {
    * - **P2-5**: 生成完了時に蓄積分（write 中に到着した op）を再評価し、閾値超過なら続けて生成する（tail 肥大を防ぐ）。
    */
   private maybeSnapshot(): void {
-    if (this.snapshotInProgress || this.opsSinceSnapshot < this.snapshotIntervalOps) {
-      return;
+    if (this.closing || this.snapshotInProgress || this.opsSinceSnapshot < this.snapshotIntervalOps) {
+      return; // close 開始後は生成しない（撤去・停止の後にストアへ書かない・DD-056）
     }
     // barrier: 完全 durable 状態（frontier == currentRevision）でのみ snapshot を取る。in-flight があれば延期。
     if (this.frontier.frontierRevision() !== this.sequencer.currentRevision) {
@@ -323,13 +327,14 @@ export class PersistentRoom {
     // exportState は同期＝生成時点の一貫した状態（frontier==current ゆえ全て durable・snapshot<=frontier を満たす）。
     const state = this.sequencer.exportState();
     const revision = state.currentRevision;
-    void this.writeSnapshot(state, revision)
+    this.snapshotWrite = this.writeSnapshot(state, revision)
       .catch((error: unknown) => {
         this.lastSnapshotError = error; // snapshot は最適化物＝生成失敗でも oplog（正本）は無傷。ACK は既に durable。
       })
       .finally(() => {
         this.snapshotInProgress = false;
-        this.maybeSnapshot(); // P2-5: write 中に蓄積した分を再判定（閾値未満なら即 return）
+        this.snapshotWrite = undefined;
+        this.maybeSnapshot(); // P2-5: write 中に蓄積した分を再判定（閾値未満なら即 return・close 開始後は何もしない）
       });
   }
 
@@ -370,8 +375,15 @@ export class PersistentRoom {
     await this.snapshotStore.save(persisted);
   }
 
-  /** 保留中の durable 書込を確定してから閉じる（graceful shutdown）。 */
+  /**
+   * 保留中の durable 書込を確定してから閉じる（graceful shutdown）。DD-056 H13（Codex 設計レビュー P2-2）: 新しい snapshot 生成を止め、
+   * 実行中の生成（fire-and-forget の writeSnapshot）の終了を待ってからストアを閉じる（撤去・停止の後にストアへ書き込ませない）。
+   */
   async close(): Promise<void> {
+    this.closing = true;
+    while (this.snapshotWrite !== undefined) {
+      await this.snapshotWrite; // 生成の終了（成功・失敗とも catch 済み）を待つ。finally の再判定は closing で止まる
+    }
     await this.oplog.close();
     await this.snapshotStore.close();
   }

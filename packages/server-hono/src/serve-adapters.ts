@@ -76,7 +76,12 @@ export function adaptOpLogStore(store: ServeOpLogStore): OpLogStore {
         discardedTornRecords: result.discardedTornRecords ?? 0,
       };
     },
-    close: () => store.close(),
+    // DD-056 H13: 直列化キューに残っている append を待ってから閉じる（撤去・停止で consumer のトランザクションの途中に close しない）。
+    // queue は失敗しても resolve する形に保っている（上の FIFO の維持）ため、ここで reject はしない。
+    close: async () => {
+      await queue;
+      await store.close();
+    },
   };
 }
 

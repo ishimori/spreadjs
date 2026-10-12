@@ -166,8 +166,10 @@ export interface RunningServer {
   port: number;
   url: string;
   documentId: string; // 既定文書（documentId 無指定の接続の宛先）。DD-043 でも意味は不変
-  documentIds: string[]; // DD-043: 実際に serve 中の文書（起動時の検疫で外れた分は含まない）
-  quarantined: QuarantinedDocument[]; // DD-043: 起動時の復旧失敗で外した文書（多文書構成のみ・単一文書は起動失敗）
+  readonly documentIds: string[]; // DD-043: 実際に serve 中の文書（起動時の検疫で外れた分は含まない）。DD-056: 読むたびに最新
+  readonly quarantined: QuarantinedDocument[]; // DD-043: 起動時の復旧失敗で外した文書。DD-056: 読むたびに最新（足し直せたら外れる）
+  addDocument(documentId: string, config: StartDocumentConfig): Promise<void>; // DD-056 H13: 実行中に文書を足す
+  removeDocument(documentId: string): Promise<void>; // DD-056 H13: 実行中に文書を外す
   hash(documentId?: string): string; // 現在の権威文書 hash（smoke の収束 assert 用）。未指定=既定文書
   snapshot(documentId?: string): SnapshotData; // 検査用。未指定=既定文書
   connectionCount(documentId?: string): number; // リーク検査用（後始末後 0）。未指定=全文書合計
@@ -201,7 +203,7 @@ interface ConnectionMeta {
  * 接続ライフサイクル（accept → join → 確立 → close/error）と TTL sweep を実装する（phase4-design §2/§3）。
  * DD-026-2: 認証済み identity を接続ごとに保持し、Room へ渡す前に submitOperation/presence の身元を上書きする。
  */
-class RoomBridge {
+export class RoomBridge {
   private readonly wsByConnection = new Map<string, WebSocket>();
   private readonly connectionByWs = new Map<WebSocket, string>();
   private readonly metaByWs = new Map<WebSocket, ConnectionMeta>();
@@ -210,6 +212,10 @@ class RoomBridge {
    * あれば越えない。revision を消費しない応答（reject・noop・duplicate ACK）と失敗は settle しだい配る（Codex 第 2 回 P1）。
    */
   private readonly submitDeliveries: SubmitDelivery[] = [];
+  /** 撤去の印（DD-056 H13）。立った後はどの接続のフレームも捨て、新しい接続も受けない。 */
+  private retired = false;
+  /** 配信待ちが空になるのを待つ resolve（撤去の手順 ④・DD-056 H13）。 */
+  private drainWaiters: Array<() => void> = [];
 
   constructor(
     private readonly room: RoomController,
@@ -228,6 +234,10 @@ class RoomBridge {
    * （複数文書 serve・`?documentId=` 明示時。他文書の envelope を oplog へ混ぜない）。
    */
   onConnect(ws: WebSocket, identity: ServeIdentity | undefined, strictDocument = false): void {
+    if (this.retired) {
+      ws.close(1001, 'document removed'); // DD-056 H13: 撤去した文書へは接続を付けない（handshake の途中で撤去された接続）
+      return;
+    }
     this.metaByWs.set(ws, { identity, strictDocument, mismatchWarned: false });
     ws.on('message', (data: RawData) => {
       this.onMessage(ws, data);
@@ -242,6 +252,39 @@ class RoomBridge {
 
   connectionCount(): number {
     return this.connectionByWs.size;
+  }
+
+  /**
+   * 撤去の手順 ②③（DD-056 H13）: 撤去の印を立てて以後のフレームをすべて捨て、この文書の接続（未 join を含む）をすべて切る。
+   * 受理済みの配信（durable 化待ちを含む）はそのまま続く＝`whenDrained` で待つ。
+   */
+  retire(code: number, reason: string): void {
+    this.retired = true;
+    for (const ws of [...this.metaByWs.keys()]) {
+      this.closeSocket(ws, code, reason);
+    }
+  }
+
+  /** 配信待ち（Room へ投入済みの submit）が空になったら解決する（撤去の手順 ④・DD-056 H13）。 */
+  whenDrained(): Promise<void> {
+    if (this.submitDeliveries.length === 0) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.drainWaiters.push(resolve);
+    });
+  }
+
+  /** 配信待ちが空なら待っている whenDrained を解決する。 */
+  private notifyIfDrained(): void {
+    if (this.submitDeliveries.length > 0 || this.drainWaiters.length === 0) {
+      return;
+    }
+    const waiters = this.drainWaiters;
+    this.drainWaiters = [];
+    for (const resolve of waiters) {
+      resolve();
+    }
   }
 
   /** TTL sweep を発火し presenceRemoved を配信、失効接続の ws を close する（実タイマーから呼ぶ）。 */
@@ -285,6 +328,11 @@ class RoomBridge {
   }
 
   private onMessage(ws: WebSocket, data: RawData): void {
+    // DD-056 H13（Codex 設計レビュー P2-1）: 撤去した文書・切った接続（closeSocket／close 済み＝メタを外した接続）から後で届いた
+    // フレームは捨てる。切断ハンドシェイク中に届いた join で旧 Room へ再参加・投入させない（ws は close 後も listener が残る）。
+    if (this.retired || !this.metaByWs.has(ws)) {
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawDataToString(data));
@@ -507,6 +555,7 @@ class RoomBridge {
       return false;
     }
     this.deliverSubmit(delivery);
+    this.notifyIfDrained(); // DD-056 H13: 撤去が配信の完了を待っている
     return true;
   };
 
@@ -651,7 +700,7 @@ interface SubmitDelivery {
  * その配信と通知は実行中の hook が戻った後になる（hook は入れ子に呼ばれない）。各 RoomBridge は「配れる 1 件を配ったら true」を返す
  * 手順を登録し、ループは全手順が false を返すまで回す（文書をまたぐ配信順は規定しない）。
  */
-class SubmitDeliveryLoop {
+export class SubmitDeliveryLoop {
   private running = false;
   private readonly waiting = new Set<() => boolean>();
 
@@ -1430,6 +1479,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     // 判定に runtimes.size を使わないのは、検疫で 1 文書に減った複数文書構成が緩くなるのを避けるため。
     const strictDocument = requested !== undefined || multiDocument;
     wss.handleUpgrade(req, socket, head, (ws) => {
+      // DD-056 H13: handshake の途中で撤去された文書へは接続を付けない（登録簿を引き直す。RoomBridge 側も撤去の印で拒否する）。
+      if (runtimes.get(runtime.documentId) !== runtime) {
+        ws.close(1001, 'document removed');
+        return;
+      }
       runtime.bridge.onConnect(ws, identity, strictDocument);
     });
   };
@@ -1505,13 +1559,116 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     return runtime.submit(operation, actorId);
   };
 
+  // ---- DD-056 H13: 実行中の文書の追加と撤去（contract.md §5）----
+  /** 追加・撤去の処理中の文書 ID（同じ ID への並行の追加・撤去を拒否する）。 */
+  const documentsInTransition = new Set<string>();
+  /** 処理中の追加・撤去（stop がこれらの終了を待ってから閉じる）。 */
+  const transitions = new Set<Promise<void>>();
+  /** 追加・撤去の処理を登録し、終わったら外す（stop の待ち合わせ用）。 */
+  const trackTransition = (work: Promise<void>): Promise<void> => {
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    transitions.add(settled);
+    void settled.then(() => {
+      transitions.delete(settled);
+    });
+    return work;
+  };
+
+  const addDocument = (documentId: string, config: StartDocumentConfig): Promise<void> => {
+    const insideAuthorization = rejectInsideAuthorization(authorizationGuard, 'addDocument', diagnostics);
+    if (insideAuthorization !== undefined) {
+      return insideAuthorization;
+    }
+    if (closed) {
+      return Promise.reject(new Error('addDocument: server stopped'));
+    }
+    if (documentId.length === 0) {
+      return Promise.reject(new Error('addDocument: documentId が空です'));
+    }
+    if (runtimes.has(documentId)) {
+      return Promise.reject(new Error(`addDocument: documentId '${documentId}' は serve 中です`));
+    }
+    if (documentsInTransition.has(documentId)) {
+      return Promise.reject(new Error(`addDocument: documentId '${documentId}' は追加・撤去の処理中です`));
+    }
+    documentsInTransition.add(documentId);
+    const work = (async (): Promise<void> => {
+      try {
+        const spec: DocumentSpec = { documentId, columnOrder: [...config.columnOrder], ...omitUndefined(config) };
+        validateDocumentSpec(spec, ` [documentId=${documentId}]`);
+        const runtime = await createDocumentRuntime(spec, runtimeDeps); // 失敗時は開いた保存先を閉じてから throw する
+        if (closed) {
+          // stop() の後に復旧を終えた: 登録せずに閉じる（保存先のハンドルを残さない）。
+          await runtime.close().catch((error: unknown) => {
+            console.error(`collaboration-server: addDocument cleanup after stop failed: ${errorMessage(error)}`);
+          });
+          throw new Error(`addDocument: documentId '${documentId}' の追加中に server が停止しました`);
+        }
+        runtimes.set(documentId, runtime);
+        // 起動時に検疫した ID を足し直せたら、検疫の一覧から外す。
+        for (let index = quarantined.length - 1; index >= 0; index -= 1) {
+          if (quarantined[index]?.documentId === documentId) {
+            quarantined.splice(index, 1);
+          }
+        }
+        diagnostics?.('info', 'document-added', `document '${documentId}' を追加しました`);
+      } finally {
+        documentsInTransition.delete(documentId);
+      }
+    })();
+    return trackTransition(work);
+  };
+
+  /**
+   * 文書を外す（contract.md §5.2）: ① 登録から外す ② 撤去の印（以後のフレームを捨てる）③ 接続を切る ④ 受理済みの配信
+   * （durable 化・ACK・onAccepted）を待つ ⑤ 保存先を閉じる（snapshot 生成の終了を待つ）。保存先は消さない。
+   */
+  const removeDocument = (documentId: string): Promise<void> => {
+    const insideAuthorization = rejectInsideAuthorization(authorizationGuard, 'removeDocument', diagnostics);
+    if (insideAuthorization !== undefined) {
+      return insideAuthorization;
+    }
+    if (closed) {
+      return Promise.reject(new Error('removeDocument: server stopped'));
+    }
+    if (documentsInTransition.has(documentId)) {
+      return Promise.reject(new Error(`removeDocument: documentId '${documentId}' は追加・撤去の処理中です`));
+    }
+    const runtime = runtimes.get(documentId);
+    if (runtime === undefined) {
+      return Promise.reject(new Error(`removeDocument: documentId '${documentId}' は serve していません`));
+    }
+    documentsInTransition.add(documentId);
+    runtimes.delete(documentId); // ① 以後の upgrade・/config・/snapshot は 404、submit は reject
+    runtime.bridge.retire(1001, 'document removed'); // ②③
+    const work = (async (): Promise<void> => {
+      try {
+        await runtime.bridge.whenDrained(); // ④
+        await runtime.close(); // ⑤
+        diagnostics?.('info', 'document-removed', `document '${documentId}' を外しました`);
+      } finally {
+        documentsInTransition.delete(documentId);
+      }
+    })();
+    return trackTransition(work);
+  };
+
   const url = `http://${host}:${boundPort}`;
   return {
     port: boundPort,
     url,
     documentId: defaultDocumentId,
-    documentIds: [...runtimes.keys()],
-    quarantined,
+    get documentIds(): string[] {
+      return [...runtimes.keys()]; // DD-056: 読むたびに最新（追加・撤去を反映）
+    },
+    get quarantined(): QuarantinedDocument[] {
+      return [...quarantined];
+    },
+    addDocument,
+    removeDocument,
     hash: (documentId) => requireRuntime(documentId).hash(),
     snapshot: (documentId) => requireRuntime(documentId).snapshot(),
     connectionCount: (documentId) =>
@@ -1528,9 +1685,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
       closed = true;
       // 停止の診断はここで出す（serve() の stop が await で包んで新しい Promise を作ると、上の reject 済み Promise の
       // 「未捕捉にしない」処理が効かなくなるため、serve() 側は本 Promise をそのまま返す・DD-056）。
-      return closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets).then(() => {
-        diagnostics?.('info', 'serve-stopped', `stopped ${url}`);
-      });
+      // DD-056 H13: 処理中の追加・撤去の終了を待ってから閉じる（stop の後に復旧を終えた追加は自分で閉じて reject する）。
+      return Promise.all([...transitions])
+        .then(() => closeServer(server, wss, sweepTimer, runtimes, pendingAuthSockets))
+        .then(() => {
+          diagnostics?.('info', 'serve-stopped', `stopped ${url}`);
+        });
     },
   };
 }

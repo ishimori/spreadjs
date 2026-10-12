@@ -245,3 +245,63 @@ describe('recoverSequencerState documentId × persistenceDir 相互検証 fail-f
     ).rejects.toThrow(/封筒 revision/);
   });
 });
+
+// ---- DD-056 H13（Codex 設計レビュー P2-2）: close は実行中の snapshot 生成を待ち、新しい生成を始めない ----
+
+/** save を手動で解決できる snapshot ストア（生成中に close が呼ばれる場面の検証用）。close の後の save を記録する。 */
+class GatedSnapshotStore implements SnapshotStore {
+  private readonly inner = new MemorySnapshotStore();
+  private release: (() => void) | undefined;
+  closed = false;
+  savesAfterClose = 0;
+  saveStarted = 0;
+
+  async save(persisted: Parameters<SnapshotStore['save']>[0]): Promise<void> {
+    this.saveStarted += 1;
+    if (this.closed) {
+      this.savesAfterClose += 1;
+    }
+    await new Promise<void>((resolve) => {
+      this.release = resolve;
+    });
+    await this.inner.save(persisted);
+  }
+  flushGate(): void {
+    this.release?.();
+    this.release = undefined;
+  }
+  loadLatest(): ReturnType<SnapshotStore['loadLatest']> {
+    return this.inner.loadLatest();
+  }
+  close(): Promise<void> {
+    this.closed = true;
+    return Promise.resolve();
+  }
+}
+
+describe('PersistentRoom.close と snapshot 生成（DD-056 H13）', () => {
+  it('実行中の snapshot 生成の終了を待ってからストアを閉じ、close の後は新しい生成を始めない', async () => {
+    const snapshots = new GatedSnapshotStore();
+    const { persistent } = buildPersistentRoom(new MemoryOpLogStore(), snapshots, 1);
+    persistent.handleJoin({ type: 'join', protocolVersion: 1, documentId: 'doc-1' as never, lastAppliedRevision: 0, clientId: 'client-A' });
+    await persistent.handleMessage('conn-1', submitInsert('op-1', 1)); // snapshotIntervalOps=1 → 生成が始まる（save は保留）
+    await persistent.handleMessage('conn-1', submitInsert('op-2', 2)); // 生成中に蓄積（終わった後に再判定される分）
+    expect(snapshots.saveStarted).toBe(1);
+
+    let closed = false;
+    const closing = persistent.close().then(() => {
+      closed = true;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(closed).toBe(false); // 保存の終了を待っている
+    expect(snapshots.closed).toBe(false);
+
+    snapshots.flushGate();
+    await closing;
+    expect(closed).toBe(true);
+    expect(snapshots.closed).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(snapshots.saveStarted).toBe(1); // 蓄積分の再判定は close 開始後なので新しい生成を始めない
+    expect(snapshots.savesAfterClose).toBe(0);
+  });
+});

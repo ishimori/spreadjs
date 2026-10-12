@@ -7,7 +7,7 @@
 // DD-026: consumer 統合の 3 つの口（U1 永続化ストアの差し替え・U2 認証フック・U3 サーバー起点操作）を公開型
 // （./serve-types・内部 package 非参照）で追加した。
 // DD-049: 受理通知フック（H2・onAccepted）を追加した。
-// DD-056: 操作ごとの書込の認可（H11・authorizeOperation）を追加した。
+// DD-056: 操作ごとの書込の認可（H11・authorizeOperation）と、実行中の文書の追加・撤去（H13・addDocument／removeDocument）を追加した。
 
 import { adaptOpLogStore, adaptSnapshotStore } from './serve-adapters';
 import { startServer } from './server';
@@ -77,7 +77,8 @@ export interface ServeDiagnostic {
    * または返した Promise が reject・warn。受理・配信・永続化には影響しない・DD-049）／'operation-denied'（authorizeOperation が
    * 書込を拒否した・info・DD-056）／'authorize-error'（authorizeOperation が throw・拒否として扱う・error）／
    * 'authorize-invalid-result'（authorizeOperation が true/false 以外〔Promise 等〕を返した・返した Promise が reject した・拒否として
-   * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop を呼んだ＝何もせず reject・error）。
+   * 扱う・error）／'authorize-reentry'（authorizeOperation の中から submit・stop・addDocument・removeDocument を呼んだ＝何もせず
+   * reject・error）／'document-added'・'document-removed'（addDocument・removeDocument の完了・info・DD-056 H13）。
    * Cookie・トークン等の値は載せない。
    */
   readonly code: string;
@@ -175,13 +176,32 @@ export interface ServerInstance {
   readonly documentId: string;
   /**
    * 実際に serve 中の文書 ID（DD-043）。起動時の検疫で外れた文書は含まない。単一文書構成では `[documentId]`。
+   * DD-056: **読むたびに最新**（`addDocument`・`removeDocument` を反映する）。
    */
   readonly documentIds: readonly string[];
   /**
    * 起動時の復旧に失敗して serve から外した文書（DD-043 D3・複数文書構成のみ）。単一文書構成の復旧失敗は
-   * 従来どおり `serve()` 自体が reject する（0 文書での起動成功を装わない）。
+   * 従来どおり `serve()` 自体が reject する（0 文書での起動成功を装わない）。DD-056: 読むたびに最新（同じ ID を
+   * `addDocument` で足し直せたら外れる）。
    */
   readonly quarantined: readonly ServeQuarantinedDocument[];
+  /**
+   * 実行中に文書を足す（Experimental 0.x・DD-056 H13）。構成の検証・保存先の復旧（履歴があれば続きから）・初期文書（`initialDocument`／
+   * `seedRows`）は起動時の文書と同じで、済んだら解決する。以後 `?documentId=` で接続でき、`submit({ documentId })` が使える。
+   * 単一文書・複数文書のどちらの構成でも使える（足した文書への接続は `?documentId=` で文書を名乗る）。
+   * 空の ID・serve 中の ID・追加／撤去の処理中の ID・`stop()` 後・復旧の失敗は Promise reject（検疫には入れず、開いた保存先は閉じる）。
+   * `authorizeOperation` の中から呼ぶと reject。
+   */
+  addDocument(documentId: string, config: ServeDocumentConfig): Promise<void>;
+  /**
+   * 実行中に文書を外す（Experimental 0.x・DD-056 H13）。① 以後の接続・`/config`・`submit` を拒否（404・reject）② その文書の接続を
+   * すべて切る（close code 1001。切断中に届いたフレームも捨てる）③ 受理済みの操作の永続化・配信・`onAccepted` が済むのを待つ
+   * ④ 保存先を閉じる（実行中の snapshot 生成の終了を待つ）→ 解決。**保存先は消さない**（同じ保存先で `addDocument` し直すと続きから
+   * 復旧する＝別の版は別の ID にする）。外した文書のクライアントは再接続が 404 で失敗し続け、未送信の操作は送られない（切断の上限を
+   * 超えると `stopped`）。既定文書も外せる（以後の documentId なしの接続は 404）。serve していない ID・処理中の ID・`stop()` 後は
+   * Promise reject。`authorizeOperation` の中から呼ぶと reject。
+   */
+  removeDocument(documentId: string): Promise<void>;
   /** 現在の接続数（診断用）。`documentId` 指定でその文書のみ、未指定は全文書の合計。 */
   connectionCount(documentId?: string): number;
   /**
@@ -238,8 +258,23 @@ export async function serve(options: ServeOptions = {}): Promise<ServerInstance>
     port: running.port,
     url: running.url,
     documentId: running.documentId,
-    documentIds: running.documentIds,
-    quarantined: running.quarantined,
+    // DD-056 H13: 追加・撤去を反映するため読むたびに引く（以前は起動時の値の写し）。
+    get documentIds(): readonly string[] {
+      return running.documentIds;
+    },
+    get quarantined(): readonly ServeQuarantinedDocument[] {
+      return running.quarantined;
+    },
+    addDocument: (documentId, config) => {
+      let adapted: StartDocumentConfig;
+      try {
+        adapted = adaptDocumentConfig(config);
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error))); // 常に Promise 契約
+      }
+      return running.addDocument(documentId, adapted);
+    },
+    removeDocument: (documentId) => running.removeDocument(documentId),
     connectionCount: (documentId) => running.connectionCount(documentId),
     submit: (operation, submitOptions) => running.submit(operation, submitOptions.actorId, submitOptions.documentId),
     // 停止の診断（serve-stopped）は running.close() が出す。ここで await して包むと、認可フックの中からの stop が返す
