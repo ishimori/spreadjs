@@ -34,6 +34,8 @@ import {
   type GridDiagnosticHook,
   type GridErrorCode,
   type GridEvent,
+  type GridFlushOptions,
+  type GridFlushResult,
   type GridInstance,
   type GridMountOptions,
   type GridPresenceUser,
@@ -73,7 +75,11 @@ export interface NanairoSheetViewCommonProps {
   readonly columnCaptions?: Readonly<Record<string, string>>;
   /** 数値/日付の表示書式（grid columnDisplayFormats・DD-033-2）。 */
   readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
-  /** 表示専用モード（grid readOnly・DD-033-1）。 */
+  /**
+   * 表示専用モード（grid readOnly・DD-033-1）。**値が変わっても開き直さない**（DD-056 H12: 同じ grid の `setReadOnly` を呼ぶ＝
+   * 共同編集セッション・未送信の操作・スクロール位置を保つ。編集中のセルは確定してから切り替わる）。他の識別系 props が同時に変わって
+   * 開き直す場合は、新しい mount が現在の値で作られる。
+   */
   readonly readOnly?: boolean;
   /** 読み取り専用列（grid readOnlyColumns・DD-035 R4）。 */
   readonly readOnlyColumns?: readonly string[];
@@ -175,6 +181,13 @@ export interface NanairoSheetViewHandle {
   setActiveCell(rowId: string, columnId: string): void;
   /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
   presences(): readonly GridPresenceUser[];
+  /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
+  pendingCount(): number;
+  /**
+   * 編集中のセルを確定して送り切るまで待つ（grid GridInstance.flush 直結・DD-056 H12）。提出などの状態を変える操作の前に呼ぶ。
+   * 未 mount 時は送るものがないため `{ status: 'flushed' }` で解決する（warn しない）。
+   */
+  flush(options?: GridFlushOptions): Promise<GridFlushResult>;
 }
 
 // ---- 型レベルの網羅性チェック（DD-054 論点3）--------------------------------------------------
@@ -202,7 +215,8 @@ type UnmappedMountOptionKeys = {
 type ExcludedGridInstanceKeys =
   | 'documentId' // 識別用の読み取り専用値。ref handle は命令 API のみを出す契約（契約 §3）で対象外
   | 'subscribe' // React は onEvent/onXxx props で個別配信する別経路（契約 §2）。ref handle には出さない
-  | 'destroy'; // lifecycle は effect cleanup が管理する（契約冒頭）。consumer に直接 destroy させない
+  | 'destroy' // lifecycle は effect cleanup が管理する（契約冒頭）。consumer に直接 destroy させない
+  | 'setReadOnly'; // readOnly prop の変化で呼ぶ（DD-056）。handle からも切り替えられると prop と食い違うため出さない
 /** GridInstance のメンバーのうち、React handle に無いもの（除外リスト適用後・空集合であるべき）。 */
 type MissingHandleKeys = Exclude<keyof GridInstance, ExcludedGridInstanceKeys | keyof NanairoSheetViewHandle>;
 
@@ -280,7 +294,7 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     columnFormats: props.columnFormats === undefined ? null : canonicalJson(props.columnFormats),
     columnCaptions: props.columnCaptions === undefined ? null : canonicalJson(props.columnCaptions),
     columnDisplayFormats: props.columnDisplayFormats === undefined ? null : canonicalJson(props.columnDisplayFormats),
-    readOnly: props.readOnly ?? null,
+    // DD-056 H12: readOnly は識別系に入れない（変化は同じ instance の setReadOnly で写す＝開き直さない）。
     readOnlyColumns: props.readOnlyColumns === undefined ? null : [...props.readOnlyColumns].sort(),
     // DD-052-2: stringColumns も readOnlyColumns と同じ集合＝ソート（順序に意味を持たせない）。
     stringColumns: props.stringColumns === undefined ? null : [...props.stringColumns].sort(),
@@ -409,6 +423,8 @@ function NanairoSheetViewImpl(
   const propsRef = useRef<NanairoSheetViewProps>(props);
   /** 最新の onDiagnostic を保持（grid へ渡す安定ラッパーが読む・後差し替え対応。Codex P2）。 */
   const diagnosticRef = useRef<GridDiagnosticHook | undefined>(props.onDiagnostic);
+  /** 現在の instance が持っている readOnly（mount 時の値か、直近に setReadOnly で写した値・DD-056 H12）。 */
+  const appliedReadOnlyRef = useRef<boolean>(false);
 
   // 最新の callback / props / diagnostic を **commit 後**に ref へ反映する（差し替えで remount しない・契約 §4 分類3）。
   // render 中ではなく useLayoutEffect で更新する: Concurrent React（startTransition/Suspense）で **未 commit の
@@ -506,6 +522,14 @@ function NanairoSheetViewImpl(
       presences(): readonly GridPresenceUser[] {
         return instanceRef.current?.presences() ?? [];
       },
+      // DD-056 H12: 読み取り系（未 mount でも warn しない）。未 mount は送るものがない＝0／flushed。
+      pendingCount(): number {
+        return instanceRef.current?.pendingCount() ?? 0;
+      },
+      flush(options?: GridFlushOptions): Promise<GridFlushResult> {
+        const instance = instanceRef.current;
+        return instance === null ? Promise.resolve({ status: 'flushed' }) : instance.flush(options);
+      },
     }),
     [],
   );
@@ -557,6 +581,7 @@ function NanairoSheetViewImpl(
 
     const instance = mount({ container }, toMountOptions(propsRef.current, onEvent, onDiagnostic));
     instanceRef.current = instance;
+    appliedReadOnlyRef.current = propsRef.current.readOnly === true; // DD-056 H12: この mount が持つ readOnly
     // 接続状態キャッシュを instance の実値で初期化する（remount で旧状態を引き継がず、
     // 初回 connection 前の pending も現 instance の状態で通知する・Codex P2）。
     lastConnStateRef.current = instance.connectionState();
@@ -569,6 +594,19 @@ function NanairoSheetViewImpl(
     // deps は識別系の値比較キー（mountKey）のみ。初期値系/callback は propsRef/callbacksRef 経由で参照する（契約 §4）。
     // （react-hooks/exhaustive-deps プラグインは本 repo では未設定のため disable ディレクティブは付けない。）
   }, [mountKey]);
+
+  // DD-056 H12: readOnly の変化は開き直さずに同じ instance の setReadOnly へ写す（識別系から外した）。mount effect より後に宣言する
+  // （effect は宣言順に走る）。instance が持っている値（mount 時の値・直近に写した値）と違うときだけ呼ぶ: 初回 mount と、他の識別系の
+  // 変化で開き直した直後は、mount 自体が現在の値で作られているため呼ばない。
+  const readOnlyProp = props.readOnly === true;
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (instance === null || appliedReadOnlyRef.current === readOnlyProp) {
+      return;
+    }
+    appliedReadOnlyRef.current = readOnlyProp;
+    instance.setReadOnly(readOnlyProp);
+  }, [readOnlyProp]);
 
   // 初期値系（initialData/initialColumnWidths/initialRowHeights）の変更は無視＋診断 warn（契約 §4 分類2）。
   // **参照比較**で判定する（毎 render の直列化なし・Codex P1）。mountKey 変更に伴う remount では mount effect が

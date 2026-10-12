@@ -46,11 +46,31 @@
   通常の巻き戻し＋`conflict.code: 'unknown'` になる）。
 - 公開 `.d.ts` snapshot の差分は追加のみ（`GridConflictCode` の union に 1 値を足したため、consumer 側で全コードを網羅する
   `switch` の exhaustiveness 検査を書いている場合は `permission-denied` の分岐が要る）。
+- **grid `GridInstance.setReadOnly`（表示専用の実行時切替・DD-056-2・広島空港 H12）**: mount オプション `readOnly` を、開き直さずに
+  実行中に切り替える。共同編集セッション・未送信の操作・スクロール位置・選択を保ち、未送信の操作は通常どおりサーバーへ届く。
+  `true` にするとき、編集中のセルは「確定して移動しない」で確定してから切り替える（入力を捨てない）。IME 変換中は textarea に触れず、
+  文書を変える他の入口をすぐ止め、変換が終わってから確定・切り替える。
+- **grid `GridInstance.pendingCount()`・`flush(options?)`（送り切り・DD-056-2）**: 自分の未確定の操作の数と、「呼んだ時点の編集中の
+  セルを確定し、自分の操作がすべてサーバーで受理または拒否されるまで待つ」Promise。結果は `flushed`／`timeout`（既定 10 秒・
+  `pendingCount`・`editing` 付き）／`stopped`（接続終端・destroy）で、reject しない。公開型 `GridFlushOptions`・`GridFlushResult` を追加。
+- **react ref handle `pendingCount()`・`flush(options?)`（DD-056-2）**: grid へ直結（未 mount は `0`・`{ status: 'flushed' }`）。
 
 ### Changed
 
 - server-hono: 停止の診断 `serve-stopped` を出す位置を `serve()` の包みから内部の停止処理へ移した（出る条件・内容は同じ。
   認可フックの中からの `stop()` の reject を未捕捉にしないため・DD-056-1）。
+- **react `readOnly` prop は値が変わっても開き直さない（DD-056-2）**: 識別系 props から外し、同じ grid の `setReadOnly` を呼ぶ
+  （これまでは destroy→mount で、未送信の操作・編集中のセル・スクロール位置が失われていた）。他の識別系 props と同時に変わって
+  開き直す場合は、新しい mount が現在の値で作られる。公開型の変更はない（挙動の変化）。
+
+### Fixed
+
+- **grid 変換を確定した直後のクリック・グリッド外のクリックで入力が確定されない（DD-056-2）**: Tier 1（Chromium）では日本語の変換を
+  Enter で確定したあと compositionend の後に非変換の input が来ないため、編集が「最終 input を待つ」状態に留まり、その直後に別の
+  セルをクリックしても確定も移動もせず、グリッドの外（提出ボタン等）をクリックしても確定されなかった（次の打鍵か Enter まで）。
+  クリック・blur の後に macrotask で判定し直し、まだ待っていれば textarea の値（変換確定後の実値）を最終 input の代わりに渡して
+  確定する（別セルのクリックは元のセルへ確定してクリック先へ移る・グリッド外は確定して移動しない）。IME 状態機械は変更していない。
+  `setActiveCell` を変換確定の直後に呼んだ場合も同じく確定して移る。
 
 ## [0.1.0-alpha.10] - 2026-09-13
 

@@ -236,7 +236,7 @@ describe('serve({ authorizeOperation })（DD-056 H11）', () => {
   it('Codex 実装レビュー P1: 永続化ありで onDiagnostic（operation-denied）から submit しても、処理の途中へ再入せず操作ログが重複しない', async () => {
     let locked = true;
     const oplog = new MemoryServeOpLog();
-    let serverRef: ServerInstance | undefined;
+    const serverRef: { current: ServerInstance | undefined } = { current: undefined };
     const fromDiagnostic: Array<Promise<unknown>> = [];
     const server = await serve({
       port: 0,
@@ -245,10 +245,11 @@ describe('serve({ authorizeOperation })（DD-056 H11）', () => {
       snapshotStore: new MemoryServeSnapshots(),
       authorizeOperation: () => !locked,
       onDiagnostic: (entry) => {
-        if (entry.code === 'operation-denied' && serverRef !== undefined) {
+        const current = serverRef.current;
+        if (entry.code === 'operation-denied' && current !== undefined) {
           // 拒否を記録する consumer が、診断の中からサーバー起点の書込をする（修正前は sequencer の処理中に再入し [1,2,2] になった）。
           fromDiagnostic.push(
-            serverRef.submit(
+            current.submit(
               { type: 'setCells', changes: [{ rowId: 'row-2', columnId: 'col-c', value: { kind: 'string', value: 'AUDIT' } }] },
               { actorId: 'system' },
             ),
@@ -256,7 +257,7 @@ describe('serve({ authorizeOperation })（DD-056 H11）', () => {
         }
       },
     });
-    serverRef = server;
+    serverRef.current = server;
     cleanups.push(() => server.stop());
     const { a, b } = await connectPair(server);
     a.session.submitLocalOperation(setCellA('denied'));

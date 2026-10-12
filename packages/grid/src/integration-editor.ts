@@ -82,10 +82,11 @@ export interface IntegrationEditorConfig {
    */
   readonly onBlur?: () => void;
   /**
-   * 表示専用モード（DD-033-1）。true のとき常駐 textarea に `readOnly` 属性を付け（実 IME/実キーボード入力を物理遮断）、
+   * 表示専用モード（DD-033-1）の初期値。true のとき常駐 textarea に `readOnly` 属性を付け（実 IME/実キーボード入力を物理遮断）、
    * composition 系・beforeinput・input・dblclick の DOM イベントを状態機械へ dispatch しない（synthetic も論理遮断）。
    * これにより「実機でも synthetic でも編集 UI が開かない」を成立させる。false/未指定時は完全無変更（分岐追加のみ）。
    * keydown は従来どおり dispatch し、readOnly の編集キー抑止は mount-controller の interceptKeydown（readonly-policy）が担う。
+   * DD-056 H12: 実行中の切り替えは `IntegrationEditor.setReadOnly`。
    */
   readonly readOnly?: boolean;
   /**
@@ -112,14 +113,23 @@ export interface IntegrationEditor {
   readonly session: ImeEditingSession;
   /**
    * 列単位 readOnly（DD-035 R4）の**物理**ロック: 常駐 textarea の `readOnly` 属性を同期する（実 IME/実キーボードの入力を
-   * ブラウザ側で発生させない）。composition 中は属性を触らない（I-3: 変換中の textarea を変えない）。mount 時 readOnly=true
-   * のときは常に readOnly のまま（解除しない）。同値なら DOM を書かない（毎フレーム呼んでも無コスト）。
+   * ブラウザ側で発生させない）。composition 中は属性を触らない（I-3: 変換中の textarea を変えない）。属性は「表示専用 || 列単位
+   * ロック」の和で、表示専用の間は常に readOnly（DD-056: 表示専用中も列ロックの値は記録し、表示専用を解いたときに戻す）。
+   * 同値なら DOM を書かない（毎フレーム呼んでも無コスト）。
    */
   setInputLock(locked: boolean): void;
   /** scroller の pointerdown（main が hitTest 済み。null=ヘッダー/範囲外）。 */
   pointerdownCell(cell: CellPosition | null): void;
   /** scroller の dblclick（既存値編集開始）。 */
   doubleClickCell(cell: CellPosition): void;
+  /**
+   * 表示専用モードを実行中に切り替える（DD-056 H12）。textarea の `readOnly` 属性（＝表示専用 || 列単位ロック）と編集 DOM イベントの
+   * 遮断を切り替える。**変換中は呼ばない**こと（呼び出し側が変換の終わりを待つ。防御として変換中は textarea を触らず、属性は次の
+   * ロック同期で反映する・I-3）。
+   */
+  setReadOnly(readOnly: boolean): void;
+  /** 編集中のセルを「確定して移動しない」で確定する（DD-056・`ImeEditingSession.commitEdit`）。別タスクから呼ぶこと。 */
+  commitEdit(): 'committed' | 'none' | 'composing';
   /** rAF ごとに配置を更新（scroll 追従・RowId 再解決・#4/AC3）。 */
   refreshPlacement(transform: ViewportTransform, placement: PlacementConfig): void;
   focus(): void;
@@ -131,11 +141,15 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   const abort = new AbortController();
   const { signal } = abort;
   // DD-033-1: 表示専用モード。編集を起こす DOM イベントを状態機械へ渡さない（synthetic 論理遮断）。false/未指定は無変更。
-  const readOnly = config.readOnly === true;
+  // DD-056 H12: 実行中に setReadOnly で切り替えられる（mount 時の値が初期値）。
+  let readOnly = config.readOnly === true;
   // DD-035 R4: 列単位ロック（アクティブセルが readOnlyColumns の列にある間）。readOnly と同じ分岐を動的条件で共有する。
   // isInputLocked 未指定なら常に false＝DD-033-1 以前の経路と完全一致。
   const inputBlocked = (): boolean => readOnly || config.isInputLocked?.() === true;
   let columnLocked = false;
+  // DD-056（contract.md §4.5）: 変換確定の直後（EditingAwaitFinalInput）に実際のクリック・blur を受けたら、最終 input の代わりを渡す
+  // 判定を macrotask へ予約する（同じタスクで最終 input が届く順序では、その input を先に処理させる）。
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
   // --- 常駐 textarea（1 個・破棄しない） ---
   const textarea = document.createElement('textarea');
@@ -432,6 +446,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   on('blur', () => {
     dispatch({ type: 'blur' }); // IME 状態機械への通知（従来どおり・無改変）
     config.onBlur?.(); // DD-027-1: focus 外れでドロップダウンを閉じる（追加通知のみ）
+    scheduleSettleIfAwaitingFinalInput(); // DD-056 §4.5: 変換確定の直後の blur は保留になるだけなので、最終 input の代わりを予約する
   });
   // 常駐 textarea 自身のダブルクリック（active セルの既存値編集）。
   on('dblclick', () => {
@@ -445,6 +460,30 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     session.handleEvent(event);
   }
 
+  /**
+   * DD-056（contract.md §4.5・既存不具合の修正）: 変換確定の直後（EditingAwaitFinalInput）に受けたクリック・blur は、状態機械が
+   * 「最終 input を待つ」保留にするだけで確定しない。Tier 1（Chromium）では最終 input が来ないため、macrotask で判定し直し、
+   * まだ同じ位相なら textarea の値を最終 input の代わりに渡す（保留中のクリックは元のセルへ確定してクリック先へ移る・blur は確定）。
+   * 同じタスクで最終 input が届く順序（順序A 等）では、その input が先に処理されて Navigation になるため何もしない。
+   */
+  function scheduleSettleIfAwaitingFinalInput(): void {
+    if (settleTimer !== undefined || session.getPhase() !== 'EditingAwaitFinalInput') {
+      return;
+    }
+    settleTimer = setTimeout(() => {
+      settleTimer = undefined;
+      session.settleAwaitingFinalInput();
+    }, 0);
+  }
+
+  /** textarea の readOnly 属性を「表示専用 || 列単位ロック」へ揃える（同値なら DOM を書かない）。変換中は呼ばない（I-3）。 */
+  function syncTextareaReadOnly(): void {
+    const next = readOnly || columnLocked;
+    if (textarea.readOnly !== next) {
+      textarea.readOnly = next;
+    }
+  }
+
   return {
     session,
     pointerdownCell: (cell) => {
@@ -454,7 +493,15 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
         // scrollIntoView がそれと競合して画面が跳ねるのを防ぐ。
         textarea.focus({ preventScroll: true });
       }
+      scheduleSettleIfAwaitingFinalInput(); // DD-056 §4.5: 変換確定の直後のセルクリックは保留になるだけなので、最終 input の代わりを予約する
     },
+    setReadOnly: (next) => {
+      readOnly = next;
+      if (!session.isComposing()) {
+        syncTextareaReadOnly(); // 変換中は textarea を触らない（I-3）。属性は次のロック同期（setInputLock）で反映される
+      }
+    },
+    commitEdit: () => session.commitEdit(),
     doubleClickCell: (cell) => {
       dispatch({ type: 'doubleClick', cell });
     },
@@ -470,13 +517,18 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
       textarea.focus({ preventScroll: true });
     },
     setInputLock: (locked) => {
-      if (readOnly || locked === columnLocked || session.isComposing()) {
-        return; // mount 時 readOnly は恒久ロック／同値は無操作／composition 中は textarea を触らない（I-3）
+      if (session.isComposing()) {
+        return; // composition 中は textarea を触らない（I-3）。変換の後のロック同期で反映する
       }
+      // DD-056: 表示専用中も列単位ロックの値は記録する（表示専用を解いたときに列ロックが正しく残るように）。属性は和で揃える。
       columnLocked = locked;
-      textarea.readOnly = locked;
+      syncTextareaReadOnly();
     },
     destroy: () => {
+      if (settleTimer !== undefined) {
+        clearTimeout(settleTimer);
+        settleTimer = undefined;
+      }
       abort.abort();
       textarea.remove();
       badge.remove();

@@ -10,8 +10,8 @@
       "id": "ime",
       "title": "日本語入力（IME）",
       "status": "available",
-      "summary": "変換中の文字を取りこぼさない日本語入力。変換ウィンドウ表示中に他ユーザーの編集が届いても、入力中の文字は壊れません。",
-      "source": "DD-002・DD-012・DD-012-1（CG-1 実機検証済）",
+      "summary": "変換中の文字を取りこぼさない日本語入力。変換ウィンドウ表示中に他ユーザーの編集が届いても、入力中の文字は壊れません。 変換を確定した直後に別のセルやグリッドの外をクリックしても、確定した文字はそのセルへ入ります。",
+      "source": "DD-002・DD-012・DD-012-1（CG-1 実機検証済）・DD-056-2（変換確定直後のクリックの確定漏れを修正）",
       "meta": "実機検証: Chrome / Edge",
       "demo": "./demo.html?scenario=ime"
     },
@@ -55,8 +55,8 @@
       "id": "collab",
       "title": "リアルタイム共同編集",
       "status": "available",
-      "summary": "複数人の同時編集をサーバーが一列に整列。競合は検出して通知し、他の人の入力を黙って上書きすることがありません。確定した変更はアプリ側でも受け取れます（各クライアントの remote-change イベント＝誰が・どのセルを・何から何へ変えたか。自分の確定もサーバー確定後に同じ経路で届くため、変更履歴を 1 経路で作れます）。",
-      "source": "DD-003・DD-005・DD-013・DD-049",
+      "summary": "複数人の同時編集をサーバーが一列に整列。競合は検出して通知し、他の人の入力を黙って上書きすることがありません。確定した変更はアプリ側でも受け取れます（各クライアントの remote-change イベント＝誰が・どのセルを・何から何へ変えたか。自分の確定もサーバー確定後に同じ経路で届くため、変更履歴を 1 経路で作れます）。 提出・締切などの状態を変える前には、編集中のセルを確定して自分の入力を送り切るまで待てます（flush・pendingCount）。他の人の操作で表示専用へ切り替わるときも開き直さず、未送信の入力を失いません（setReadOnly）。",
+      "source": "DD-003・DD-005・DD-013・DD-049・DD-056-2（読み取り専用の実行時切替と送り切り）",
       "meta": "9セッション同時 検証済み",
       "demo": "./demo.html?scenario=collab"
     },
@@ -72,8 +72,8 @@
       "id": "react",
       "title": "React 組み込み（<NanairoSheetView>）",
       "status": "available",
-      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行単位の部分更新は ref.setRows（Undo/Redo 履歴を保つ）、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景・文字列として保つ列（stringColumns）・行操作ショートカットの無効化（rowOperations）は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。共同編集の確定変更は onRemoteChange、参加者一覧は onPresenceChange / ref.presences() で受け取れます。StrictMode・再mountでリークしません（react は peer 依存）。",
-      "source": "DD-025・DD-035・DD-036・DD-049・DD-054",
+      "summary": "React アプリへ <NanairoSheetView> コンポーネントで自然に組み込めます。lifecycle と props/イベント変換だけを担い、グリッドの内部状態を React state へ複製しません。確定は onCellCommit、非同期取得データの反映は ref.setData、行単位の部分更新は ref.setRows（Undo/Redo 履歴を保つ）、行の追加・削除と追加行への視点移動は ref.insertRows/deleteRows/scrollToRow/setActiveCell。列タイプ・書式・見出し・表示専用・読み取り専用列/行・固定行列数・静的列背景・文字列として保つ列（stringColumns）・行操作ショートカットの無効化（rowOperations）は grid と同名の props で指定できます（列方向の視点移動は ref.scrollToColumn）。共同編集の確定変更は onRemoteChange、参加者一覧は onPresenceChange / ref.presences() で受け取れます。表示専用（readOnly）は値が変わっても開き直さず、送り切りは ref.flush / ref.pendingCount で待てます。StrictMode・再mountでリークしません（react は peer 依存）。",
+      "source": "DD-025・DD-035・DD-036・DD-049・DD-054・DD-056-2",
       "meta": "peer: react ^19 ／ unit検証済み（DD-054 で grid mount オプション・GridInstance の型網羅性を機械検証）"
     },
     {
@@ -173,8 +173,8 @@
       "id": "detail-view",
       "title": "明細閲覧ビュー（表示専用・列見出し・表示書式）",
       "status": "available",
-      "summary": "BI・帳票の明細レコードを「データと列スキーマを渡すだけで業務の表として読める」構成。表示専用モード（readOnly＝編集・貼り付け・行操作をすべて抑止し受信専用化。権限制御ではなく表示制御）、業務名の列見出し（columnCaptions＝A/B/C… を業務名で置換描画）、数値/日付の表示書式（columnDisplayFormats＝3桁区切り・小数桁・通貨記号・日付パターン）を、値の装飾（columnFormats）と併用できます。書式・見出しは view-local な描画整形で、コピー TSV・cell-commit の値は生の値（raw）のまま変わりません。",
-      "source": "DD-033・DD-033-1・DD-033-2",
+      "summary": "BI・帳票の明細レコードを「データと列スキーマを渡すだけで業務の表として読める」構成。表示専用モード（readOnly＝編集・貼り付け・行操作をすべて抑止し受信専用化。権限制御ではなく表示制御。実行中に開き直さずに切り替えられる＝setReadOnly）、業務名の列見出し（columnCaptions＝A/B/C… を業務名で置換描画）、数値/日付の表示書式（columnDisplayFormats＝3桁区切り・小数桁・通貨記号・日付パターン）を、値の装飾（columnFormats）と併用できます。書式・見出しは view-local な描画整形で、コピー TSV・cell-commit の値は生の値（raw）のまま変わりません。",
+      "source": "DD-033・DD-033-1・DD-033-2・DD-056-2",
       "meta": "readOnly / columnCaptions / columnDisplayFormats ／ unit＋実ブラウザーE2E 検証済み",
       "demo": "./demo.html?scenario=detail-view"
     },

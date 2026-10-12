@@ -246,6 +246,28 @@ export interface GridPresenceUser {
     readonly self: boolean;
 }
 export type GridEventListener = (event: GridEvent) => void;
+/** \`GridInstance.flush\` のオプション（DD-056 H12）。 */
+export interface GridFlushOptions {
+    /** 待つ上限（ミリ秒・既定 10,000）。正の有限数以外は既定値。 */
+    readonly timeoutMs?: number;
+}
+/** \`GridInstance.flush\` の結果（DD-056 H12）。Promise は reject せず、この結果で返す。 */
+export type GridFlushResult =
+/** 呼んだ時点の編集中のセルは確定済みで、自分の操作はすべてサーバーで受理または拒否された（拒否は \`rejected\` イベントで通知済み）。 */
+{
+    readonly status: 'flushed';
+}
+/** 上限まで待っても送り切れなかった。\`editing: true\` は IME 変換中などで、呼んだ時点の編集中のセルを確定できていない。 */
+ | {
+    readonly status: 'timeout';
+    readonly pendingCount: number;
+    readonly editing: boolean;
+}
+/** 送り切れないまま接続が終端した（切断の上限超過・divergence）か、待つ間に destroy された。未送信の操作は送られない。 */
+ | {
+    readonly status: 'stopped';
+    readonly pendingCount: number;
+};
 /** 単独グリッドモードの 1 行（DD-024）。cells は ColumnId 文字列→値文字列（未指定列は空セル）。 */
 export interface GridStandaloneRow {
     readonly rowId: string;
@@ -349,15 +371,17 @@ export interface GridCommonMountOptions {
     readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
     /**
      * 表示専用モード（Experimental 0.x・DD-033-1）。\`true\` で「文書を一切変更できない閲覧専用グリッド」になる。
-     * 両モード共通・mount 時固定（columnTypes/columnFormats と同運用・実行時切替は対象外）。
+     * 両モード共通。mount 時の値は初期値で、**実行中は \`GridInstance.setReadOnly\` で開き直さずに切り替えられる**（DD-056 H12）。
      * - **抑止（文書変更系）**: 編集開始（印字キー・F2・ダブルクリック・IME）／paste・cut／Delete・Backspace クリア／
      *   行挿入削除（ショートカット・公開 API \`insertRows\`/\`deleteRows\`）／Undo・Redo／選択式列のドロップダウン。
      *   抑止した経路では \`onDiagnostic\` に info（code=\`readonly-blocked\`）を出す（既定＝hook 未指定なら無コスト）。
      * - **維持（閲覧系）**: 範囲選択・コピー（TSV は従来と同一）・スクロール・列幅/行高リサイズ・列境界 dblclick の
      *   auto-fit・link-open。\`setData\`（プログラム的な表示データ差し替え）も許可する。
-     * - **共同編集モード**: リモート更新は画面へ反映し、自クライアントからの文書 Operation 送信はゼロ（受信専用）。
+     * - **共同編集モード**: リモート更新は画面へ反映し、表示専用の間に自クライアントが新しく作る文書 Operation はゼロ（受信専用）。
+     *   \`setReadOnly(true)\` で切り替えた場合、切り替えの前に作った未送信の操作と、切り替え時に確定した編集中のセルは送られる（DD-056）。
      *   presence（閲覧位置）は従来どおり送信する（文書 Operation ではない）。全クライアントの設定一致は利用側責務。
-     * - **注意**: readOnly は表示制御であって**権限制御ではない**（サーバー側強制なし＝改ざん防止は利用側責務）。
+     * - **注意**: readOnly は表示制御であって**権限制御ではない**（改ざん防止は利用側責務。サーバーで書込を拒否するには
+     *   server-hono の \`authorizeOperation\`〔DD-056 H11〕を使う）。
      * - 値は boolean 単値。\`true\` の厳密一致でのみ表示専用になり、\`undefined\` 以外の非 boolean は診断 warn
      *   （code=\`readonly-invalid\`）を出して編集可能側へ倒す（構成不整合が無いため mount fail-fast はしない）。
      */
@@ -573,6 +597,30 @@ export interface GridInstance {
      * セルを選ばずに参加しただけの利用者も \`activeCell: null\` で載る（DD-053 H10・「参加」＝join 完了時点）。
      */
     presences(): readonly GridPresenceUser[];
+    /**
+     * 表示専用モード（\`readOnly\`）を実行中に切り替える（Experimental 0.x・DD-056 H12・両モード）。**開き直さない**: 共同編集セッション・
+     * 未送信の操作・スクロール位置・選択・列幅を保ち、未送信の操作は通常どおりサーバーへ届く（拒否されれば \`rejected\`）。
+     * - \`true\`: 編集中のセルは「確定して移動しない」で確定してから切り替える（入力を捨てない。変換を確定した直後の状態も確定する）。
+     *   開いている選択式・日付の候補欄は閉じる（未確定の選択は捨てる）。**IME 変換中**は textarea に触れず、文書を変える他の入口
+     *   （貼り付け・行操作・Undo/Redo・候補欄・API の \`insertRows\` 等）はすぐに止め、変換が終わってから編集中のセルを確定して切り替える。
+     * - \`false\`: すぐに編集可能へ戻す（変換の終わり待ちの切り替えは取り消す）。\`readOnlyColumns\`・\`readOnlyRows\` は従来どおり効く。
+     * 抑止・維持する操作は mount オプション \`readOnly\` と同じ。同値・destroy 後は何もしない。権限制御ではない（サーバーで書込を
+     * 拒否するのは server-hono の \`authorizeOperation\`）。
+     */
+    setReadOnly(readOnly: boolean): void;
+    /**
+     * 自分の未確定の操作の数（Experimental 0.x・DD-056 H12）。サーバーで受理も拒否もまだされていない操作（ACK 済みで確定の配信待ちを
+     * 含む）。変化は \`pending\` イベントでも届く。単独グリッドモード・boot 前・destroy 後は 0。
+     */
+    pendingCount(): number;
+    /**
+     * 送り切るまで待つ（Experimental 0.x・DD-056 H12・両モード）。呼んだ時点の編集中のセルを確定し（変換を確定した直後の状態も確定する。
+     * IME 変換中なら変換が終わるのを待つ）、自分の未確定の操作が 0 になったら \`{ status: 'flushed' }\` で解決する。提出・締切などの
+     * 状態を変える操作の前に呼ぶ想定。オフラインなら再接続して送り切るのを待つ（上限 \`timeoutMs\`・既定 10,000ms を過ぎたら \`timeout\`）。
+     * 送り切れないまま接続が終端・destroy されたら \`stopped\`。待つ間に自分が入力を続けると pending が 0 にならず待ち続ける。
+     * 単独グリッドモードは確定してすぐ \`flushed\`。複数回呼んでよい。Promise は reject しない。
+     */
+    flush(options?: GridFlushOptions): Promise<GridFlushResult>;
     /** グリッドを破棄し DOM/listener/RAF/WS/canvas/textarea を解放する（再mountで leak しない）。 */
     destroy(): void;
 }
@@ -973,7 +1021,7 @@ export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<st
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
+import { type GridCellCommitChange, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -1000,7 +1048,11 @@ export interface NanairoSheetViewCommonProps {
     readonly columnCaptions?: Readonly<Record<string, string>>;
     /** 数値/日付の表示書式（grid columnDisplayFormats・DD-033-2）。 */
     readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
-    /** 表示専用モード（grid readOnly・DD-033-1）。 */
+    /**
+     * 表示専用モード（grid readOnly・DD-033-1）。**値が変わっても開き直さない**（DD-056 H12: 同じ grid の \`setReadOnly\` を呼ぶ＝
+     * 共同編集セッション・未送信の操作・スクロール位置を保つ。編集中のセルは確定してから切り替わる）。他の識別系 props が同時に変わって
+     * 開き直す場合は、新しい mount が現在の値で作られる。
+     */
     readonly readOnly?: boolean;
     /** 読み取り専用列（grid readOnlyColumns・DD-035 R4）。 */
     readonly readOnlyColumns?: readonly string[];
@@ -1093,6 +1145,13 @@ export interface NanairoSheetViewHandle {
     setActiveCell(rowId: string, columnId: string): void;
     /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
     presences(): readonly GridPresenceUser[];
+    /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
+    pendingCount(): number;
+    /**
+     * 編集中のセルを確定して送り切るまで待つ（grid GridInstance.flush 直結・DD-056 H12）。提出などの状態を変える操作の前に呼ぶ。
+     * 未 mount 時は送るものがないため \`{ status: 'flushed' }\` で解決する（warn しない）。
+     */
+    flush(options?: GridFlushOptions): Promise<GridFlushResult>;
 }
 /**
  * Nanairo Sheet を React から使うコンポーネント（憲章 §11.2）。lifecycle と props/event 変換のみを担当し、

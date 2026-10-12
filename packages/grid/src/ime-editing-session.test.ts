@@ -698,3 +698,116 @@ describe('createImeEditingSession — #8 実 ClientSession の rollback/replay �
     expect(ime.isConflicting()).toBe(true);
   });
 });
+
+// ---- DD-056: 編集中のセルの確定（commitEdit）と、変換確定直後の最終 input の代わり（settleAwaitingFinalInput）----
+
+describe('createImeEditingSession — DD-056: commitEdit / settleAwaitingFinalInput（contract.md §4.2・§4.5）', () => {
+  /** r0..r2 の文書・記録用 submit・fake port の組。 */
+  function setup() {
+    const state = createDocState([insertRows(null, ['r0', 'r1', 'r2'])]);
+    const submitted: SetCellsOperation[] = [];
+    const fake = createFakePort();
+    const session = createImeEditingSession({
+      document: state.port,
+      port: fake.port,
+      submit: (op) => {
+        submitted.push(op);
+      },
+      layout: LAYOUT,
+    });
+    const committedValue = (index: number): unknown => submitted[index]?.changes[0]?.value;
+    const committedRow = (index: number): unknown => submitted[index]?.changes[0]?.rowId;
+    return { session, fake, submitted, committedValue, committedRow };
+  }
+
+  /** 実機（Chromium・順序B）の変換確定: 変換中 input（isComposing=true）→ compositionend。非変換の input は来ない（DD-035 trace）。 */
+  function confirmConversionOrderB(t: ReturnType<typeof setup>, text: string): void {
+    t.session.handleEvent({ type: 'compositionstart' });
+    t.fake.browserSetValue(text);
+    t.session.handleEvent({ type: 'input', value: text, isComposing: true });
+    t.session.handleEvent({ type: 'compositionend', data: text });
+    t.session.handleEvent({ type: 'keyup', key: 'Enter', isComposing: false });
+  }
+
+  it('変換していない編集: commitEdit は blur（確定して移動しない）を渡し、値をそのセルへ確定する', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 0 } });
+    t.session.handleEvent({ type: 'input', value: 'abc', isComposing: false });
+    expect(t.session.commitEdit()).toBe('committed');
+    expect(t.submitted).toHaveLength(1);
+    expect(t.committedRow(0)).toBe(row('r1'));
+    expect(t.committedValue(0)).toEqual(str('abc'));
+    expect(t.session.getPhase()).toBe('Navigation');
+    expect(t.session.getActiveCell()).toEqual({ row: 1, col: 0 }); // 移動しない
+  });
+
+  it('順序B の変換確定の直後（EditingAwaitFinalInput）: commitEdit が textarea の値を最終 input の代わりに渡して確定する', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 0, col: 1 } });
+    confirmConversionOrderB(t, '夏季');
+    expect(t.session.getPhase()).toBe('EditingAwaitFinalInput');
+    expect(t.submitted).toHaveLength(0);
+    expect(t.session.commitEdit()).toBe('committed');
+    expect(t.submitted).toHaveLength(1);
+    expect(t.committedValue(0)).toEqual(str('夏季'));
+    expect(t.session.getPhase()).toBe('Navigation');
+  });
+
+  it('変換中（Composing）は commitEdit が何もしない（textarea にも状態機械にも触れない・I-3）', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'compositionstart' });
+    t.session.handleEvent({ type: 'compositionupdate', data: 'にほ' });
+    const setValueCalls = t.fake.calls.setValue;
+    expect(t.session.commitEdit()).toBe('composing');
+    expect(t.submitted).toHaveLength(0);
+    expect(t.session.isComposing()).toBe(true);
+    expect(t.fake.calls.setValue).toBe(setValueCalls);
+  });
+
+  it('Navigation では commitEdit は none（何も submit しない）', () => {
+    const t = setup();
+    expect(t.session.commitEdit()).toBe('none');
+    expect(t.submitted).toHaveLength(0);
+  });
+
+  it('§4.5 既存不具合の修正: 順序B の変換確定の直後に別セルをクリック → settle で元のセルへ確定してクリック先へ移る', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 0, col: 0 } });
+    confirmConversionOrderB(t, '柿');
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 2, col: 1 } }); // 保留（pendingNavigation）
+    expect(t.submitted).toHaveLength(0); // 修正前はここで止まる（次の打鍵か Enter まで確定・移動しない）
+    expect(t.session.settleAwaitingFinalInput()).toBe(true); // integration-editor が macrotask で呼ぶ
+    expect(t.submitted).toHaveLength(1);
+    expect(t.committedRow(0)).toBe(row('r0'));
+    expect(t.committedValue(0)).toEqual(str('柿'));
+    expect(t.session.getActiveCell()).toEqual({ row: 2, col: 1 });
+    expect(t.session.getPhase()).toBe('Navigation');
+  });
+
+  it('§4.5 既存不具合の修正: 順序B の変換確定の直後に blur（グリッド外クリック）→ settle で確定して移動しない', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 1, col: 2 } });
+    confirmConversionOrderB(t, '桃');
+    t.session.handleEvent({ type: 'blur' }); // 保留（blurPendingCommit）
+    expect(t.submitted).toHaveLength(0);
+    expect(t.session.settleAwaitingFinalInput()).toBe(true);
+    expect(t.submitted).toHaveLength(1);
+    expect(t.committedValue(0)).toEqual(str('桃'));
+    expect(t.session.getActiveCell()).toEqual({ row: 1, col: 2 });
+  });
+
+  it('順序A（compositionend の後に非変換の input が来る）では settle は何もしない（二重確定・ゴースト編集なし）', () => {
+    const t = setup();
+    t.session.handleEvent({ type: 'pointerdown', target: 'cell', cell: { row: 0, col: 0 } });
+    t.session.handleEvent({ type: 'compositionstart' });
+    t.session.handleEvent({ type: 'compositionupdate', data: '梨' });
+    t.session.handleEvent({ type: 'compositionend', data: '梨' });
+    t.session.handleEvent({ type: 'blur' }); // compositionend → blur → input の順（blur は保留）
+    t.fake.browserSetValue('梨');
+    t.session.handleEvent({ type: 'input', value: '梨', isComposing: false }); // 同じタスクの最終 input が保留の blur を確定する
+    expect(t.submitted).toHaveLength(1);
+    expect(t.session.settleAwaitingFinalInput()).toBe(false); // macrotask の時点では既に Navigation
+    expect(t.submitted).toHaveLength(1);
+    expect(t.session.getPhase()).toBe('Navigation');
+  });
+});

@@ -126,10 +126,17 @@ interface ReactStandaloneHandle {
   setActiveCell(rowId: string, columnId: string): void;
   /** 直近の row-structure-change（insert の新 RowId を E2E が拾うため）。 */
   lastRowStructureChange(): unknown;
+  /** DD-056 H12: readOnly prop を変えて再描画する（開き直さずに grid の setReadOnly へ写ることを E2E が確かめる）。 */
+  setReadOnlyProp(readOnly: boolean): void;
+  /** DD-056 H12: ref handle の pendingCount・flush（公開契約のまま橋渡し）。 */
+  pendingCount(): number;
+  flush(): Promise<unknown>;
 }
 
 let root: Root | null = null;
 let viewRef: { current: NanairoSheetViewHandle | null } | null = null;
+// DD-056 H12: E2E が切り替える readOnly prop（既定 false＝従来の E2E と同じ）。
+let readOnlyProp = false;
 
 function tree(): ReactNode {
   const ref = createRef<NanairoSheetViewHandle>();
@@ -143,6 +150,7 @@ function tree(): ReactNode {
       columnOrder: COLUMN_ORDER,
       initialData: buildInitialData(),
       ...borderOptions(new URLSearchParams(location.search)),
+      readOnly: readOnlyProp,
       onEvent,
       onCellCommit,
       style: { position: 'absolute', inset: '0', width: '100%', height: '100%' },
@@ -218,6 +226,16 @@ const handle: ReactStandaloneHandle = {
       }
     }
     return null;
+  },
+  setReadOnlyProp(readOnly: boolean): void {
+    readOnlyProp = readOnly;
+    root?.render(tree());
+  },
+  pendingCount(): number {
+    return viewRef?.current?.pendingCount() ?? -1;
+  },
+  flush(): Promise<unknown> {
+    return viewRef?.current?.flush() ?? Promise.resolve(null);
   },
 };
 

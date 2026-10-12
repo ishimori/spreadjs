@@ -520,13 +520,47 @@ export function OrderGrid() {
     `onDiagnostic`）は remount せず最新参照へ差し替わる（毎 render 新しい関数を渡してよい）。
 - **命令 API（ref）**: `setData(data)`（standalone 再注入）／`setRows(rows)`（standalone 行単位の部分更新・DD-052-4/DD-054。
   言及しなかった行・Undo/Redo 履歴はそのまま）／`focus()`／`connectionState()`／行操作・視点移動
-  （`insertRows`/`deleteRows`/`scrollToRow`/`scrollToColumn`/`setActiveCell`）／`presences()`（参加者一覧・未 mount は `[]`・DD-049）。
-  `GridInstance` 本体は出さない。
+  （`insertRows`/`deleteRows`/`scrollToRow`/`scrollToColumn`/`setActiveCell`）／`presences()`（参加者一覧・未 mount は `[]`・DD-049）／
+  `pendingCount()`・`flush()`（送り切り・未 mount は `0`・`flushed`・DD-056）。`GridInstance` 本体は出さない。
+- **`readOnly` は識別系ではない**（DD-056）: 値が変わっても開き直さず、同じ grid の `setReadOnly` を呼ぶ（4d）。
 - **共同編集モード**: `mode="collaboration"`（省略時の既定）＋`serverUrl` を渡す。standalone props に `serverUrl` を
   書くと**型エラー**（型で排他）。
 - **StrictMode**: `<StrictMode>` 配下の二重 mount/cleanup でもリークしない（内部で mount↔destroy が対で走る）。
 - **診断 hook の注意**: `onDiagnostic` は**mount 時に渡していれば**後から差し替え可（最新が呼ばれる）。mount 時に未指定で
   後から付ける場合のみ再 mount（識別系変更）が要る（既定無出力＝性能影響ゼロを保つための仕様）。
+
+## 4d. 表示専用の実行時切替と送り切り（`setReadOnly`・`flush`・DD-056）
+
+提出・締切・確定のように**シートの編集可否が変わる**画面では、開き直さずに表示専用へ切り替え、状態を変える前に自分の入力を
+送り切ってから処理する（入力を失わない）。
+
+```ts
+import { mount } from '@nanairo-sheet/grid';
+
+const grid = mount({ container }, { serverUrl, documentId });
+
+// 自分の操作で状態を変える（提出ボタン）: 編集中のセルを確定し、送り切ってから提出 API を呼ぶ。
+async function onSubmitClick(): Promise<void> {
+  const result = await grid.flush({ timeoutMs: 10_000 });
+  if (result.status !== 'flushed') {
+    showMessage(`送信中の入力が ${result.status === 'stopped' ? '送れません' : '残っています'}。接続を確認してください`);
+    return;
+  }
+  await api.submitDepartment();      // 業務側の状態を変える（サーバーで書込を止めるなら authorizeOperation・3e）
+  grid.setReadOnly(true);
+}
+
+// 他の人の操作で表示専用になった（アプリの通知）: 開き直さずに切り替える。未送信の入力は保持されて送られる。
+appEvents.on('sheet-locked', () => grid.setReadOnly(true));
+```
+
+- **`setReadOnly(true)`**: 編集中のセルは「確定して移動しない」で確定してから切り替える（変換を確定した直後の状態も確定する）。
+  IME 変換中は textarea に触れず、文書を変える他の入口（貼り付け・行操作・Undo/Redo 等）をすぐ止め、変換が終わってから切り替える。
+  共同編集セッション・未送信の操作・スクロール位置は保たれる（拒否されれば `rejected` イベント）。`false` で編集可能へ戻す。
+- **`flush()`**: 呼んだ時点の編集中のセルを確定し、自分の未確定の操作が 0 になったら `{ status: 'flushed' }`。オフラインなら
+  再接続を待ち、上限（既定 10 秒）を過ぎたら `timeout`（`pendingCount`・`editing` 付き）、接続が終端したら `stopped`。reject しない。
+- **`pendingCount()`**: 自分の未確定の操作の数（変化は `pending` イベントでも届く）。ページを離れる前の警告などに使える。
+- **React**: `readOnly` prop を変えるだけでよい（開き直さない）。送り切りは `ref.current.flush()`。
 
 ## 5. エラーコード・診断
 

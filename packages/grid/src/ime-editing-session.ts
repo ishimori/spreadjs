@@ -128,6 +128,22 @@ export interface ImeEditingSession {
   noteServerUpdate(): void;
   /** placement を再計算して port へ反映（scroll/構造Op 後・rAF 単位・RowId 再解決 #4）。 */
   refreshPlacement(resolveRect: ResolveRect): void;
+  /**
+   * 変換確定の直後（`EditingAwaitFinalInput`）に留まっていれば、textarea の現在値を最終 input（`isComposing: false`）の代わりに
+   * 状態機械へ渡す（DD-056・contract.md §4.2）。Tier 1（Chromium）では compositionend の後に非変換の input が来ず、次の Enter か
+   * 打鍵までこの位相に留まる（実機 DD-035 trace）。状態機械は改変せず、既存の遷移（保留中のクリックがあれば元のセルへ確定して
+   * クリック先へ移る／保留中の blur があれば確定する／どちらも無ければ変換していない編集へ戻る）に任せる。
+   * **IME イベントとは別のタスクから呼ぶこと**（同じタスクで最終 input が届く順序では、その input を先に処理させる）。
+   * 渡したら true（位相が違えば何もせず false）。
+   */
+  settleAwaitingFinalInput(): boolean;
+  /**
+   * 編集中のセルを「確定して移動しない」で確定する（DD-056 H12・contract.md §4.2）。変換確定の直後なら `settleAwaitingFinalInput` で
+   * 最終 input の代わりを渡してから、変換していない編集なら状態機械へ `blur`（Q-4）を渡す。変換中は何もしない（I-3）。
+   * 戻り値: `'committed'`＝確定のイベントを渡した／`'none'`＝編集中でない／`'composing'`＝変換中（確定できない）。
+   * 別タスクから呼ぶこと（`settleAwaitingFinalInput` と同じ理由）。
+   */
+  commitEdit(): 'committed' | 'none' | 'composing';
 }
 
 export function createImeEditingSession(config: ImeEditingSessionConfig): ImeEditingSession {
@@ -334,11 +350,34 @@ export function createImeEditingSession(config: ImeEditingSessionConfig): ImeEdi
     config.onChange?.();
   }
 
+  /** 変換確定の直後に留まっていれば、textarea の値を最終 input の代わりに渡す（DD-056・順序B。IME 状態機械は改変しない）。 */
+  function settleAwaitingFinalInput(): boolean {
+    if (machine.isComposing() || machine.getPhase() !== 'EditingAwaitFinalInput') {
+      return false;
+    }
+    applyEffects(machine.dispatch({ type: 'input', value: port.getValue(), isComposing: false }));
+    return true;
+  }
+
   return {
     handleEvent(event) {
       const effects = machine.dispatch(event);
       applyEffects(effects);
       return effects.length > 0;
+    },
+    settleAwaitingFinalInput,
+    commitEdit() {
+      if (machine.isComposing() || machine.getPhase() === 'Composing') {
+        return 'composing'; // 変換中は textarea にも状態機械にも触れない（I-3）
+      }
+      const settled = settleAwaitingFinalInput();
+      const phase = machine.getPhase();
+      if (phase === 'EditingReplace' || phase === 'EditingExisting') {
+        // Q-4: 非 composing 編集中の blur は「確定して移動しない」。grid は remoteUpdate を流さないため競合マークは立たず必ず Commit が出る。
+        applyEffects(machine.dispatch({ type: 'blur' }));
+        return 'committed';
+      }
+      return settled ? 'committed' : 'none'; // 保留中のクリック・blur があれば settle の時点で確定済み
     },
     getEditingTarget: () => editingTarget,
     getActiveCell: () => machine.getActiveCell(),
