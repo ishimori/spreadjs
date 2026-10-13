@@ -1146,7 +1146,8 @@ Dirty flag例：
 - Canvas backing storeをCSSサイズ×`devicePixelRatio`で確保する。
 - 描画座標はCSS pixelを基準に統一する。
 - 1px罫線はdevice pixelへsnapする。
-- DPR変更、画面移動、ブラウザー拡大縮小に伴うresizeを監視する。製品機能としてのズームは実装しない。
+- base/overlay Canvas の表示原点も最寄りの device pixel へそろえる（移動量は最大0.5 device px）。Chrome の端数原点の丸めを避けるため、Canvas の配置原点を一度 viewport の (0,0) へ相殺してから、そろえた表示原点へ translate する。表示サイズも backing store / DPR とし、`image-rendering: pixelated` で描画済み bitmap の再補間を抑える（DD-058）。stage・textarea・ヒットテストの論理座標は維持する。
+- 既存の描画 rAF で stage の位置を1回読む。サイズを変えない移動も次フレームで補正し、位置が同じなら DOM を更新しない。DPR 単独変更も検知して両 Canvas を再確保し、文字測定キャッシュと viewport を更新する。ResizeObserver によるサイズ変更の監視も維持する。製品機能としてのズームは実装しない。
 
 ### 12.5 文字描画
 

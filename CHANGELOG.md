@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.13`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.14`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.14` | `alpha` | `0.1.0-experimental` | DD-058（広島空港 H15）。高DPIでのCanvasのにじみ・配置移動とDPR単独変更への追従 |
 | `0.1.0-alpha.13` | `alpha` | `0.1.0-experimental` | DD-057（広島空港 H14）。候補のみの選択式列で打った文字を前方一致の候補選択に使う |
 | `0.1.0-alpha.12` | `alpha` | `0.1.0-experimental` | DD-056-3（広島空港 H13）。実行中の文書追加・撤去、受理済み操作と snapshot の終了待機 |
 | `0.1.0-alpha.11` | `alpha` | `0.1.0-experimental` | DD-056-1・2（広島空港 H11・H12）。操作ごとの認可、読み取り専用の実行時切替・送り切り |
@@ -27,6 +28,15 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.14] - 2026-10-13
+
+### Fixed
+
+- **grid の高DPI描画（DD-058・広島空港 H15）**: Canvas の原点が実画素の端数位置に来ると文字・罫線が再補間されてにじむ問題を修正。
+  base/overlay を同じ最寄りの実画素へ配置し、表示サイズと合成方法を合わせて描画済みの画素を保持する。表のサイズを変えずにページ内で移動した場合も次の描画フレームで補正する。
+  CSS サイズを変えずに DPR だけが変わった場合も両 Canvas を再確保して描き直す。公開API・IMEの座標計算・protocol・snapshot は変更なし。
+  実機 Chrome のGPU合成とWindows表示スケール125%の目視確認は未実施。CanvasとDOMの文字アンチエイリアス方式の差は残る。
 
 ## [0.1.0-alpha.13] - 2026-10-13
 

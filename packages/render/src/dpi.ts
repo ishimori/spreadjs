@@ -16,6 +16,12 @@ export function normalizeDpr(dpr: number): number {
   return Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
 }
 
+/** Canvas の表示原点を最寄りの実画素へ移す CSS offset（最大 0.5 device px）。 */
+export function devicePixelOffset(cssOrigin: number, dpr: number): number {
+  const d = normalizeDpr(dpr);
+  return Math.round(cssOrigin * d) / d - cssOrigin;
+}
+
 /** CSS サイズからバッキングストア（実ピクセル）サイズを算出する。 */
 export function backingSize(cssSize: PixelSize, dpr: number): PixelSize {
   const d = normalizeDpr(dpr);

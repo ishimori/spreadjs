@@ -40,6 +40,8 @@ export function buildScaffold(container: HTMLElement): GridScaffold {
     canvas.style.top = '0';
     canvas.style.left = '0';
     canvas.style.display = 'block';
+    // DD-058: bitmap は DPR で描画済み。合成時の再補間を抑える（原点補正と併用）。
+    canvas.style.imageRendering = 'pixelated';
   }
 
   const scroller = document.createElement('div');

@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { backingSize, deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
+import { backingSize, deviceLineWidth, devicePixelOffset, normalizeDpr, snapToDevice } from './dpi';
+
+describe('dpi: devicePixelOffset', () => {
+  it.each([1, 1.25, 1.5, 1.75, 2])('DPR %s: 最寄りの実画素へ半画素以内で合わせる', (dpr) => {
+    for (const css of [0, 17, 197.765625, -17, -197.765625, 0.25, 10000.125]) {
+      const offset = devicePixelOffset(css, dpr);
+      expect((css + offset) * dpr).toBeCloseTo(Math.round(css * dpr), 10);
+      expect(Math.abs(offset * dpr)).toBeLessThanOrEqual(0.5 + 1e-10);
+    }
+  });
+
+  it('整数位置は動かさず、無効 DPR は 1 として扱う', () => {
+    expect(devicePixelOffset(16, 1.25)).toBe(0);
+    expect(devicePixelOffset(0.2, Number.NaN)).toBeCloseTo(-0.2);
+    expect(devicePixelOffset(0.2, 0)).toBeCloseTo(-0.2);
+  });
+});
 
 describe('dpi: backingSize', () => {
   it('CSS サイズ × DPR でバッキングストアを算出する', () => {

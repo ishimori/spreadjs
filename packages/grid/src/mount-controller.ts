@@ -23,6 +23,7 @@ import {
   createOverlayLayer,
   createTextMetricsCache,
   createViewportTransform,
+  normalizeDpr,
 } from '@nanairo-sheet/render';
 import type { CellRect, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import { singleCell } from '@nanairo-sheet/selection';
@@ -56,6 +57,7 @@ import { buildPresenceUsers, samePresenceUsers } from './presence-list';
 import { toGridRemoteChange } from './remote-change';
 import { createSessionSync } from './session-sync';
 import { buildScaffold } from './dom-scaffold';
+import { createCanvasLayout } from './canvas-layout';
 import { buildRangeClear } from './range-ops';
 import {
   buildPaste,
@@ -222,7 +224,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let isDblclickDateColumnIndex: ((colIndex: number) => boolean) | undefined;
   let refreshDatePlacement: ((transform: ViewportTransform) => void) | undefined;
   let baseLayer: ReturnType<typeof createBaseLayer> | undefined;
-  let dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  let dpr = normalizeDpr(window.devicePixelRatio);
   let viewportWidth = 0;
   let viewportHeight = 0;
   let selection: CellRange | null = null;
@@ -859,8 +861,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   function provisionCanvas(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
     const backing = backingSize({ width: viewportWidth, height: viewportHeight }, dpr);
-    canvas.style.width = `${viewportWidth}px`;
-    canvas.style.height = `${viewportHeight}px`;
+    // DD-058: 表示サイズも実画素の整数にそろえ、bitmap を 1:1 で合成する。
+    canvas.style.width = `${backing.width / dpr}px`;
+    canvas.style.height = `${backing.height / dpr}px`;
     canvas.width = backing.width;
     canvas.height = backing.height;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -876,7 +879,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   function syncLayout(): void {
-    dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    dpr = normalizeDpr(window.devicePixelRatio);
     viewportWidth = Math.max(0, Math.floor(stage.clientWidth));
     viewportHeight = Math.max(0, Math.floor(stage.clientHeight));
     provisionCanvas(baseCanvas, baseCtx);
@@ -959,6 +962,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   function masterLoop(): void {
+    canvasLayout.sync();
     const view = sync?.view;
     if (view !== undefined) {
       if (view.hasStructuralDirty()) {
@@ -1762,8 +1766,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     { signal },
   );
 
+  const canvasLayout = createCanvasLayout(stage, [baseCanvas, overlayCanvas], syncLayout);
   const resizeObserver = new ResizeObserver(() => {
     syncLayout();
+    canvasLayout.sync();
   });
   resizeObserver.observe(stage);
 
@@ -3902,6 +3908,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // ---- 起動（rAF ループ・tick interval・boot）----
   syncLayout();
+  canvasLayout.sync();
   rafId = requestAnimationFrame(masterLoop);
   if (isStandalone) {
     // 単独モード（DD-024）: WS/tick interval は不要（transport 無し）。backend 構築は microtask で行い、
