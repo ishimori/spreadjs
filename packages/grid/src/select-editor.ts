@@ -30,6 +30,15 @@ export function filterOptionsByPrefix(options: readonly string[], prefix: string
   return options.filter((option) => option.toLowerCase().startsWith(needle));
 }
 
+/** 候補のみの列の文字選択（DD-057）。空入力・不一致は未選択。候補一覧の順で最初の一致を選ぶ。 */
+export function findOptionIndexByPrefix(options: readonly string[], prefix: string): number {
+  if (prefix === '') {
+    return -1;
+  }
+  const needle = prefix.toLowerCase();
+  return options.findIndex((option) => option.toLowerCase().startsWith(needle));
+}
+
 export interface SelectController {
   isOpen(): boolean;
   /**
@@ -50,6 +59,10 @@ export interface SelectController {
   highlightNext(): void;
   highlightPrev(): void;
   setHighlight(index: number): void;
+  /** DD-057: 開いている間の検索文字列に1文字を追加し、最初の前方一致を選ぶ。不一致なら選択を外す。 */
+  typeCharacter(character: string): void;
+  /** 検索文字列の末尾を1文字消す。未入力なら何もしない。全消去では選択を外す。 */
+  backspace(): void;
   close(): void;
 }
 
@@ -57,6 +70,7 @@ export function createSelectController(): SelectController {
   let open = false;
   let options: readonly string[] = [];
   let highlighted = -1;
+  let prefix = '';
 
   const clamp = (index: number): number => {
     if (options.length === 0) {
@@ -70,6 +84,7 @@ export function createSelectController(): SelectController {
     open: ({ options: opts, currentValue, highlight = true }) => {
       open = true;
       options = [...opts];
+      prefix = '';
       if (!highlight) {
         highlighted = -1; // suggest モード: 明示的に ↑↓ を押すまで何も選ばれていない状態で開く。
         return;
@@ -82,6 +97,7 @@ export function createSelectController(): SelectController {
         return;
       }
       options = [...opts];
+      prefix = '';
       highlighted = -1; // 絞り込みのたびにハイライトを解除（入力文字列の確定を既定に保つ）。
     },
     getOptions: () => options,
@@ -102,10 +118,23 @@ export function createSelectController(): SelectController {
         highlighted = clamp(index);
       }
     },
+    typeCharacter: (character) => {
+      if (open) {
+        prefix += character;
+        highlighted = findOptionIndexByPrefix(options, prefix);
+      }
+    },
+    backspace: () => {
+      if (open && prefix.length > 0) {
+        prefix = prefix.slice(0, -1);
+        highlighted = findOptionIndexByPrefix(options, prefix);
+      }
+    },
     close: () => {
       open = false;
       options = [];
       highlighted = -1;
+      prefix = '';
     },
   };
 }
@@ -117,6 +146,9 @@ export type SelectKeyDecision =
   | 'none'
   /** 選択式列で編集開始キー（F2/Enter/Alt+↓・厳格モードでは印字文字も）→ ドロップダウンを開く。 */
   | 'open'
+  /** DD-057: 候補のみの列で、開いた候補を打った文字で選ぶ。 */
+  | 'type'
+  | 'backspace'
   | 'move-down'
   | 'move-up'
   /** ハイライト中の候補を確定。 */
@@ -142,7 +174,7 @@ export interface SelectKeyInput {
   readonly isSelectCell: boolean;
   /**
    * アクティブセルの列で自由入力が許可されているか（DD-037 決定①）。既定 false＝従来の厳格モード。
-   * - `false`（厳格・DD-027-1 と同一）: 印字文字もドロップダウンを開く（textarea 編集へ入らせない）。
+   * - `false`（厳格）: 印字文字でドロップダウンを開き、その文字で候補を選ぶ（DD-057・textarea 編集へ入らせない）。
    * - `true`（自由入力併存）: 印字文字は前段消費せず従来どおり textarea 編集を開始する。候補は明示操作
    *   （F2 / Enter / Alt+↓ / ダブルクリック）で開く＝「候補を出しつつ候補外も打てる」。
    */
@@ -157,7 +189,8 @@ function isPrintable(input: SelectKeyInput): boolean {
 /**
  * 選択式列の keydown 前段裁定。composition 中（DOM/内部いずれか）と非 Navigation 位相では必ず 'none'
  * （IME・編集中のキー処理は従来どおり状態機械が裁く＝IME 経路無改変・I-3）。open 中は ↑↓/Enter/Esc/Tab を処理し、
- * 残りは 'consume'（textarea への漏れ防止）。閉じているときは選択式セルでのみ編集開始キーを 'open' に写す
+ * 候補のみの列の印字文字/Backspace は検索操作、それ以外は 'consume'（textarea への漏れ防止）。
+ * 閉じているときは選択式セルでのみ編集開始キーを 'open' に写す
  * （DD-037: 印字文字を 'open' に写すのは厳格モード＝`allowsFreeText:false` のときだけ）。
  */
 export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
@@ -165,6 +198,14 @@ export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
     return 'none';
   }
   if (input.isOpen) {
+    if (input.allowsFreeText !== true) {
+      if (isPrintable(input)) {
+        return 'type';
+      }
+      if (input.key === 'Backspace' && !input.ctrlKey && !input.metaKey && !input.altKey) {
+        return 'backspace';
+      }
+    }
     switch (input.key) {
       case 'ArrowDown':
         return 'move-down';
@@ -176,7 +217,7 @@ export function decideSelectKey(input: SelectKeyInput): SelectKeyDecision {
       case 'Tab':
         return 'cancel';
       default:
-        // 開いている間の他キー（印字文字・PageUp 等）は握り潰す（textarea 編集を誘発させない）。
+        // 検索以外のキーは握り潰す（自由入力併存列の印字文字も従来どおり）。
         // Alt+Down 等の修飾キー単独 press は consume で無害化。
         return 'consume';
     }
@@ -240,6 +281,9 @@ export interface SelectDropdown {
   setOptions(options: readonly string[]): void;
   highlightNext(): void;
   highlightPrev(): void;
+  /** DD-057: 候補のみの列で文字を追加し、ハイライト表示を更新する。 */
+  typeCharacter(character: string): void;
+  backspace(): void;
   /** ハイライト中の値を返して閉じる（未 open/候補空は null）。 */
   confirmValue(): string | null;
   close(): void;
@@ -387,6 +431,14 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
     },
     highlightPrev: () => {
       controller.highlightPrev();
+      paintHighlight();
+    },
+    typeCharacter: (character) => {
+      controller.typeCharacter(character);
+      paintHighlight();
+    },
+    backspace: () => {
+      controller.backspace();
       paintHighlight();
     },
     confirmValue: () => {

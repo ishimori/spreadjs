@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.12`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.13`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.13` | `alpha` | `0.1.0-experimental` | DD-057（広島空港 H14）。候補のみの選択式列で打った文字を前方一致の候補選択に使う |
 | `0.1.0-alpha.12` | `alpha` | `0.1.0-experimental` | DD-056-3（広島空港 H13）。実行中の文書追加・撤去、受理済み操作と snapshot の終了待機 |
 | `0.1.0-alpha.11` | `alpha` | `0.1.0-experimental` | DD-056-1・2（広島空港 H11・H12）。操作ごとの認可、読み取り専用の実行時切替・送り切り |
 | `0.1.0-alpha.10` | `alpha` | `0.1.0-experimental` | DD-055（ReadyCrew RC16・RC17）。候補欄（選択式・日付）を可視域に収める・高い行の編集欄がセル全体を覆う |
@@ -26,6 +27,23 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.13] - 2026-10-13
+
+### Changed
+
+- **grid 候補のみの選択式列の文字選択（DD-057・広島空港 H14）**: `allowFreeText:false`（既定）のセルで印字文字を打つと、
+  候補欄を開き、その文字に前方一致する最初の候補をハイライトする（大小文字は無視）。`b` → `B`、`721` → `721 保安費`。
+  候補一覧は全件のまま、開いている間は文字を追加して選び直し、Backspace で末尾を1文字戻せる。Enter で選んだ候補を確定する。
+  不一致・全消去はハイライトなしとなり、Enter は閉じるだけで値も SetCells 送信も変わらない。閉じる・開き直すと検索文字をリセットする。
+  矢印・クリックによる明示的な選択、自由入力併存列（`allowFreeText:true`）の picker/suggest、IME/composition の経路は従来どおり。
+  IME の確定文字による検索は対象外で、日本語候補は矢印・クリックで選ぶ。公開シグネチャ・API版・protocol・snapshot は変更なし。
+
+### 破壊的変更（操作仕様）
+
+- **厳格モードの印字キーは「開くだけ」から「開いて選ぶ」へ変更**: 従来は打った文字を捨て、現値または先頭候補を Enter で確定していた。
+  候補に一致しない文字を打ったあと Enter で現値・先頭を確定する操作には依存できなくなる。明示的に開く F2/Enter/Alt+↓/ダブルクリック、
+  開いている間の ↑↓/Enter/Esc/Tab の操作は維持する。候補のみの列への印字文字・Backspace を除き、前段のキー消費は従来どおり。
 
 ## [0.1.0-alpha.12] - 2026-10-12
 

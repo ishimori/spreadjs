@@ -83,3 +83,25 @@ test('DD-047: matrix-viewの実シードIDで行帯・行列罫線が描かれ�
   await expect.poll(() => pixel(600, 184)).toBe('100,116,139');
   expect(await pixel(600, 190)).toBe('229,231,235');
 });
+
+test('DD-057: 列タイプの F 列で b は B を選び、不一致 D は選択しない', async ({ page }) => {
+  await page.goto(`/demo.html?scenario=column-types&server=${WS_ORIGIN}`);
+  await expect(page.locator('#conn')).toHaveClass(/online/, { timeout: 30_000 });
+  await expect(page.locator('#scenario-steps')).toContainText('F 列は候補のみ');
+  // 既定幅80px・行見出し52pxの F1 中央。初期 replay 後に利用者と同じクリックで選ぶ（内部 API は使わない）。
+  await expect.poll(async () => {
+    await page.locator('.nsheet-scroller').click({ position: { x: 492, y: 35 } });
+    return page.locator('.ns-select-indicator').isVisible();
+  }).toBe(true);
+  await expect(page.locator('textarea.int-cell-editor')).toBeFocused();
+  await page.keyboard.type('b');
+  await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('B');
+  await page.screenshot({ path: test.info().outputPath('strict-select-b.png') });
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ns-select-listbox')).toBeHidden();
+  await page.keyboard.type('D');
+  await expect(page.locator('.ns-select-listbox')).toBeVisible();
+  await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ns-select-listbox')).toBeHidden();
+});

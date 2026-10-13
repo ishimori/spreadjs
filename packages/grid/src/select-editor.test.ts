@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createSelectController, decideSelectKey, filterOptionsByPrefix } from './select-editor';
+import { createSelectController, decideSelectKey, filterOptionsByPrefix, findOptionIndexByPrefix } from './select-editor';
 import type { SelectKeyInput } from './select-editor';
 
 describe('createSelectController: 純粋状態（開閉・ハイライト）', () => {
@@ -137,6 +137,104 @@ const NAV_SELECT_CLOSED: SelectKeyInput = {
   isSelectCell: true,
 };
 
+describe('DD-057: 候補のみの列の文字選択', () => {
+  const options = ['716 電力費', '721 保安費', '723 修繕費'];
+
+  it('前方一致の最初の候補を選ぶ。大小文字は無視し、空入力・不一致・候補なしは未選択', () => {
+    expect(findOptionIndexByPrefix(options, '72')).toBe(1);
+    expect(findOptionIndexByPrefix(['A', 'B', 'C'], 'b')).toBe(1);
+    expect(findOptionIndexByPrefix(options, '保安')).toBe(-1);
+    expect(findOptionIndexByPrefix(options, '')).toBe(-1);
+    expect(findOptionIndexByPrefix([], '7')).toBe(-1);
+    expect(options).toEqual(['716 電力費', '721 保安費', '723 修繕費']);
+  });
+
+  it('打った文字で現値より優先してハイライトし、候補一覧は全件のまま', () => {
+    const c = createSelectController();
+    c.open({ options: ['A', 'B', 'C'], currentValue: 'C' });
+    c.typeCharacter('b');
+    expect(c.getHighlightedIndex()).toBe(1);
+    expect(c.getHighlightedValue()).toBe('B');
+    expect(c.getOptions()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('連続入力を足し、Backspace で一致を戻す。全消去では選択を外す', () => {
+    const c = createSelectController();
+    c.open({ options, currentValue: '' });
+    c.typeCharacter('7');
+    expect(c.getHighlightedValue()).toBe('716 電力費');
+    c.typeCharacter('2');
+    c.typeCharacter('1');
+    expect(c.getHighlightedValue()).toBe('721 保安費');
+    c.backspace();
+    expect(c.getHighlightedValue()).toBe('721 保安費');
+    c.backspace();
+    expect(c.getHighlightedValue()).toBe('716 電力費');
+    c.backspace();
+    expect(c.getHighlightedValue()).toBeNull();
+    c.backspace();
+    expect(c.getHighlightedIndex()).toBe(-1);
+  });
+
+  it('不一致は選択なし。Backspace で一致へ戻り、矢印では明示的に選べる', () => {
+    const c = createSelectController();
+    c.open({ options: ['A', 'B', 'C'], currentValue: 'A' });
+    c.typeCharacter('B');
+    c.typeCharacter('D');
+    expect(c.getHighlightedIndex()).toBe(-1);
+    expect(c.getHighlightedValue()).toBeNull();
+    c.backspace();
+    expect(c.getHighlightedValue()).toBe('B');
+    c.typeCharacter('D');
+    c.highlightNext();
+    expect(c.getHighlightedValue()).toBe('A');
+  });
+
+  it('閉じる・開き直す・候補差し替えで検索文字をリセットし、閉じている間は操作無効', () => {
+    const c = createSelectController();
+    c.open({ options: ['A', 'B', 'C'], currentValue: 'A' });
+    c.typeCharacter('B');
+    c.close();
+    c.typeCharacter('A');
+    c.backspace();
+    expect(c.getHighlightedValue()).toBeNull();
+    c.open({ options: ['A', 'B', 'C'], currentValue: 'C' });
+    c.backspace();
+    expect(c.getHighlightedValue()).toBe('C'); // 未入力の Backspace は現値を消さない
+    c.typeCharacter('A');
+    expect(c.getHighlightedValue()).toBe('A');
+    c.open({ options: ['A', 'B', 'C'], currentValue: 'C' });
+    c.typeCharacter('B');
+    expect(c.getHighlightedValue()).toBe('B');
+    c.setOptions(['A', 'C']);
+    c.typeCharacter('C');
+    expect(c.getHighlightedValue()).toBe('C');
+  });
+
+  it('厳格モードで開いているときだけ印字文字と Backspace を検索操作へ渡す', () => {
+    const open = { ...NAV_SELECT_CLOSED, isOpen: true };
+    expect(decideSelectKey({ ...open, key: 'B' })).toBe('type');
+    expect(decideSelectKey({ ...open, key: 'B', shiftKey: true })).toBe('type');
+    expect(decideSelectKey({ ...open, key: 'Backspace' })).toBe('backspace');
+    expect(decideSelectKey({ ...open, key: 'B', allowsFreeText: true })).toBe('consume');
+    expect(decideSelectKey({ ...open, key: 'Backspace', allowsFreeText: true })).toBe('consume');
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey'] as const) {
+      expect(decideSelectKey({ ...open, key: 'B', [modifier]: true })).toBe('consume');
+      expect(decideSelectKey({ ...open, key: 'Backspace', [modifier]: true })).toBe('consume');
+    }
+    expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'Backspace' })).toBe('none');
+  });
+
+  it('新しい検索操作も composition 中・編集中には消費しない', () => {
+    for (const key of ['B', 'Backspace']) {
+      const open = { ...NAV_SELECT_CLOSED, isOpen: true, key };
+      expect(decideSelectKey({ ...open, eventComposing: true })).toBe('none');
+      expect(decideSelectKey({ ...open, sessionComposing: true })).toBe('none');
+      expect(decideSelectKey({ ...open, phase: 'EditingExisting' })).toBe('none');
+    }
+  });
+});
+
 describe('decideSelectKey: IME 経路無改変の裁定（composition 中は必ず none）', () => {
   it('composition 中（DOM/内部いずれか）は必ず none', () => {
     expect(decideSelectKey({ ...NAV_SELECT_CLOSED, key: 'Enter', eventComposing: true })).toBe('none');
@@ -215,8 +313,8 @@ describe('decideSelectKey: open 中の裁定（AC1〜3）', () => {
     expect(decideSelectKey({ ...open, key: 'Escape' })).toBe('cancel');
     expect(decideSelectKey({ ...open, key: 'Tab' })).toBe('cancel');
   });
-  it('open 中の他キーは consume（textarea 漏れ防止）', () => {
-    expect(decideSelectKey({ ...open, key: 'a' })).toBe('consume');
+  it('open 中の検索以外のキーは consume（textarea 漏れ防止）', () => {
     expect(decideSelectKey({ ...open, key: 'PageDown' })).toBe('consume');
+    expect(decideSelectKey({ ...open, key: 'Delete' })).toBe('consume');
   });
 });

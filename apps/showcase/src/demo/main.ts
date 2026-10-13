@@ -45,6 +45,8 @@ const columnTypes: Record<string, GridColumnType> | undefined = isColumnTypesSce
       // ＝「候補を出しつつ候補外も打てる」列。allowFreeText が決めるのは commit 検証の厳格さだけ。
       'col-3': { type: 'select', options: ['進行中', '受注', '失注'], allowFreeText: true },
       'col-4': { type: 'link' },
+      // DD-057: 候補のみの列の文字選択を、自由入力併存列と並べて試せる。
+      'col-5': { type: 'select', options: ['A', 'B', 'C'], allowFreeText: false },
     }
   : undefined;
 // DD-033: 「明細閲覧ビュー」シナリオだけ 表示専用（readOnly）＋業務名の列見出し（columnCaptions）＋

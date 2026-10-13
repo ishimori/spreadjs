@@ -441,6 +441,130 @@ test('AC2(単独モード): 選択式確定 → cell-commit 発火（decision②
   }
 });
 
+// DD-057: 印字文字を捨てずに候補の選択へ使う。textarea の編集に入らず、確定だけ既存の送信経路を通す。
+test('DD-057 AC1/3: 空欄で b → B を選択、Enter → SetCells 1件と他クライアント反映', async ({ browser }) => {
+  const select = 'col-3:A|B|C';
+  const a = await openClient(browser, 'DD057-B送信', { select });
+  const b = await openClient(browser, 'DD057-B受信', { select });
+  try {
+    const row = 18;
+    const rowId = await rowIdAt(a.page, row);
+    const columnId = await colIdAt(a.page, 3);
+    expect(rowId).toBeDefined();
+    expect(columnId).toBeDefined();
+    if (rowId === undefined || columnId === undefined) throw new Error('対象セルがない');
+    await selectCell(a.page, row, 3);
+    await a.page.keyboard.press('Delete');
+    await expect.poll(async () => committedCell(a.page, rowId, columnId)).toBe('');
+    await expect.poll(async () => committedCell(b.page, rowId, columnId)).toBe('');
+    await expect.poll(async () => (await snapshot(a.page)).pendingCount).toBe(0);
+    const before = await snapshot(a.page);
+
+    await a.page.keyboard.type('b');
+    await expect(a.page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('B');
+    expect(await selectOptions(a.page)).toEqual(['A', 'B', 'C']);
+    expect((await snapshot(a.page)).draft).toBe('');
+    expect(await activeElementClass(a.page)).toBe('int-cell-editor');
+    await a.page.keyboard.press('Enter');
+    await expect.poll(async () => selectOpen(a.page)).toBe(false);
+    await expect.poll(async () => committedCell(a.page, rowId, columnId)).toBe('B');
+    await expect.poll(async () => committedCell(b.page, rowId, columnId)).toBe('B');
+    await expect.poll(async () => (await snapshot(a.page)).pendingCount).toBe(0);
+    expect((await snapshot(a.page)).committedRevision).toBe(before.committedRevision + 1);
+    expect((await snapshot(b.page)).committedRevision).toBe(before.committedRevision + 1);
+  } finally {
+    await a.context.close();
+    await b.context.close();
+  }
+});
+
+test('DD-057 AC2: 721 の連続入力と Backspace で候補を選び直して確定する', async ({ browser }) => {
+  const options = ['716 電力費', '721 保安費', '723 修繕費'];
+  const { context, page } = await openClient(browser, 'DD057-科目', { select: `col-3:${options.join('|')}` });
+  try {
+    const rowId = await rowIdAt(page, 19);
+    const columnId = await colIdAt(page, 3);
+    if (rowId === undefined || columnId === undefined) throw new Error('対象セルがない');
+    await selectCell(page, 19, 3);
+    await page.keyboard.type('7');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('716 電力費');
+    await page.keyboard.type('21');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('721 保安費');
+    await page.keyboard.press('Backspace');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('721 保安費');
+    await page.keyboard.press('Backspace');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('716 電力費');
+    await page.keyboard.type('21');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => committedCell(page, rowId, columnId)).toBe('721 保安費');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-057 AC4: 不一致と全消去は Enter で値も revision も変えず、再オープン時は検索をリセット', async ({ browser }) => {
+  const { context, page } = await openClient(browser, 'DD057-不一致', { select: 'col-3:A|B|C' });
+  try {
+    const rowId = await rowIdAt(page, 20);
+    const columnId = await colIdAt(page, 3);
+    if (rowId === undefined || columnId === undefined) throw new Error('対象セルがない');
+    await selectCell(page, 20, 3);
+    await page.keyboard.type('A');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => committedCell(page, rowId, columnId)).toBe('A');
+    await expect.poll(async () => (await snapshot(page)).pendingCount).toBe(0);
+    const before = await snapshot(page);
+
+    for (const erase of [false, true]) {
+      await page.keyboard.type(erase ? 'B' : 'D');
+      if (erase) await page.keyboard.press('Backspace');
+      await expect.poll(async () => selectHighlightedIndex(page)).toBe(-1);
+      await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveCount(0);
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => selectOpen(page)).toBe(false);
+      expect(await committedCell(page, rowId, columnId)).toBe('A');
+      const after = await snapshot(page);
+      expect(after.pendingCount).toBe(0);
+      expect(after.committedRevision).toBe(before.committedRevision);
+      expect(after.committedHash).toBe(before.committedHash);
+    }
+    await page.keyboard.press('F2');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('A');
+    await page.keyboard.type('B');
+    await expect(page.locator('.ns-select-option[aria-selected="true"]')).toHaveText('B');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => committedCell(page, rowId, columnId)).toBe('B');
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-057: 単独モードでも文字選択は1回だけ通知し、不一致では cell-commit を通知しない', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?select=col-b:A|B|C');
+    await sa.waitReady(page);
+    const rowId = await sa.rowIdAt(page, 3);
+    const columnId = await sa.colIdAt(page, 1);
+    if (rowId === undefined || columnId === undefined) throw new Error('対象セルがない');
+    await sa.selectCell(page, 3, 1);
+    const count = async (): Promise<number> => (await sa.events(page)).filter((e) => e.type === 'cell-commit').length;
+    const before = await count();
+    await page.keyboard.type('B');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => sa.displayCell(page, rowId, columnId)).toBe('B');
+    expect(await count()).toBe(before + 1);
+    await page.keyboard.type('D');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => selectOpen(page)).toBe(false);
+    expect(await sa.displayCell(page, rowId, columnId)).toBe('B');
+    expect(await count()).toBe(before + 1);
+  } finally {
+    await context.close();
+  }
+});
+
 // ---- DD-055（ReadyCrew RC16）: 候補欄を可視域の中に開く -------------------------------------------------
 // 証跡（スクショ・数値 JSON）は失敗しうる検証より前に保存する（修正前の状態を同じ手順で残すため）。
 

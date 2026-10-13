@@ -284,6 +284,9 @@ export interface GridCommonMountOptions {
    * 同運用）。選択式入力列（`{ type: 'select', options, allowFreeText? }`）とハイパーリンク列（`{ type: 'link', defaultOpen? }`）。
    * - **選択式**: 検証は editor 経路（IME/textarea 確定・ドロップダウン）の commit 直前だけ。`allowFreeText:false`（既定）の
    *   選択式列は候補外の値を確定できない（未 submit＋`rejected`（code=`value-not-allowed`）通知＋診断・文書無変更）。
+   *   候補のみの列で印字文字を打つと、候補欄を開いて前方一致する最初の候補を選ぶ（大小文字は無視）。開いている間は
+   *   文字を追加し Backspace で1文字戻す。不一致・全消去は選択なしで、Enter でも値を変えない。IME の確定文字による
+   *   検索は対象外。日本語候補は矢印またはクリックで選ぶ。自由入力併存列の動きは変わらない（DD-057）。
    *   paste / setData / リモート由来の非候補値は検証されず保持・表示される（拒否しない＝データ非破壊・収束優先）。
    * - **リンク**: 値は string 1本。クリックで `link-open` イベントが発火する（**SDK は navigate しない**が既定）。
    *   `defaultOpen:true` のときだけ絶対 http/https URL を `window.open(_,'_blank','noopener,noreferrer')` で開く

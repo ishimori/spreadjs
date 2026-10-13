@@ -2757,7 +2757,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     /**
      * 開いているドロップダウンの種類（DD-037 決定①③）。
      * - `'picker'`: Navigation で明示操作（F2 / Enter / Alt+↓ / ダブルクリック）から開いた従来のドロップダウン。
-     *   ↑↓/Enter/Esc/Tab を奪い、他キーは握り潰す（DD-027-1 の挙動そのまま）。
+     *   ↑↓/Enter/Esc/Tab を奪う。候補のみの列では印字文字/Backspace で候補を選ぶ（DD-057）。
      * - `'suggest'`: 自由入力併存列（allowFreeText:true）の**編集中**に draft の前方一致で自動表示する候補リスト。
      *   **キーを一切奪わない**（decideSelectKey は非 Navigation 位相で必ず 'none'）＝印字・IME・キャレット移動・
      *   Enter/Tab の確定はすべて従来の editor 経路のまま流れる。表示だけの passive なオーバーレイ。
@@ -2771,7 +2771,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
      */
     let suggestFilterKey: string | null = null;
 
-    const openSelect = (): void => {
+    const openSelect = (initialCharacter?: string): void => {
       if (readOnly) {
         // 選択式列のドロップダウンは開かない（要確認2・文書変更経路の入口）。
         diag.emit('info', 'readonly-blocked', 'readOnly: 選択式ドロップダウンを抑止');
@@ -2810,6 +2810,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
         options,
         currentValue,
       });
+      if (initialCharacter !== undefined) {
+        selectDropdown.typeCharacter(initialCharacter);
+      }
       selectOpenMode = 'picker';
       backend.view.markViewportDirty();
     };
@@ -3366,7 +3369,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
               break;
           }
         }
-        // DD-027-1: 選択式ドロップダウンの前段裁定（最優先）。open 中は ↑↓/Enter/Esc/Tab を消費し他キーを握り潰す。
+        // DD-027-1/057: 選択式ドロップダウンの前段裁定（最優先）。厳格モードは文字/Backspace で候補を選ぶ。
         // 閉じている選択式セルでは編集開始キー（F2/Enter/Alt+↓）でドロップダウンを開く。印字文字も開くのは
         // 厳格モード（allowFreeText:false）だけで、自由入力併存列では textarea 編集へ流す（DD-037 決定①）。
         // composition 中・非 Navigation では decideSelectKey が必ず 'none'＝IME 経路無改変（I-3）。
@@ -3390,7 +3393,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
           });
           switch (decision) {
             case 'open':
-              openSelect();
+              openSelect(input.key.length === 1 ? input.key : undefined);
+              return true;
+            case 'type':
+              selectDropdown.typeCharacter(input.key);
+              backendNow.view.markViewportDirty();
+              return true;
+            case 'backspace':
+              selectDropdown.backspace();
+              backendNow.view.markViewportDirty();
               return true;
             case 'move-down':
               selectDropdown.highlightNext();
