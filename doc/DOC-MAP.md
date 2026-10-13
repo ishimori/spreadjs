@@ -91,6 +91,7 @@
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
 | `doc/archived/DD/DD-057/` | 広島空港 H14 の文字選択契約・SDK検証・alpha.13引き渡しと、showcase F列での選択画面 |
+| `doc/archived/DD/DD-058/` | 広島空港 H15。高DPICanvasの原因・方式比較、位置/DPR追従の画素検証・自己レビュー・alpha.14引き渡し |
 | `doc/archived/DD/DD-056/` | 広島空港 H11〜H13 の確定契約・設計と各子DDの実装レビュー（依頼・結果）・配布と検証記録 |
 | `doc/archived/DD/DD-055/` | 候補欄のはみ出しと長文編集欄の高さ（ReadyCrew RC16・RC17）の再現・修正検証（bug-report・verification・Before/After の画面と矩形の数値）・Codex レビュー（依頼・結果） |
 | `doc/archived/DD/DD-048/` | 点線・破線と共通横罫線の確定シナリオ・検証証跡・Release引き渡し |

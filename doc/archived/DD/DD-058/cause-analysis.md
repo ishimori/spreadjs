@@ -86,3 +86,17 @@ base canvas のビットマップ（toDataURL を白に合成）と page.screens
 - canvas の位置は、大きさを変えずに動くことがある（広島 ① では、上に「同期サーバーとの接続が終わりました」の帯が出ると canvas が下へずれる）。ResizeObserver はこれを拾わない（論点2）
 - DPR だけが変わる場合（別のモニターへの移動など）に ResizeObserver が発火するかは未確認（論点3）
 - 計測は headless Chromium の deviceScaleFactor エミュレーション。実機の Chrome（GPU 合成）とは細部が違う可能性があるが、計測1の実機のスクリーンショットにも同じにじみ方（罫線が 2 画素に割れる）が出ている
+
+## Phase 0 の追加調査（2026-10-13）
+
+使用ブラウザーは本repoのPlaywright Chromium **149.0.7827.55**（起票時のChromium156とは別）。初回の修正前実測は [bug-report.md](bug-report.md) を参照。
+
+DD-004当時の `f091a5e:apps/playground/poc-b.html` をDPR1.25/1376×850で再配置するとCanvas原点は CSS(13,141)、device(16.25,176.25)だった（[layout-research.json](layout-research.json)）。「当時の原点が整数だった」は裏付けられず、復元レイアウトでは反証された。当時の正確な動的配置は記録がないため確定できない。DD-004の目視1行にはbitmapとの画素比較がなく、今回の保証へ流用しない。
+
+ResizeObserverはサイズを変えないDPR単独変更（CDPで1.25→1.5→2→1.25）では通知数が増えない。既存コードは拾えていなかったためrAFのDPR比較を採用した。
+
+位置読みの追加コスト（120フレーム、既存描画ループのrect呼び出しを計測）: 静止平均0.0092ms、位置変更中平均0.0117ms、両方p95/max約0.1ms。どちらも120 reads/120 frames。これはheadless小規模fixtureの計測で、50k行の描画性能は既存全回帰の性能E2Eで別に確認する。
+
+単純translateは静止時を直せても、後の移動で1画素の表示ずれを起こした。layout原点をviewport(0,0)へ相殺してから整数実画素へ移すと、移動後もbitmapの全画素が一致する。`pixelated` は描画済みの文字のAAを変えず、合成段階の再補間を抑えるために指定する。表示サイズも backing/DPR として1:1を保つ。
+
+参照: [MDN devicePixelRatio](https://developer.mozilla.org/en-US/docs/Web/API/Window/devicePixelRatio)、[MDN image-rendering](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/image-rendering)。Modern Web Guidanceのsearch/retrieveも実施したが、この既存Canvasの原点補正に適用するガイドはなく、新しいCSSサイズ機能は採用していない。
