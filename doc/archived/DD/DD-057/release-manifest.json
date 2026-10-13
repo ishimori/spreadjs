@@ -1,0 +1,87 @@
+{
+  "distribution": "pack-tarball-closure",
+  "note": "DD-017 決定事項A: private registry ではなく pack closure 方式を正式化。consumer は本 closure 全 tarball を同時 install する（欠けると module 解決不能）。registry 昇格は Stage 2。",
+  "channel": "alpha",
+  "version": "0.1.0-alpha.13",
+  "apiVersion": "0.1.0-experimental",
+  "generatedAt": "2026-10-13T10:36:30.732Z",
+  "gitCommit": "f7574f3f246191d7dfc81502c3e0a0220448a8e1",
+  "gitDirty": false,
+  "closureDirty": false,
+  "closureDirtyPaths": [],
+  "dirtyNote": "gitDirty は working tree 全体、closureDirty は配布に影響するパス（packages/・scripts/release/・package.json・package-lock.json・tsconfig.base.json）のみを見る。closureDirty=false なら本 tarball は gitCommit から再現できる（gitDirty=true でも doc 等の無関係な変更に過ぎない）。closureDirty=true の tarball は gitCommit と一致しないため、配布判断の証拠には使わないこと。",
+  "installNote": "tarball は本 manifest と同じ release/ にある。consumer プロジェクトへ tarball をコピー（例 vendor/）してから install を実行するか、release/ を cwd にして実行する。scripts/consumer-app.sh は tarball を .vendor へコピーして検証する。",
+  "install": "npm install --no-save --install-links --no-audit --no-fund ./nanairo-sheet-grid-0.1.0-alpha.13.tgz ./nanairo-sheet-react-0.1.0-alpha.13.tgz ./nanairo-sheet-server-hono-0.1.0-alpha.13.tgz ./nanairo-sheet-core-0.1.0-alpha.13.tgz ./nanairo-sheet-types-0.1.0-alpha.13.tgz ./nanairo-sheet-collab-0.1.0-alpha.13.tgz ./nanairo-sheet-render-0.1.0-alpha.13.tgz ./nanairo-sheet-selection-0.1.0-alpha.13.tgz ./nanairo-sheet-ime-0.1.0-alpha.13.tgz ./nanairo-sheet-server-0.1.0-alpha.13.tgz",
+  "packages": [
+    {
+      "name": "@nanairo-sheet/grid",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-grid-0.1.0-alpha.13.tgz",
+      "bytes": 182005,
+      "sha256": "b682ae45f9cd1e76a3343008b8e313cd0140f93ec5279e722ccf22b0fa04fbfb"
+    },
+    {
+      "name": "@nanairo-sheet/react",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-react-0.1.0-alpha.13.tgz",
+      "bytes": 11080,
+      "sha256": "92d71e4bc4c73ae7f0c19b9e2419130b5c6d8612145c8b2eb1c2c6171a825938"
+    },
+    {
+      "name": "@nanairo-sheet/server-hono",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-server-hono-0.1.0-alpha.13.tgz",
+      "bytes": 60853,
+      "sha256": "ce626b7be2f3aafd2263b166e57a495dbb17af83c9f10c14c785c1e6c6f9e124"
+    },
+    {
+      "name": "@nanairo-sheet/core",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-core-0.1.0-alpha.13.tgz",
+      "bytes": 26427,
+      "sha256": "4e4bc7ce60327138dd02f7670d4345e7615c8b936d2081fd1ba38a1c53ff614d"
+    },
+    {
+      "name": "@nanairo-sheet/types",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-types-0.1.0-alpha.13.tgz",
+      "bytes": 1392,
+      "sha256": "e7f718cf892ab0832fa304148573d0de7458c33190e2e2ee181065e7e90d3540"
+    },
+    {
+      "name": "@nanairo-sheet/collab",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-collab-0.1.0-alpha.13.tgz",
+      "bytes": 23755,
+      "sha256": "5793e434c7d6f2349f20c3ced4542c17d3e656a06609237321beec394f11e6dc"
+    },
+    {
+      "name": "@nanairo-sheet/render",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-render-0.1.0-alpha.13.tgz",
+      "bytes": 35123,
+      "sha256": "993041c852a4b2132f2d0fad61bbb73b62aced82c67619b051d1607a9bea7239"
+    },
+    {
+      "name": "@nanairo-sheet/selection",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-selection-0.1.0-alpha.13.tgz",
+      "bytes": 1145,
+      "sha256": "2a8254f0016ab5b16b37b18ca408b51abab25e3a0e5a99b97bbccc9aabfbe4b1"
+    },
+    {
+      "name": "@nanairo-sheet/ime",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-ime-0.1.0-alpha.13.tgz",
+      "bytes": 13006,
+      "sha256": "4b20e0641c665c69f759f70afd9463c547a5c5bd2c869664cd23a1031585267b"
+    },
+    {
+      "name": "@nanairo-sheet/server",
+      "version": "0.1.0-alpha.13",
+      "tarball": "nanairo-sheet-server-0.1.0-alpha.13.tgz",
+      "bytes": 28649,
+      "sha256": "be761394df04f871166ab76faea17b3404c2ff76074fd6e6bed0e499e36a5242"
+    }
+  ]
+}
