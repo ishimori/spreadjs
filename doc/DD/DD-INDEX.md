@@ -6,6 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
+| DD-058 | 高DPIでcanvasが実画素からずれてにじむ | 検討中 | consumer 駆動（広島空港）。要件正本は広島 `doc/poc/sdk-requirements.md` H15。Human Spec Gate 前（論点1〜4） |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
