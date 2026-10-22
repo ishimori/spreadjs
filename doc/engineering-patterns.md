@@ -234,3 +234,10 @@
 - **原因**: 指定罫線は全 pane の後に `drawBorders` が上から描き、帯は境界の device px から `floor(太さ/2)` 手前で始まり太さぶん続く（`borderBand`）。「グリッド線の 1 device px の内側」を決め打ちすると、2px 以上の罫線の帯に重なる（8px なら 2px の枠が全部隠れる）。
 - **正しいやり方**: 各辺の境界の罫線（`deps.columnBorder(col)`・`(col + 1)`・`rowBorder(row)`・`(row + 1)`）の太さを `borderBand` と同じ丸めで device px にし、左上は `round(境界*d) + ceil(n/2)`、右下は `round(境界*d) - floor(n/2)` を内端にする（指定なしは n=1＝グリッド線）。内側が無くなるセルでは描かない。テストは太い罫線で囲んだセルを unit（座標）と E2E（画素）の両方で持つ。
 - **元DD**: DD-060（状態表示の枠。Codex P2・OFIC は rowBorders を使う）
+
+## 29. mount の同期部分で consumer の options から派生値を作らない（JS の不正値で既存の config 検証へ届かなくなる）
+
+- **症状**: 新機能のために mount の冒頭で `new Set(options.columnOrder)` のような派生値を作ったら、JS の consumer が配列でない値を渡したときに mount が同期で例外を投げ、従来は boot で出ていた config エラー（`standalone-options-invalid`）が出なくなった。handle も返らないので、生成済みの DOM を destroy できない。TS の consumer・既存テストでは起きないので気付きにくい。
+- **原因**: options の検証は boot（microtask）でまとめて行い、不正なら config エラーとして通知する作り。検証より前の同期部分で options を加工すると、その加工が先に落ちる。
+- **正しいやり方**: options からの派生値は、最初に使う時点で作る（`??=` で遅延）か、boot の検証の後に作る。作るときも `Array.isArray` 等で形を確かめる。公開メソッドの引数（`setCellStatus(rows)` 等）も同じで、JS の consumer の不正な形はその行だけ飛ばして診断する（boot 前の保留キューの再生中に例外が出ると、後続の正しい呼び出しまで失われる）。回帰テストは playground の再現用クエリ（`?badcolumnorder=1`）で不正値を渡し、修正を外すと赤になることを確かめる（#18）。
+- **元DD**: DD-062（Codex P2 2件）
