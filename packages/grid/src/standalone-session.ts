@@ -16,7 +16,7 @@ import type { TextMetricsCache } from '@nanairo-sheet/render';
 
 import { DocumentView, cellScalarToDisplay } from './document-view';
 import type { GridBackend, GridBackendSession } from './grid-backend';
-import type { GridCellCommitChange, GridStandaloneData, GridStandaloneRow } from './index';
+import type { GridCellCommitChange, GridCellStatus, GridStandaloneData, GridStandaloneRow } from './index';
 import type { UndoPatch } from './undo-stack';
 
 /** RC4: setRows の適用結果。 */
@@ -25,6 +25,39 @@ export interface StandaloneRowsResult {
   readonly changes: readonly UndoPatch[];
   /** 新規追加された行数（末尾へ追加・行挿入自体は既存の Undo/Redo 対象外＝行操作と同運用）。 */
   readonly insertedRowCount: number;
+  /** DD-060: `cellStatus` を渡した行が1つでもあったか（呼び出し側がホバー中のセルの状態を出し直すため）。 */
+  readonly cellStatusUpdated: boolean;
+}
+
+/** DD-060: cellStatus が列挙できる Record か（JS の consumer から来る null・文字列・配列で例外にしない・Codex P2）。 */
+function isCellStatusRecord(value: unknown): value is Readonly<Record<string, GridCellStatus>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * DD-060: 行データの cellStatus を「既知列 → 正規化した状態」へ写す（未知列は静かにスキップ、不正な level は invalid へ）。
+ * 渡されたオブジェクトは保持せず写しを作る（consumer が後から書き換えても表示が変わらない）。空なら undefined。
+ */
+function normalizeCellStatus(
+  rowId: string,
+  input: Readonly<Record<string, GridCellStatus>>,
+  knownColumns: ReadonlySet<string>,
+  invalid: string[],
+): ReadonlyMap<string, GridCellStatus> | undefined {
+  const statuses = new Map<string, GridCellStatus>();
+  for (const [columnId, status] of Object.entries(input)) {
+    if (!knownColumns.has(columnId)) {
+      continue;
+    }
+    const level: unknown = (status as { level?: unknown } | null)?.level;
+    if (level !== 'error' && level !== 'warning') {
+      invalid.push(`${rowId}/${columnId}`);
+      continue;
+    }
+    const message: unknown = status.message;
+    statuses.set(columnId, typeof message === 'string' ? { level, message } : { level });
+  }
+  return statuses.size > 0 ? statuses : undefined;
 }
 
 /** 2つの CellScalar が同値か（kind とその値の完全一致）。 */
@@ -58,6 +91,8 @@ export interface StandaloneSessionConfig {
    * `setData` を呼んでも、その時点で Undo 記録は既に終わっている（`setData` の Undo 全消去が正しく効く）。
    */
   readonly beforeCellCommit?: () => void;
+  /** DD-060: `level` が不正で無視したセルがあれば、注入1回につき1回呼ぶ（mount-controller が診断 warn へ写す）。 */
+  readonly onCellStatusInvalid?: (message: string) => void;
 }
 
 /** 単独モードの backend（GridBackend）＋ 再注入 API。 */
@@ -68,11 +103,17 @@ export interface StandaloneSession extends GridBackend {
   isCellReadOnly(rowId: string, columnId: string): boolean;
   /** RC3: 1件でも行単位の読み取り専用セルが指定されているか（呼び出し側の早期リターン用）。 */
   hasAnyCellReadOnly(): boolean;
+  /** DD-060: このセルの状態表示（行データの `cellStatus`）。無ければ undefined。 */
+  cellStatusOf(rowId: string, columnId: string): GridCellStatus | undefined;
+  /** DD-060: この行で状態表示を持つセル（ColumnId 文字列→状態）。無ければ undefined（描画フックが行ごとに引く）。 */
+  cellStatusRow(rowId: string): ReadonlyMap<string, GridCellStatus> | undefined;
+  /** DD-060: 1件でも状態表示があるか（描画フックの早期リターン用）。 */
+  hasAnyCellStatus(): boolean;
   /**
    * RC4（DD-052-4）: 行単位の部分更新（`setData` と違い、渡した行だけを置換・追加し他の行はそのまま）。
    * 既存行は `cells` に含まれる列だけを診断（値が変わらないセルは触れない＝Undo 対象に入れない）。
-   * 未知の RowId は新規行として末尾へ追加する。`readOnlyColumns` は明示指定した行だけ置き換える
-   * （未指定ならその行の既存指定を保つ）。readOnly（列/行/セル）は `setData` と同様に無視して適用する
+   * 未知の RowId は新規行として末尾へ追加する。`readOnlyColumns`・`cellStatus`（DD-060）は明示指定した行だけ置き換える
+   * （未指定ならその行の既存指定を保つ。状態だけの変更は値にも Undo にも触れず、再描画だけを要求する）。readOnly（列/行/セル）は `setData` と同様に無視して適用する
    * （プログラム的な再注入は利用者編集の抑止対象ではない）。未知列は静かにスキップする。
    * 削除済み（`deleteRows` 済み）の RowId が再度渡された場合は再利用不可として静かに無視する
    * （core の insertRows は既存 RowId の再利用に対応しない）。
@@ -92,6 +133,9 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
   // RC3（DD-052-3）: 行単位の読み取り専用列（RowId 文字列→ColumnId 文字列集合）。setData のたびに丸ごと再構築する
   // （決定③「文書を丸ごと再注入」と同じ扱い＝古い行の指定を引きずらない）。
   let cellReadOnly = new Map<string, ReadonlySet<string>>();
+  // DD-060: 行データのセルの状態表示（RowId 文字列→ColumnId 文字列→状態）。cellReadOnly と同じく setData で作り直し、
+  // setRows では明示した行だけ置き換える。文書（SheetDocument）には入れない＝値・Undo・cell-commit・コピーの対象外。
+  let cellStatus = new Map<string, ReadonlyMap<string, GridCellStatus>>();
   // 適用ごとに単調増加する revision（cell 単位 lastChangedRevision の源。共同編集の server revision に相当）。
   let revision = 0;
   let doc: SheetDocument = buildDocument(config.initialData);
@@ -117,6 +161,7 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     next.revision = revision;
     // RC3: 文書を丸ごと差し替えるたびに行単位 readOnly も丸ごと再構築する（古い行の指定を引きずらない）。
     cellReadOnly = new Map<string, ReadonlySet<string>>();
+    cellStatus = new Map<string, ReadonlyMap<string, GridCellStatus>>();
     const rows = data?.rows ?? [];
     if (rows.length === 0) {
       return next;
@@ -139,12 +184,22 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     next = applyOperation(next, insertOp, { revision }).document;
 
     const changes: SetCellsChange[] = [];
+    const invalidStatus: string[] = [];
     for (const row of uniqueRows) {
       // RC3: 行単位の読み取り専用列（未知列は静かにスキップ・cells と同じ扱い）。
       if (row.readOnlyColumns !== undefined && row.readOnlyColumns.length > 0) {
         const known = row.readOnlyColumns.filter((c) => knownColumns.has(c));
         if (known.length > 0) {
           cellReadOnly.set(row.rowId, new Set(known));
+        }
+      }
+      // DD-060: セルの状態表示（未知列は静かにスキップ・不正な level と Record でない cellStatus はまとめて通知）。
+      if (row.cellStatus !== undefined && !isCellStatusRecord(row.cellStatus)) {
+        invalidStatus.push(row.rowId);
+      } else if (row.cellStatus !== undefined) {
+        const statuses = normalizeCellStatus(row.rowId, row.cellStatus, knownColumns, invalidStatus);
+        if (statuses !== undefined) {
+          cellStatus.set(row.rowId, statuses);
         }
       }
       if (row.cells === undefined) {
@@ -166,7 +221,18 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       revision += 1;
       next = applyOperation(next, { type: 'setCells', conflictPolicy: 'reject-overlap', changes }, { revision }).document;
     }
+    reportInvalidStatus(invalidStatus);
     return next;
+  }
+
+  /** DD-060: 無視した不正な指定を1回の通知にまとめる。 */
+  function reportInvalidStatus(invalid: readonly string[]): void {
+    if (invalid.length > 0) {
+      config.onCellStatusInvalid?.(
+        `cellStatus: 不正な指定 ${invalid.join(', ')} を無視しました（RowId/ColumnId は level が 'error'/'warning' でないセル、` +
+          'RowId だけのものは cellStatus がオブジェクトでない行）',
+      );
+    }
   }
 
   const session: GridBackendSession = {
@@ -238,6 +304,15 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     hasAnyCellReadOnly(): boolean {
       return cellReadOnly.size > 0;
     },
+    cellStatusOf(rowId: string, columnId: string): GridCellStatus | undefined {
+      return cellStatus.get(rowId)?.get(columnId);
+    },
+    cellStatusRow(rowId: string): ReadonlyMap<string, GridCellStatus> | undefined {
+      return cellStatus.get(rowId);
+    },
+    hasAnyCellStatus(): boolean {
+      return cellStatus.size > 0;
+    },
     setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult {
       const existingRowIds = new Set<string>();
       // DD-052-4（Codex P1）: tombstone 済み（削除済み）の RowId は「未知」ではない。core の insertRows は
@@ -273,9 +348,11 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
 
       const changes: UndoPatch[] = [];
       const setCellsChanges: SetCellsChange[] = [];
+      const invalidStatus: string[] = [];
+      let cellStatusUpdated = false;
       for (const row of rows) {
         if (deletedRowIds.has(row.rowId)) {
-          continue; // 削除済み RowId の再利用（上記参照）: readOnlyColumns 更新もセル diff も行わない
+          continue; // 削除済み RowId の再利用（上記参照）: readOnlyColumns・cellStatus の更新もセル diff も行わない
         }
         // RC3: 明示指定した行だけ readOnlyColumns を置き換える（未指定は既存指定を保つ）。
         if (row.readOnlyColumns !== undefined) {
@@ -284,6 +361,19 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
             cellReadOnly.set(row.rowId, new Set(known));
           } else {
             cellReadOnly.delete(row.rowId);
+          }
+        }
+        // DD-060: cellStatus も明示した行だけ丸ごと置き換える（未指定は保持・{} で消す＝readOnlyColumns と同じ）。
+        // Record でない値（JS の consumer の null 等）は、その行の状態を保ったまま通知だけ行う（Codex P2）。
+        if (row.cellStatus !== undefined && !isCellStatusRecord(row.cellStatus)) {
+          invalidStatus.push(row.rowId);
+        } else if (row.cellStatus !== undefined) {
+          cellStatusUpdated = true;
+          const statuses = normalizeCellStatus(row.rowId, row.cellStatus, knownColumns, invalidStatus);
+          if (statuses !== undefined) {
+            cellStatus.set(row.rowId, statuses);
+          } else {
+            cellStatus.delete(row.rowId);
           }
         }
         if (row.cells === undefined) {
@@ -312,8 +402,11 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       }
       if (uniqueNewRows.length > 0 || setCellsChanges.length > 0) {
         view.markFullRebuild(); // 行の追加・値の変更をまとめて反映（部分 dirty より単純・呼び出し頻度は低い想定）
+      } else if (cellStatusUpdated) {
+        view.markCellDirty(); // DD-060: 状態だけの変更は行 Axis を作り直さず、可視セルの再描画だけを要求する
       }
-      return { changes, insertedRowCount: uniqueNewRows.length };
+      reportInvalidStatus(invalidStatus);
+      return { changes, insertedRowCount: uniqueNewRows.length, cellStatusUpdated };
     },
   };
 }

@@ -150,8 +150,26 @@ export type GridEvent =
    * （範囲選択・列幅リサイズ）はホバー対象外で、その状態に入ると `rowId`/`columnId`/`rect` が全て `null` の
    * イベントが 1 回発火する。`rect` はセルの viewport 矩形（px・スクロール反映済み）で、利用側がツールチップ等を
    * 自前で描画するための位置情報（**SDK 自体はホバー表示を描画しない**）。
+   * DD-060: セルに状態表示（`GridStandaloneRow.cellStatus`）があれば `status` に載る（無ければキー自体を付けない）。
+   * ホバー中のセルの状態が `setRows`／`setData` で変わったときは、同じセルのままでも出し直す。
    */
-  | { readonly type: 'cell-hover'; readonly rowId: string | null; readonly columnId: string | null; readonly rect: GridCellRect | null };
+  | {
+      readonly type: 'cell-hover';
+      readonly rowId: string | null;
+      readonly columnId: string | null;
+      readonly rect: GridCellRect | null;
+      readonly status?: GridCellStatus;
+    };
+
+/**
+ * セルの状態表示（Experimental 0.x・DD-060）。consumer が確定後に検証した結果をセルに付ける。
+ * `error`=赤枠＋薄赤の背景・`warning`=橙枠＋薄黄の背景で、値の有無によらず描く（色は固定）。
+ * `message` は描画せず、ホバー時の `cell-hover` の `status` に載る（ツールチップは利用側が出す）。
+ */
+export interface GridCellStatus {
+  readonly level: 'error' | 'warning';
+  readonly message?: string;
+}
 
 /** セルの viewport 矩形（px・DD-052-5）。内部の CellRect（render package）は露出しない（R7）。 */
 export interface GridCellRect {
@@ -247,6 +265,14 @@ export interface GridStandaloneRow {
    * （共同編集モードでは無視される。行の編集権限は将来スコープ）。未知列は静かにスキップする。
    */
   readonly readOnlyColumns?: readonly string[];
+  /**
+   * DD-060: この行のセルの状態表示（ColumnId 文字列→状態・Experimental 0.x）。consumer が確定後に検証して付け外しする。
+   * 文書のデータではない（cell-commit・コピー・Undo/Redo の対象外。利用者がセルを編集しても消えない）。
+   * `setRows` では渡した行の状態を丸ごと置き換え、省略した行は前の状態を保つ（`{}` で消す＝`readOnlyColumns` と同じ）。
+   * `setData`／`initialData` では文書と一緒に作り直す。**standalone モード専用**。未知列は静かにスキップし、
+   * `level` が `error`/`warning` 以外のセルは無視して診断 `warn`（code=`cell-status-invalid`）を出す。
+   */
+  readonly cellStatus?: Readonly<Record<string, GridCellStatus>>;
 }
 
 /**

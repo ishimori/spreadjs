@@ -490,6 +490,44 @@ const grid = mount(
 
 `columnFormats` の `textColor` が一致したセルは、そちらの色が負の数の色より優先される。
 
+### セルの状態表示（`cellStatus`・DD-060）
+
+入力値の検証結果をセルの上に出す（単独モード専用）。SDK は値を検証しない。consumer が `cell-commit` を受けて検証し、
+`setRows` の `cellStatus` で印を付け外しする。`error` は赤枠＋薄赤の背景、`warning` は橙枠＋薄黄の背景で、空のセルにも付く。
+
+```ts
+import type { GridCellStatus } from '@nanairo-sheet/grid';
+
+// 渡した行の状態は丸ごと置き換わる（{} で消える）ため、consumer 側で行ごとの全状態を持って渡す。
+const statuses = new Map<string, Record<string, GridCellStatus>>();
+
+grid.subscribe((event) => {
+  if (event.type === 'cell-commit') {
+    const touched = new Set<string>();
+    for (const { rowId, columnId, value } of event.changes) {
+      const row = { ...statuses.get(rowId) };
+      const message = value.length > 8 ? '8桁を超えています' : null; // 業務の検証
+      if (message === null) {
+        delete row[columnId];
+      } else {
+        row[columnId] = { level: 'error', message };
+      }
+      statuses.set(rowId, row);
+      touched.add(rowId);
+    }
+    grid.setRows([...touched].map((rowId) => ({ rowId, cellStatus: statuses.get(rowId) ?? {} })));
+  }
+  // メッセージはホバー時の cell-hover に載る。ツールチップは rect の位置に consumer が出す。
+  if (event.type === 'cell-hover') {
+    showTooltip(event.status?.message ?? null, event.rect);
+  }
+});
+```
+
+- `cellStatus` を省略した `setRows`（`cells` だけの更新）では、その行の状態は残る。`setData`／`initialData` では作り直す
+- 状態は文書のデータではない。cell-commit・コピー TSV・Undo/Redo に混ざらず、利用者がセルを編集しても消えない（検証し直して付け外しする）
+- 確定そのものを止める機能はない。申請・保存の前に、状態の付いたセルが残っていないかを consumer が確かめて止める
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

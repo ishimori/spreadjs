@@ -6,8 +6,8 @@
 // ここは「与えられた ViewportTransform をどう塗るか」だけを持つ。単体テストは座標側（viewport 等）で行う。
 
 import type { ChunkStore } from './chunk-store';
-import { drawBorders, isPatternBorder, type BorderLayerDeps } from './border-layer';
-import { deviceLineWidth, snapToDevice } from './dpi';
+import { drawBorders, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
+import { deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
 import { createTextMetricsCache, type TextMetricsCache } from './text-cache';
 import { MAX_LEFT_INFLOW_SCAN, nearestLeftNonEmpty, overflowRightExtent } from './text-overflow';
 import type { PaneId, PaneRange, ViewportTransform } from './viewport';
@@ -46,6 +46,24 @@ export interface ResolvedTextDecoration {
   /** 数値の右に空ける余白の文字（括弧表記の列の正の数と 0 = `)`・Excel の `_)`）。cell font で測った幅だけ右端をあける。 */
   readonly trailingPad?: string;
 }
+
+/** セルの状態表示の水準（DD-060）。 */
+export type CellStatusLevel = 'error' | 'warning';
+
+/** 行内で状態表示を持つセル（DD-060・列 index と水準）。grid 側が RowId/ColumnId を描画時に index へ解決して渡す。 */
+export interface CellStatusMark {
+  readonly colIndex: number;
+  readonly level: CellStatusLevel;
+}
+
+/** 状態表示の色（DD-060・固定。枠＝罫線の内側の 2px・背景＝セル全体）。 */
+export const CELL_STATUS_COLORS: Readonly<Record<CellStatusLevel, { readonly frame: string; readonly background: string }>> = {
+  error: { frame: '#d93025', background: '#fce8e6' },
+  warning: { frame: '#e37400', background: '#fef7e0' },
+};
+
+/** 状態表示の枠の太さ（CSS px・DD-060）。device px へ丸めて描く。 */
+export const CELL_STATUS_FRAME_WIDTH = 2;
 
 export interface BaseLayerColors {
   readonly cellBackground: string;
@@ -129,6 +147,13 @@ export interface BaseLayerDeps extends BorderLayerDeps {
    * 行と列の交差では行を優先する。値ベース書式はさらに後から上塗りされる。未指定なら追加描画ゼロ。
    */
   readonly rowBackground?: (rowIndex: number) => string | undefined;
+  /**
+   * セルの状態表示フック（DD-060）。行 index → その行で状態表示を持つセル（無ければ undefined）。値の有無によらず、
+   * 行背景の後・罫線の前にセル全体の背景を塗り、値の後に罫線の内側の枠を描く（色は `CELL_STATUS_COLORS`）。
+   * 状態のあるセルでは値ベース書式の背景を塗らない（状態の背景が勝つ）。文字・バッジは背景の上に描く。
+   * pane ごとに可視行の数だけ呼ぶ。未指定なら追加描画ゼロ。
+   */
+  readonly cellStatusesInRow?: (rowIndex: number) => readonly CellStatusMark[] | undefined;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -204,6 +229,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   const columnHeaderLabelFn = deps.columnHeaderLabel;
   const columnBackgroundFn = deps.columnBackground;
   const rowBackgroundFn = deps.rowBackground;
+  const cellStatusesInRowFn = deps.cellStatusesInRow;
   const frozenColCount = deps.frozenColCount ?? 0;
   const cellFontSizePx = parseFontSizePx(cellFont);
   const lineHeight = deps.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
@@ -416,7 +442,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.fillText(text, chipX + BADGE_TEXT_PADDING, rect.y + rect.height / 2);
   };
 
-  const drawPaneValues = (frame: FrameViewport, pane: PaneRange): void => {
+  const drawPaneValues = (frame: FrameViewport, pane: PaneRange, statuses: PaneStatuses | undefined): void => {
     const { transform } = frame;
     ctx.font = cellFont;
     ctx.textBaseline = 'middle';
@@ -434,7 +460,8 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       const style = getCellStyle(col, value);
       // DD-059: 表示書式由来の装飾（負の数の色・括弧表記の右余白）。formatCellText と同じく判定は raw。
       const decoration = cellTextDecoration(col, value);
-      if (style?.cellBackground !== undefined) {
+      // DD-060: 状態表示のあるセルは値ベース書式の背景を塗らない（先に塗った状態の背景を消さない）。
+      if (style?.cellBackground !== undefined && statuses?.get(row)?.has(col) !== true) {
         drawCellBackground(transform, frame.dpr, row, col, style.cellBackground);
       }
       // バッジは最優先（オーバーフロー/wrap/リンク/数値より前・単行チップ・右隣へはみ出さない＝DD-027-3）。
@@ -571,6 +598,85 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
   };
 
+  /** pane 内の状態表示セル（行 index → 列 index → 水準）。1 つも無ければ undefined（DD-060）。 */
+  type PaneStatuses = Map<number, Map<number, CellStatusLevel>>;
+
+  const collectPaneStatuses = (pane: PaneRange): PaneStatuses | undefined => {
+    if (cellStatusesInRowFn === undefined) {
+      return undefined;
+    }
+    let result: PaneStatuses | undefined;
+    for (let row = pane.rows.start; row < pane.rows.end; row += 1) {
+      const marks = cellStatusesInRowFn(row);
+      if (marks === undefined) {
+        continue;
+      }
+      for (const mark of marks) {
+        // 列は pane ごとに切り分ける（固定列と本体の境界で同じセルを二重に描かない）。
+        if (mark.colIndex < pane.cols.start || mark.colIndex >= pane.cols.end) {
+          continue;
+        }
+        result ??= new Map();
+        let cols = result.get(row);
+        if (cols === undefined) {
+          cols = new Map();
+          result.set(row, cols);
+        }
+        cols.set(mark.colIndex, mark.level);
+      }
+    }
+    return result;
+  };
+
+  /** 状態表示の背景（DD-060）: セル全体を塗る。罫線はこの後に引くので消えない。 */
+  const drawCellStatusBackgrounds = (frame: FrameViewport, statuses: PaneStatuses): void => {
+    for (const [row, cols] of statuses) {
+      for (const [col, level] of cols) {
+        const rect = frame.transform.cellRect(row, col);
+        ctx.fillStyle = CELL_STATUS_COLORS[level].background;
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      }
+    }
+  };
+
+  /**
+   * 境界の線が占める device px 数（DD-060）。指定罫線は `borderBand` と同じ丸め、無ければグリッド線の 1 device px。
+   * 線は境界の device px から floor(n/2) 手前で始まり n 続く（グリッド線は境界の device px そのもの）。
+   */
+  const boundaryPixels = (border: BoundaryBorder | undefined, d: number): number =>
+    border === undefined ? 1 : Math.max(1, Math.round(border.width * d));
+
+  /**
+   * 状態表示の枠（DD-060）: 罫線の内側に 2px の枠を 4 本の fillRect で描く。各辺の罫線帯（グリッド線または
+   * rowBorders/columnBorders。後段の drawBorders が上に描く）の内端から、隣の境界の罫線帯の手前までに収める
+   * （太い罫線に上書きされない・Codex P2）。端と太さを device px へ丸め、非整数 DPR でもにじませない。
+   */
+  const drawCellStatusFrames = (frame: FrameViewport, statuses: PaneStatuses): void => {
+    const d = normalizeDpr(frame.dpr);
+    const thickness = Math.max(1, Math.round(CELL_STATUS_FRAME_WIDTH * d));
+    for (const [row, cols] of statuses) {
+      for (const [col, level] of cols) {
+        const rect = frame.transform.cellRect(row, col);
+        const left = Math.round(rect.x * d) + Math.ceil(boundaryPixels(deps.columnBorder?.(col), d) / 2);
+        const top = Math.round(rect.y * d) + Math.ceil(boundaryPixels(deps.rowBorder?.(row), d) / 2);
+        const right = Math.round((rect.x + rect.width) * d) - Math.floor(boundaryPixels(deps.columnBorder?.(col + 1), d) / 2);
+        const bottom = Math.round((rect.y + rect.height) * d) - Math.floor(boundaryPixels(deps.rowBorder?.(row + 1), d) / 2);
+        const width = right - left;
+        const height = bottom - top;
+        if (width <= 0 || height <= 0) {
+          continue;
+        }
+        const tx = Math.min(thickness, width);
+        const ty = Math.min(thickness, height);
+        ctx.fillStyle = CELL_STATUS_COLORS[level].frame;
+        ctx.fillRect(left / d, top / d, width / d, ty / d);
+        ctx.fillRect(left / d, (bottom - ty) / d, width / d, ty / d);
+        ctx.fillRect(left / d, top / d, tx / d, height / d);
+        ctx.fillRect((right - tx) / d, top / d, tx / d, height / d);
+      }
+    }
+  };
+
   const drawPane = (frame: FrameViewport, pane: PaneRange): void => {
     if (pane.clip.width <= 0 || pane.clip.height <= 0) {
       return;
@@ -586,8 +692,16 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     drawColumnBackgrounds(frame, pane, paneBackground);
     // DD-045: 静的行背景は列背景の後・罫線の前（交差は行が勝ち、値ベース書式はさらに上に乗る）。
     drawRowBackgrounds(frame, pane, paneBackground);
+    // DD-060: 状態表示の背景は行背景の後・罫線の前、枠は値の後（文字・バッジより上、選択枠〔overlay〕より下）。
+    const statuses = collectPaneStatuses(pane);
+    if (statuses !== undefined) {
+      drawCellStatusBackgrounds(frame, statuses);
+    }
     drawPaneGrid(frame, pane);
-    drawPaneValues(frame, pane);
+    drawPaneValues(frame, pane, statuses);
+    if (statuses !== undefined) {
+      drawCellStatusFrames(frame, statuses);
+    }
     ctx.restore();
   };
 

@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.14`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.15`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.15` | `alpha` | `0.1.0-experimental` | DD-059・DD-060（OFIC O1・O2）。負の数の表示書式（括弧・▲・赤字）、セルの状態表示（`cellStatus`） |
 | `0.1.0-alpha.14` | `alpha` | `0.1.0-experimental` | DD-058（広島空港 H15）。高DPIでのCanvasのにじみ・配置移動とDPR単独変更への追従 |
 | `0.1.0-alpha.13` | `alpha` | `0.1.0-experimental` | DD-057（広島空港 H14）。候補のみの選択式列で打った文字を前方一致の候補選択に使う |
 | `0.1.0-alpha.12` | `alpha` | `0.1.0-experimental` | DD-056-3（広島空港 H13）。実行中の文書追加・撤去、受理済み操作と snapshot の終了待機 |
@@ -29,9 +30,7 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
-## [Unreleased]
-
-未配布。DD-060（セル入力の検証）と同じ alpha で配布する（package 版はそれまで `0.1.0-alpha.14` のまま）。
+## [0.1.0-alpha.15] - 2026-10-22
 
 ### Added
 
@@ -43,6 +42,15 @@
   （decimals=1 の -0.04 → `0.0`）は負として扱わない。描画だけを変え、cell-commit・コピー TSV・columnFormats の判定・編集中の値は
   raw のまま。不正な `style`・空の `color` は mount 時に `column-display-invalid`。公開型 `GridNegativeNumberFormat` を追加し、
   公開 `.d.ts` の差分は追加のみ。React の `columnDisplayFormats` でもそのまま使える。
+- **grid セルの状態表示（単独モードの行データに `cellStatus`・DD-060・OFIC O2）**: `GridStandaloneRow.cellStatus`
+  （ColumnId → `{ level: 'error' | 'warning'; message? }`）で、consumer が確定後に検証した結果をセルに付ける。`error` は赤枠＋薄赤の背景、
+  `warning` は橙枠＋薄黄の背景で、値の有無によらず描く（色は固定。列背景・行背景・columnFormats の背景より優先）。`message` は描かず、
+  ホバー時の `cell-hover` の新しいフィールド `status` に載る（ツールチップは利用側が `rect` で出す）。ホバー中のセルの状態が変わったら
+  同じセルのまま `cell-hover` を出し直す。`setRows` では渡した行の状態を丸ごと置き換え、省略した行は保つ（`{}` で消す＝行の
+  `readOnlyColumns` と同じ）。`setData`／`initialData` では作り直す。文書のデータではなく、cell-commit・コピー TSV・Undo/Redo の
+  対象外（利用者がセルを編集しても消えない）。未知列は静かにスキップ、不正な `level` は無視して診断 `warn`（`cell-status-invalid`）。
+  単独モード専用。公開型 `GridCellStatus` を追加し、公開 `.d.ts` の差分は追加のみ。React の `initialData`・`ref.setRows` でもそのまま使える。
+  不正値の確定そのものを止める検証フックは対象外（要求が増えたら別DD）。
 
 ### Fixed
 

@@ -25,7 +25,7 @@ import {
   createViewportTransform,
   normalizeDpr,
 } from '@nanairo-sheet/render';
-import type { CellRect, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
+import type { CellRect, CellStatusMark, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import { singleCell } from '@nanairo-sheet/selection';
 import type { CellRange } from '@nanairo-sheet/selection';
 import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
@@ -92,6 +92,7 @@ import { validateStandaloneOptions } from './standalone-options';
 import type { GridBackend } from './grid-backend';
 import type {
   GridCellRect,
+  GridCellStatus,
   GridCollaborationMountOptions,
   GridConnectionState,
   GridEvent,
@@ -1035,6 +1036,48 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // ---- RC6（DD-052-5）: セルホバー通知（出入りで発火・同一セル内の移動は再発火しない）----
   let hoveredCell: { readonly rowId: string; readonly columnId: string } | null = null;
+  // DD-060: 直近の cell-hover に載せた状態表示（ホバー中のセルの状態が変わったら出し直すために比べる）。
+  let hoveredStatus: GridCellStatus | undefined;
+  /** DD-060: セルの cell-hover イベントを作る（状態表示があれば status を載せ、無ければキー自体を付けない）。 */
+  function cellHoverEvent(rowId: string, columnId: string, rect: GridCellRect): GridEvent {
+    const status = standalone?.cellStatusOf(rowId, columnId);
+    hoveredStatus = status;
+    return status === undefined
+      ? { type: 'cell-hover', rowId, columnId, rect }
+      : { type: 'cell-hover', rowId, columnId, rect, status };
+  }
+  /** DD-060: このセルの今の状態表示が、直近の cell-hover に載せたもの（level・message）と違うか。 */
+  function hoverStatusChanged(cell: { readonly rowId: string; readonly columnId: string }): boolean {
+    const status = standalone?.cellStatusOf(cell.rowId, cell.columnId);
+    return status?.level !== hoveredStatus?.level || status?.message !== hoveredStatus?.message;
+  }
+  /**
+   * DD-060: ホバー中のセルの状態表示が setRows/setData で変わっていれば、同じセルのまま cell-hover を出し直す
+   * （確定直後に consumer が検証して印を付けたとき、マウスを動かさなくてもメッセージを出せるように）。
+   * 行 Axis の再構築待ち（setData 直後）は runOrDefer で構造 flush 後の矩形を使う。行が消えていれば出さない。
+   */
+  function refreshHoverStatus(): void {
+    const hovered = hoveredCell;
+    if (hovered === null || !hoverStatusChanged(hovered)) {
+      return;
+    }
+    runOrDefer(() => {
+      const transform = currentTransform();
+      if (hoveredCell !== hovered || transform === undefined || sync === undefined) {
+        return; // その間にポインタが別のセルへ移った（そちらの cell-hover が最新の状態を載せている）
+      }
+      // 保留中に setRows が重なると要求も重なる。実行時にも比べ、先に出した通知と同じなら出さない（Codex P2）。
+      if (!hoverStatusChanged(hovered)) {
+        return;
+      }
+      const row = sync.view.rowIndexOf(createRowId(hovered.rowId));
+      const col = sync.view.colIndexOf(createColumnId(hovered.columnId));
+      if (row < 0 || col < 0) {
+        return;
+      }
+      emit(cellHoverEvent(hovered.rowId, hovered.columnId, transform.cellRect(row, col)));
+    });
+  }
   /** hit（cell 以外は null）を見てホバー中セルが変わっていれば cell-hover を発火する。 */
   function updateCellHover(hit: { readonly rowIndex: number; readonly colIndex: number } | null): void {
     if (sync === undefined) {
@@ -1053,11 +1096,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return; // 同一セル（or 両方 null）のまま → 再発火しない
     }
     hoveredCell = next === null ? null : { rowId: next.rowId, columnId: next.columnId };
-    emit(
-      next === null
-        ? { type: 'cell-hover', rowId: null, columnId: null, rect: null }
-        : { type: 'cell-hover', rowId: next.rowId, columnId: next.columnId, rect: next.rect },
-    );
+    if (next === null) {
+      hoveredStatus = undefined;
+      emit({ type: 'cell-hover', rowId: null, columnId: null, rect: null });
+      return;
+    }
+    emit(cellHoverEvent(next.rowId, next.columnId, next.rect));
   }
 
   // ---- DD-035 R4: 列単位 readOnly（readOnlyColumns）の判定（入口・chokepoint・textarea ロックで共有）----
@@ -2338,6 +2382,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
+    // DD-060: 状態表示は単独モードの行データだけが持つ（共同編集モードでは束縛しない）。
+    const standaloneBackend = standalone;
     baseLayer = createBaseLayer({
       ctx: baseCtx,
       store: backend.view.store,
@@ -2394,6 +2440,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
               const id = backend.view.rowIdAt(rowIndex);
               return id === undefined ? undefined : compiledRowBackgrounds?.getBackground(String(id));
             },
+          }
+        : {}),
+      // DD-060: セルの状態表示（単独モードの行データ）。setRows で後から付くため単独モードでは常に束縛し、0 件なら
+      // 即 undefined を返す。RowId→ColumnId を描画のたびに index へ解決する（行の挿入・削除・列の並びに追従）。
+      ...(standaloneBackend !== undefined
+        ? {
+            cellStatusesInRow: (rowIndex: number) => cellStatusMarksAt(standaloneBackend, backend, rowIndex),
           }
         : {}),
       // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
@@ -3585,6 +3638,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       onCellCommit: (changes) => {
         emit({ type: 'cell-commit', changes });
       },
+      // DD-060: 不正な level で無視したセルの診断（未知列は cells・readOnlyColumns と同じく静かにスキップ）。
+      onCellStatusInvalid: (message) => {
+        diag.emit('warn', 'cell-status-invalid', message);
+      },
     });
     sync = standalone;
     attachBackendRendering();
@@ -3613,11 +3670,19 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 文書を丸ごと差し替えた → 旧文書に対する undo/redo 履歴・ownedRevision は無効（別文書の逆値を新文書へ適用すると
     // standalone は beforeRevision を無視するためサイレント上書き、削除 ID なら throw になる・Codex P1）。全消去する。
     undoCtrl.clear();
+    clampActiveCellToDocument(standalone);
+    // DD-060: 状態表示も作り直されたので、ホバー中のセルの状態が変わっていれば cell-hover を出し直す
+    // （クランプの後に呼ぶ: 出し直しは構造 flush を同期で走らせうるため、クランプとの順序を従来どおりに保つ）。
+    refreshHoverStatus();
+  }
+
+  /** setData 直後に activeCell が新文書の範囲外なら範囲内へ寄せる（applyStandaloneData の上記コメント参照）。 */
+  function clampActiveCellToDocument(backend: StandaloneSession): void {
     if (editor === undefined || editor.session.isComposing()) {
       return;
     }
     // 新文書（差し替え直後・Axis は次 flush で再構築される）から行数・列数を読む。
-    const doc = standalone.session.committedDocument;
+    const doc = backend.session.committedDocument;
     const rowCount = displayRowOrder(doc).length;
     const colCount = doc.columnOrder.length;
     const active = editor.session.getActiveCell();
@@ -3644,6 +3709,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const result = standalone.setRows(rows);
     if (result.changes.length > 0) {
       recordStandaloneUndoEntry(standalone, [...result.changes], true);
+    }
+    // DD-060: 状態表示だけの変更は Undo に記録しない（文書のデータではない）。ホバー中のセルが変わっていれば出し直す。
+    if (result.cellStatusUpdated) {
+      refreshHoverStatus();
     }
   }
 
@@ -3954,6 +4023,29 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   return instance;
+}
+
+/**
+ * DD-060: 行 index → その行の状態表示セル（base-layer の cellStatusesInRow フック）。状態が 0 件なら RowId の解決もせず
+ * 即 undefined（状態を使わない画面の描画コストを増やさない）。列が見つからない状態は描かない。
+ */
+function cellStatusMarksAt(standalone: StandaloneSession, backend: GridBackend, rowIndex: number): readonly CellStatusMark[] | undefined {
+  if (!standalone.hasAnyCellStatus()) {
+    return undefined;
+  }
+  const rowId = backend.view.rowIdAt(rowIndex);
+  const statuses = rowId === undefined ? undefined : standalone.cellStatusRow(String(rowId));
+  if (statuses === undefined) {
+    return undefined;
+  }
+  const marks: CellStatusMark[] = [];
+  for (const [columnId, status] of statuses) {
+    const colIndex = backend.view.colIndexOf(createColumnId(columnId));
+    if (colIndex >= 0) {
+      marks.push({ colIndex, level: status.level });
+    }
+  }
+  return marks;
 }
 
 function errorMessage(error: unknown): string {
