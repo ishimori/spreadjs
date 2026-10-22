@@ -227,3 +227,10 @@
 - **原因**: Canvas 2D は構文不正な色の代入を黙って無視する（例外を投げない）。`ctx.fillStyle = userColor ?? defaultColor` は、userColor が「定義済みだが不正」のとき既定色へ落ちない。
 - **正しいやり方**: ❌ `ctx.fillStyle = style.textColor ?? defaultColor` ／ ✅ `ctx.fillStyle = defaultColor; if (style.textColor !== undefined) ctx.fillStyle = style.textColor;`。色を入れる全経路（数値・文字・バッジ・はみ出し・帯）でそろえる。テストの ctx スタブは fillStyle の setter で不正な色を無視させ、直前の色が漏れないことを確かめる。
 - **元DD**: DD-036（列背景・行背景の帯）・DD-059（文字色。columnFormats の textColor の既存不具合も同時に修正）
+
+## 28. セルの内側に描く装飾は、後段の罫線帯（グリッド線と rowBorders/columnBorders）の内端を基準にする
+
+- **症状**: セルの内側に描いた枠や印（状態表示の枠など）が、太い指定罫線のあるセルでだけ欠ける・全部消える。グリッド線 1px の通常のセルでは正しく見えるので、通常経路のテストは緑のまま。
+- **原因**: 指定罫線は全 pane の後に `drawBorders` が上から描き、帯は境界の device px から `floor(太さ/2)` 手前で始まり太さぶん続く（`borderBand`）。「グリッド線の 1 device px の内側」を決め打ちすると、2px 以上の罫線の帯に重なる（8px なら 2px の枠が全部隠れる）。
+- **正しいやり方**: 各辺の境界の罫線（`deps.columnBorder(col)`・`(col + 1)`・`rowBorder(row)`・`(row + 1)`）の太さを `borderBand` と同じ丸めで device px にし、左上は `round(境界*d) + ceil(n/2)`、右下は `round(境界*d) - floor(n/2)` を内端にする（指定なしは n=1＝グリッド線）。内側が無くなるセルでは描かない。テストは太い罫線で囲んだセルを unit（座標）と E2E（画素）の両方で持つ。
+- **元DD**: DD-060（状態表示の枠。Codex P2・OFIC は rowBorders を使う）
