@@ -29,6 +29,27 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [Unreleased]
+
+未配布。DD-060（セル入力の検証）と同じ alpha で配布する（package 版はそれまで `0.1.0-alpha.14` のまま）。
+
+### Added
+
+- **grid 負の数の表示書式（`columnDisplayFormats` の number に `negative`・DD-059・OFIC O1）**: `negative: { style?, color? }` で、
+  Excel の `#,##0_);[Red](#,##0)` のように負の数を表示する。`style` は `'minus'`（既定・従来どおり `-1,234`）・`'triangle'`
+  （`▲1,234`。`-` と同じ位置＝prefix の後）・`'parentheses'`（`(1,234)`。prefix〜suffix の全体を囲む）。`'parentheses'` の列は
+  正の数と 0 の右に `)` 1文字分の余白を取り、正負の一の位をそろえる（Excel の `_)`。列境界ダブルクリックの自動列幅も余白込み）。
+  `color` は負の数の文字色で、columnFormats の `textColor` が一致したセルはそちらが勝つ（バッジの文字も同じ）。0 に丸まる負数
+  （decimals=1 の -0.04 → `0.0`）は負として扱わない。描画だけを変え、cell-commit・コピー TSV・columnFormats の判定・編集中の値は
+  raw のまま。不正な `style`・空の `color` は mount 時に `column-display-invalid`。公開型 `GridNegativeNumberFormat` を追加し、
+  公開 `.d.ts` の差分は追加のみ。React の `columnDisplayFormats` でもそのまま使える。
+
+### Fixed
+
+- **grid 不正な文字色のとき、直前に塗った色で文字を描いていた（DD-059）**: Canvas は不正な色の代入を無視するため、columnFormats の
+  `textColor` が不正だと、そのセルの背景色・バッジのチップ色・pane の背景色などで文字を描き、読めなくなることがあった。
+  既定の文字色（数値は数値色）で描く。
+
 ## [0.1.0-alpha.14] - 2026-10-13
 
 ### Fixed

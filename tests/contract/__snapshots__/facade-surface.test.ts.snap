@@ -36,7 +36,7 @@ export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
 import type { GridColumnFormatRule } from './format-rules';
 export type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
 import type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
-export type { GridColumnDisplayFormat, GridNumberDisplayFormat, GridDateDisplayFormat, } from './display-format';
+export type { GridColumnDisplayFormat, GridNumberDisplayFormat, GridNegativeNumberFormat, GridDateDisplayFormat, } from './display-format';
 import type { GridColumnDisplayFormat } from './display-format';
 /**
  * 接続状態（consumer 表示用）。内部 collab の ConnectionState を写像した公開型（型は再exportしない）。
@@ -360,16 +360,20 @@ export interface GridCommonMountOptions {
      * - **契約不変（raw 維持）**: cell-commit/setData round-trip・コピー TSV・columnFormats（DD-027-3）の完全一致・
      *   編集ドラフトは従来の表示文字列（raw）のまま。数値の右寄せ判定・columnFormats の match はすべて raw で行う
      *   （判定は raw・描画は display）。全クライアントの設定一致は利用側責務。
-     * - **number** \`{ type:'number', grouping?, decimals?, percent?, prefix?, suffix? }\`: raw が数値形のときだけ整形し
-     *   非数値 raw は素通し。文字列十進・half-up 丸め（decimals 未指定=丸めなし）・grouping=カンマ固定・percent は丸め前に
+     * - **number** \`{ type:'number', grouping?, decimals?, percent?, prefix?, suffix?, negative? }\`: raw が数値形のときだけ
+     *   整形し非数値 raw は素通し。文字列十進・half-up 丸め（decimals 未指定=丸めなし）・grouping=カンマ固定・percent は丸め前に
      *   2桁右シフト・出力順 \`prefix + 本体 + ('%') + suffix\`。
+     * - **負の数**（DD-059）\`negative: { style?, color? }\`: \`style\` は \`'minus'\`（既定 \`-1,234\`）・\`'triangle'\`（\`▲1,234\`・
+     *   \`-\` と同じ位置）・\`'parentheses'\`（\`(1,234)\`・prefix〜suffix の全体を囲む）。\`'parentheses'\` の列は正の数と 0 の右に
+     *   \`)\` 1文字分の余白を取り正負の桁をそろえる（Excel の \`_)\`）。\`color\` は負の数の文字色で、columnFormats の textColor が
+     *   一致したセルはそちらが勝つ。0 に丸まる負数は負として扱わない。
      * - **date** \`{ type:'date', pattern }\`: 受理形 \`YYYY-MM-DD\` と \`YYYY-MM-DD[T|空白]HH:mm(:ss)\` のみ整形
      *   （フィールド直取り・タイムゾーン非経由）。トークン \`YYYY/MM/DD/HH/mm/ss\` を置換しトークン以外はリテラル素通し。
      *   非受理形・時刻欠落 raw への時刻トークンは raw 素通し（00 を埋めない）。
      * - **併用制約**: wrapColumns 同一列・link 列との併用は mount 時 fail-fast（構造不整合/クリック乖離）。select 列は許可
      *   （候補・検証・ドロップダウン表示は raw のまま）。Excel 書式文字列互換・Intl ロケール書式は v1 対象外（拡張点メモ）。
-     * - 不正設定（未知列・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap/link 併用）は mount 時に
-     *   \`error\`（phase=\`config\`・code=\`column-display-invalid\`）で fail-fast する。
+     * - 不正設定（未知列・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・negative の不正 style/空 color・
+     *   wrap/link 併用）は mount 時に \`error\`（phase=\`config\`・code=\`column-display-invalid\`）で fail-fast する。
      */
     readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
     /**
@@ -847,6 +851,22 @@ export interface GridNumberDisplayFormat {
     readonly prefix?: string;
     /** 本体（と \`%\`）の後に付ける文字列（単位等・そのまま連結）。 */
     readonly suffix?: string;
+    /** 負の数の表記と文字色（DD-059）。未指定=従来どおり \`-1,234\`・既定の数値色。 */
+    readonly negative?: GridNegativeNumberFormat;
+}
+/**
+ * 負の数の表示（Experimental 0.x・DD-059）。Excel の \`#,##0_);[Red](#,##0)\` の負セクションにあたる。表示上も負になる
+ * 数値だけに効き、0 に丸まる負数（decimals=1 の -0.04 → \`0.0\`）は負として扱わない。
+ */
+export interface GridNegativeNumberFormat {
+    /**
+     * 負の数の表記。\`'minus'\`（既定）=\`-1,234\`・\`'triangle'\`=\`▲1,234\`（\`-\` と同じ位置＝prefix の後）・
+     * \`'parentheses'\`=\`(1,234)\`（prefix〜suffix の全体を囲む）。\`'parentheses'\` の列では正の数と 0 の右に
+     * \`)\` 1文字分の余白を取り、正負の一の位をそろえる（Excel の \`_)\`）。
+     */
+    readonly style?: 'minus' | 'parentheses' | 'triangle';
+    /** 負の数の文字色（CSS color・妥当性は検査しない）。columnFormats の textColor が一致したセルはそちらが優先する。 */
+    readonly color?: string;
 }
 /**
  * date 表示書式（Experimental 0.x・DD-033-2）。\`pattern\` はトークン（\`YYYY\`/\`MM\`/\`DD\`/\`HH\`/\`mm\`/\`ss\`）を含む文字列で、
@@ -866,23 +886,37 @@ export type GridColumnDisplayFormat = GridNumberDisplayFormat | GridDateDisplayF
  */
 export declare class DisplayConfigError extends Error {
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'wrap-conflict' | 'link-conflict';
+    readonly reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'invalid-negative' | 'wrap-conflict' | 'link-conflict';
     /** 対象列 ID（診断用）。 */
     readonly columnId: string;
     constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'wrap-conflict' | 'link-conflict',
+    reason: 'unknown-column' | 'empty-caption' | 'invalid-type' | 'invalid-decimals' | 'invalid-pattern' | 'invalid-negative' | 'wrap-conflict' | 'link-conflict',
     /** 対象列 ID（診断用）。 */
     columnId: string, message: string);
+}
+/**
+ * 描画テキストの装飾（DD-059・負の数の色と括弧表記の右余白）。列ごとにプリコンパイルした不変オブジェクトで、
+ * base-layer の描画契約型 ResolvedTextDecoration と**構造同一**（R7: render の型を import しない）。
+ */
+export interface DisplayTextDecoration {
+    /** 文字色（負の数の color）。 */
+    readonly textColor?: string;
+    /** 数値の右に空ける余白の文字（括弧表記の列の正の数と 0 = \`)\`）。描画側がセルのフォントで測った幅だけ右端をあける。 */
+    readonly trailingPad?: string;
 }
 /** プリコンパイル済みの表示解決器（列→display 写像・列→caption。base-layer フックが束縛する）。 */
 export interface CompiledColumnDisplay {
     /** 列 ID・raw 表示値 → 描画テキスト（display）。書式のない列・非該当 raw は raw をそのまま返す。 */
     formatText(columnId: string, raw: string): string;
+    /** 列 ID・raw 表示値 → 描画テキストの装飾（DD-059）。負の数の書式がない列・非数値 raw・装飾のない符号は undefined。 */
+    decorationFor(columnId: string, raw: string): DisplayTextDecoration | undefined;
     /** 列 ID → ヘッダーキャプション（未指定列は undefined＝既定ラベルを使う）。 */
     captionFor(columnId: string): string | undefined;
     /** キャプション or 表示書式が 1 つでもあるか（base-layer フックの束縛要否＝無ければ描画コスト増ゼロ）。 */
     hasAny(): boolean;
+    /** 装飾（負の数の color か括弧表記）のある列が 1 つでもあるか（cellTextDecoration フックの束縛要否）。 */
+    hasDecorations(): boolean;
 }
 /** wrap/link 併用検査のための列種別プレディケート（mount-controller が columnTypeRegistry/wrapColumns から渡す）。 */
 export interface DisplayColumnUsage {

@@ -14,6 +14,7 @@ import type {
   GridDiagnostic,
   GridEvent,
   GridInstance,
+  GridNegativeNumberFormat,
   GridStandaloneData,
 } from '@nanairo-sheet/grid';
 import { getDebugApi } from '@nanairo-sheet/grid/test-support';
@@ -159,6 +160,7 @@ function parseColumnCaptions(raw: string | null): Record<string, string> | undef
 }
 // DD-033-2: 数値/日付の表示書式を URL で指定できる（E2E 用・main.ts と同形式）。
 // 形式: `?display=<列>:number;group;dec0;pre¥,<列>:date;YYYY/MM/DD`（spec は `;` 区切りトークン）。
+// 負の数（DD-059）: `neg<表記>`（minus/parentheses/triangle）・`negcolor<色>`。
 function parseColumnDisplayFormats(raw: string | null): Record<string, GridColumnDisplayFormat> | undefined {
   if (raw === null || raw === '') {
     return undefined;
@@ -182,7 +184,9 @@ function parseColumnDisplayFormats(raw: string | null): Record<string, GridColum
         percent?: boolean;
         prefix?: string;
         suffix?: string;
+        negative?: GridNegativeNumberFormat;
       } = { type: 'number' };
+      const negative: { style?: string; color?: string } = {};
       for (const token of tokens.slice(1)) {
         if (token === 'group') {
           fmt.grouping = true;
@@ -194,7 +198,14 @@ function parseColumnDisplayFormats(raw: string | null): Record<string, GridColum
           fmt.prefix = token.slice(3);
         } else if (token.startsWith('suf')) {
           fmt.suffix = token.slice(3);
+        } else if (token.startsWith('negcolor')) {
+          negative.color = token.slice(8);
+        } else if (token.startsWith('neg')) {
+          negative.style = token.slice(3);
         }
+      }
+      if (negative.style !== undefined || negative.color !== undefined) {
+        fmt.negative = negative as GridNegativeNumberFormat;
       }
       displays[columnId] = fmt;
     } else if (tokens[0] === 'date') {

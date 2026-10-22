@@ -173,9 +173,9 @@
       "id": "detail-view",
       "title": "明細閲覧ビュー（表示専用・列見出し・表示書式）",
       "status": "available",
-      "summary": "BI・帳票の明細レコードを「データと列スキーマを渡すだけで業務の表として読める」構成。表示専用モード（readOnly＝編集・貼り付け・行操作をすべて抑止し受信専用化。権限制御ではなく表示制御。実行中に開き直さずに切り替えられる＝setReadOnly）、業務名の列見出し（columnCaptions＝A/B/C… を業務名で置換描画）、数値/日付の表示書式（columnDisplayFormats＝3桁区切り・小数桁・通貨記号・日付パターン）を、値の装飾（columnFormats）と併用できます。書式・見出しは view-local な描画整形で、コピー TSV・cell-commit の値は生の値（raw）のまま変わりません。",
-      "source": "DD-033・DD-033-1・DD-033-2・DD-056-2",
-      "meta": "readOnly / columnCaptions / columnDisplayFormats ／ unit＋実ブラウザーE2E 検証済み",
+      "summary": "BI・帳票の明細レコードを「データと列スキーマを渡すだけで業務の表として読める」構成。表示専用モード（readOnly＝編集・貼り付け・行操作をすべて抑止し受信専用化。権限制御ではなく表示制御。実行中に開き直さずに切り替えられる＝setReadOnly）、業務名の列見出し（columnCaptions＝A/B/C… を業務名で置換描画）、数値/日付の表示書式（columnDisplayFormats＝3桁区切り・小数桁・通貨記号・日付パターン・負の数の括弧/▲/赤字）を、値の装飾（columnFormats）と併用できます。負の数は Excel の #,##0_);[Red](#,##0) と同じく括弧付きの赤字にでき、正の数の右に「)」1文字分の余白を取って正負の桁をそろえます。書式・見出しは view-local な描画整形で、コピー TSV・cell-commit の値は生の値（raw）のまま変わりません。",
+      "source": "DD-033・DD-033-1・DD-033-2・DD-056-2・DD-059",
+      "meta": "readOnly / columnCaptions / columnDisplayFormats（negative）／ unit＋実ブラウザーE2E 検証済み",
       "demo": "./demo.html?scenario=detail-view"
     },
     {

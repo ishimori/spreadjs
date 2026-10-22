@@ -12,12 +12,19 @@
 //   - date は **フィールド直取り**（Date オブジェクト/タイムゾーン変換を経由しない＝環境非依存・決定的）。受理形は
 //     `YYYY-MM-DD` と `YYYY-MM-DD[T|空白]HH:mm(:ss)` のみ。非受理形・時刻欠落 raw への時刻トークンは raw 素通し
 //     （00 を埋めない・セル単位診断なし・要確認4）。
+//   - 負の数（DD-059）: `negative.style` で表記（`-`・`▲`・括弧）を、`negative.color` で文字色を変える。表示上も負に
+//     なる数値だけが対象（0 に丸まる負数は上の -0 正規化で非負になる＝括弧・▲・色を付けない）。▲ は `-` と同じ位置、
+//     括弧は prefix〜suffix の全体を囲む。色と括弧の右余白（正の数と 0 に `)` 1文字分・Excel の `_)`）は文字列に
+//     できないため、formatText とは別の decorationFor が列ごとの不変オブジェクトで返す（base-layer の
+//     cellTextDecoration に束縛。文字色の優先順位は columnFormats の textColor ＞ 負の数の color ＞ 既定の数値色）。
 //   - 不正設定（未知列・空/空白キャプション・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・
-//     wrap/link 併用）は mount 時に fail-fast（DisplayConfigError → 公開 code=`column-display-invalid`）。
+//     negative の不正 style/空 color・wrap/link 併用）は mount 時に fail-fast（DisplayConfigError → 公開
+//     code=`column-display-invalid`）。
 //
 // 【R7 注意】本モジュールは公開型（GridColumnDisplayFormat）を定義するため index.ts から到達可能＝公開宣言 closure
 //   に含まれる（facade-surface contract）。内部 package（render 等）を import すると R7 違反になるため import しない。
-//   render へは grid の型を渡さず**構造フック注入**のみ（base-layer の formatCellText/columnHeaderLabel は plain 関数）。
+//   render へは grid の型を渡さず**構造フック注入**のみ（base-layer の formatCellText/columnHeaderLabel/
+//   cellTextDecoration は plain 関数）。
 //
 // 【併用制約（要確認1〜2・DD-033-2 決定）】
 //   - wrapColumns 同一列の表示書式は fail-fast（自動行高が raw の wrapLines で計算され描画だけ書式済みになる構造不整合）。
@@ -26,8 +33,8 @@
 //   - caption は wrap/link/select いずれの列でも許可（ヘッダーのみ・セル描画契約に影響しない）。
 //
 // 【拡張点メモ（v1 対象外・実装しない）】
-//   Excel 書式文字列互換・Intl/ロケール書式（`Intl.NumberFormat`/`DateTimeFormat` 委譲）・負数の色/括弧表現・
-//   数値シリアル日付・2段ヘッダー。複数実案件で要求されたら別DDで I/F 拡張を判断する。
+//   Excel 書式文字列互換・Intl/ロケール書式（`Intl.NumberFormat`/`DateTimeFormat` 委譲）・負の数の △ 表記・
+//   数値シリアル日付・2段ヘッダー。複数実案件で要求されたら別DDで I/F 拡張を判断する（負数の色/括弧/▲ は DD-059 で追加）。
 
 /** number 表示書式（Experimental 0.x・DD-033-2）。すべて任意（未指定＝raw の桁のまま素の十進表記）。 */
 export interface GridNumberDisplayFormat {
@@ -42,6 +49,23 @@ export interface GridNumberDisplayFormat {
   readonly prefix?: string;
   /** 本体（と `%`）の後に付ける文字列（単位等・そのまま連結）。 */
   readonly suffix?: string;
+  /** 負の数の表記と文字色（DD-059）。未指定=従来どおり `-1,234`・既定の数値色。 */
+  readonly negative?: GridNegativeNumberFormat;
+}
+
+/**
+ * 負の数の表示（Experimental 0.x・DD-059）。Excel の `#,##0_);[Red](#,##0)` の負セクションにあたる。表示上も負になる
+ * 数値だけに効き、0 に丸まる負数（decimals=1 の -0.04 → `0.0`）は負として扱わない。
+ */
+export interface GridNegativeNumberFormat {
+  /**
+   * 負の数の表記。`'minus'`（既定）=`-1,234`・`'triangle'`=`▲1,234`（`-` と同じ位置＝prefix の後）・
+   * `'parentheses'`=`(1,234)`（prefix〜suffix の全体を囲む）。`'parentheses'` の列では正の数と 0 の右に
+   * `)` 1文字分の余白を取り、正負の一の位をそろえる（Excel の `_)`）。
+   */
+  readonly style?: 'minus' | 'parentheses' | 'triangle';
+  /** 負の数の文字色（CSS color・妥当性は検査しない）。columnFormats の textColor が一致したセルはそちらが優先する。 */
+  readonly color?: string;
 }
 
 /**
@@ -71,6 +95,7 @@ export class DisplayConfigError extends Error {
       | 'invalid-type'
       | 'invalid-decimals'
       | 'invalid-pattern'
+      | 'invalid-negative'
       | 'wrap-conflict'
       | 'link-conflict',
     /** 対象列 ID（診断用）。 */
@@ -82,14 +107,29 @@ export class DisplayConfigError extends Error {
   }
 }
 
+/**
+ * 描画テキストの装飾（DD-059・負の数の色と括弧表記の右余白）。列ごとにプリコンパイルした不変オブジェクトで、
+ * base-layer の描画契約型 ResolvedTextDecoration と**構造同一**（R7: render の型を import しない）。
+ */
+export interface DisplayTextDecoration {
+  /** 文字色（負の数の color）。 */
+  readonly textColor?: string;
+  /** 数値の右に空ける余白の文字（括弧表記の列の正の数と 0 = `)`）。描画側がセルのフォントで測った幅だけ右端をあける。 */
+  readonly trailingPad?: string;
+}
+
 /** プリコンパイル済みの表示解決器（列→display 写像・列→caption。base-layer フックが束縛する）。 */
 export interface CompiledColumnDisplay {
   /** 列 ID・raw 表示値 → 描画テキスト（display）。書式のない列・非該当 raw は raw をそのまま返す。 */
   formatText(columnId: string, raw: string): string;
+  /** 列 ID・raw 表示値 → 描画テキストの装飾（DD-059）。負の数の書式がない列・非数値 raw・装飾のない符号は undefined。 */
+  decorationFor(columnId: string, raw: string): DisplayTextDecoration | undefined;
   /** 列 ID → ヘッダーキャプション（未指定列は undefined＝既定ラベルを使う）。 */
   captionFor(columnId: string): string | undefined;
   /** キャプション or 表示書式が 1 つでもあるか（base-layer フックの束縛要否＝無ければ描画コスト増ゼロ）。 */
   hasAny(): boolean;
+  /** 装飾（負の数の color か括弧表記）のある列が 1 つでもあるか（cellTextDecoration フックの束縛要否）。 */
+  hasDecorations(): boolean;
 }
 
 /** wrap/link 併用検査のための列種別プレディケート（mount-controller が columnTypeRegistry/wrapColumns から渡す）。 */
@@ -104,6 +144,11 @@ const NUMERIC_RE = /^-?\d+(\.\d+)?$/;
 const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 /** 日時（T もしくは空白区切り・秒は任意）。フィールドを直取りしタイムゾーン変換を経由しない。 */
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/** negative.style の受理値（DD-059）。 */
+const NEGATIVE_STYLES: readonly string[] = ['minus', 'parentheses', 'triangle'];
+/** 括弧表記の列で正の数と 0 に付ける装飾（右に `)` 1文字分の余白・Excel の `_)`）。全列で共有する不変オブジェクト。 */
+const PARENTHESES_PAD: DisplayTextDecoration = Object.freeze({ trailingPad: ')' });
 
 /** date パターンの既知トークン（長いものから照合＝`YYYY` を優先）。 */
 const DATE_TOKENS = ['YYYY', 'MM', 'DD', 'HH', 'mm', 'ss'] as const;
@@ -195,10 +240,16 @@ function roundHalfUp(intDigits: string, fracDigits: string, decimals: number): {
   return { intDigits: intOut === '' ? '0' : intOut, fracDigits: fracOut };
 }
 
-/** number 表示書式を適用する（非数値 raw は素通し・文字列十進・決定的）。 */
-function formatNumber(raw: string, fmt: GridNumberDisplayFormat): string {
+/** number 書式で整形した数値（符号・prefix・suffix を除く本体〔`%` まで〕と、表示上も負か）。 */
+interface FormattedNumber {
+  readonly body: string;
+  readonly negative: boolean;
+}
+
+/** number 表示書式の本体を整形する（非数値 raw は null・文字列十進・決定的）。符号と prefix/suffix は呼び出し側が付ける。 */
+function formatNumberBody(raw: string, fmt: GridNumberDisplayFormat): FormattedNumber | null {
   if (!NUMERIC_RE.test(raw)) {
-    return raw;
+    return null;
   }
   let negative = raw.startsWith('-');
   const magnitude = negative ? raw.slice(1) : raw;
@@ -215,13 +266,84 @@ function formatNumber(raw: string, fmt: GridNumberDisplayFormat): string {
     ({ intDigits, fracDigits } = roundHalfUp(intDigits, fracDigits, fmt.decimals));
   }
   intDigits = stripLeadingZeros(intDigits);
-  // -0（例: -0.04 を decimals=1 で丸め → -0.0）は 0 へ正規化する（嘘の負符号を描かない）。
+  // -0（例: -0.04 を decimals=1 で丸め → -0.0）は 0 へ正規化する（嘘の負符号を描かない・括弧/▲/色も付けない）。
   if (negative && /^0*$/.test(intDigits) && /^0*$/.test(fracDigits)) {
     negative = false;
   }
   const intOut = fmt.grouping === true ? addThousands(intDigits) : intDigits;
-  const body = `${negative ? '-' : ''}${intOut}${fracDigits.length > 0 ? `.${fracDigits}` : ''}`;
-  return `${fmt.prefix ?? ''}${body}${fmt.percent === true ? '%' : ''}${fmt.suffix ?? ''}`;
+  const body = `${intOut}${fracDigits.length > 0 ? `.${fracDigits}` : ''}${fmt.percent === true ? '%' : ''}`;
+  return { body, negative };
+}
+
+/** number 表示書式を適用する（非数値 raw は素通し・文字列十進・決定的）。 */
+function formatNumber(raw: string, fmt: GridNumberDisplayFormat): string {
+  const formatted = formatNumberBody(raw, fmt);
+  if (formatted === null) {
+    return raw;
+  }
+  const prefix = fmt.prefix ?? '';
+  const suffix = fmt.suffix ?? '';
+  if (!formatted.negative) {
+    return `${prefix}${formatted.body}${suffix}`;
+  }
+  // DD-059: 負の数の表記。▲ は `-` と同じ位置（prefix の後）、括弧は prefix〜suffix の全体を囲む。
+  switch (fmt.negative?.style) {
+    case 'parentheses':
+      return `(${prefix}${formatted.body}${suffix})`;
+    case 'triangle':
+      return `${prefix}▲${formatted.body}${suffix}`;
+    default:
+      return `${prefix}-${formatted.body}${suffix}`;
+  }
+}
+
+/** 負の数の書式がある列の装飾（DD-059）。表示上の正負で引き分ける（どちらも無い列は登録しない）。 */
+interface NumberDecoration {
+  readonly format: GridNumberDisplayFormat;
+  /** 表示上も負になる数値の装飾（color 指定時）。 */
+  readonly negative: DisplayTextDecoration | undefined;
+  /** 正の数と 0 の装飾（括弧表記の右余白）。 */
+  readonly nonNegative: DisplayTextDecoration | undefined;
+}
+
+/** 数値 raw の装飾を引く（非数値 raw は undefined＝素通し・左寄せの値には付けない）。 */
+function decorateNumber(raw: string, decoration: NumberDecoration): DisplayTextDecoration | undefined {
+  // `-` で始まらない数値は丸めても負にならない＝整形せずに判定する（描画ホットパスの二重整形を避ける）。
+  if (!raw.startsWith('-')) {
+    return NUMERIC_RE.test(raw) ? decoration.nonNegative : undefined;
+  }
+  const formatted = formatNumberBody(raw, decoration.format);
+  if (formatted === null) {
+    return undefined;
+  }
+  return formatted.negative ? decoration.negative : decoration.nonNegative;
+}
+
+/** negative 設定を検査する（不正 style・空/非文字列 color・非オブジェクトは fail-fast）。 */
+function validateNegative(columnId: string, negative: unknown): void {
+  if (typeof negative !== 'object' || negative === null) {
+    throw new DisplayConfigError(
+      'invalid-negative',
+      columnId,
+      `columnDisplayFormats: 列 "${columnId}" の negative はオブジェクトで指定する（{ style?, color? }）`,
+    );
+  }
+  const { style, color } = negative as { style?: unknown; color?: unknown };
+  if (style !== undefined && !NEGATIVE_STYLES.includes(style as string)) {
+    throw new DisplayConfigError(
+      'invalid-negative',
+      columnId,
+      `columnDisplayFormats: 列 "${columnId}" の negative.style="${String(style)}" が不正（minus|parentheses|triangle）`,
+    );
+  }
+  // 空/空白のみの色は「死に設定」＝黙って無効化せず fail-fast する（columnBackgrounds の empty-color と同じ理由）。
+  if (color !== undefined && (typeof color !== 'string' || color.trim() === '')) {
+    throw new DisplayConfigError(
+      'invalid-negative',
+      columnId,
+      `columnDisplayFormats: 列 "${columnId}" の negative.color が空（CSS color 文字列が必要）`,
+    );
+  }
 }
 
 /** date 表示書式を適用する（受理形のみ整形・非受理/時刻欠落＋時刻トークンは raw 素通し）。 */
@@ -264,6 +386,7 @@ export function compileDisplayFormats(
   const isLinkColumn = usage?.isLinkColumn ?? (() => false);
   const captionMap = new Map<string, string>();
   const formatterMap = new Map<string, (raw: string) => string>();
+  const decorationMap = new Map<string, NumberDecoration>();
 
   if (captions !== undefined) {
     for (const [columnId, caption] of Object.entries(captions)) {
@@ -323,6 +446,15 @@ export function compileDisplayFormats(
             );
           }
         }
+        if (number.negative !== undefined) {
+          validateNegative(columnId, number.negative);
+          // 色・括弧の右余白は文字列にできない＝列ごとの不変オブジェクトとして decorationFor が返す（DD-059）。
+          const negative = number.negative.color === undefined ? undefined : Object.freeze({ textColor: number.negative.color });
+          const nonNegative = number.negative.style === 'parentheses' ? PARENTHESES_PAD : undefined;
+          if (negative !== undefined || nonNegative !== undefined) {
+            decorationMap.set(columnId, { format: number, negative, nonNegative });
+          }
+        }
         formatterMap.set(columnId, (raw) => formatNumber(raw, number));
       } else if (type === 'date') {
         const date = format as GridDateDisplayFormat;
@@ -347,12 +479,18 @@ export function compileDisplayFormats(
   }
 
   const hasAny = captionMap.size > 0 || formatterMap.size > 0;
+  const hasDecorations = decorationMap.size > 0;
   return {
     formatText: (columnId, raw) => {
       const formatter = formatterMap.get(columnId);
       return formatter === undefined ? raw : formatter(raw);
     },
+    decorationFor: (columnId, raw) => {
+      const decoration = decorationMap.get(columnId);
+      return decoration === undefined ? undefined : decorateNumber(raw, decoration);
+    },
     captionFor: (columnId) => captionMap.get(columnId),
     hasAny: () => hasAny,
+    hasDecorations: () => hasDecorations,
   };
 }

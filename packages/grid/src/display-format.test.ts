@@ -92,6 +92,120 @@ describe('compileDisplayFormats: number 書式（AC3・文字列十進・決定�
   });
 });
 
+describe('compileDisplayFormats: 負の数の表記（DD-059 AC1/AC2）', () => {
+  const compile = (fmt: GridColumnDisplayFormat) =>
+    compileDisplayFormats({ 'col-1': fmt }, undefined, COLUMN_ORDER);
+
+  it('parentheses: 負の数を括弧で囲み、正の数と 0 はそのまま（AC1: -1234.5 → (1,235)）', () => {
+    const c = compile({ type: 'number', grouping: true, decimals: 0, negative: { style: 'parentheses', color: '#c00' } });
+    expect(c.formatText('col-1', '-1234.5')).toBe('(1,235)'); // 丸めは絶対値の half-up（0 から遠い側へ）
+    expect(c.formatText('col-1', '1234')).toBe('1,234');
+    expect(c.formatText('col-1', '0')).toBe('0');
+  });
+
+  it('triangle は ▲、minus と未指定は従来どおり -（AC2）', () => {
+    const tri = compile({ type: 'number', grouping: true, decimals: 0, negative: { style: 'triangle' } });
+    expect(tri.formatText('col-1', '-1234.5')).toBe('▲1,235');
+    expect(tri.formatText('col-1', '1234.5')).toBe('1,235');
+    const minus = compile({ type: 'number', grouping: true, decimals: 0, negative: { style: 'minus' } });
+    expect(minus.formatText('col-1', '-1234.5')).toBe('-1,235');
+    const none = compile({ type: 'number', grouping: true, decimals: 0 });
+    expect(none.formatText('col-1', '-1234.5')).toBe('-1,235');
+    const colorOnly = compile({ type: 'number', grouping: true, decimals: 0, negative: { color: 'red' } });
+    expect(colorOnly.formatText('col-1', '-1234.5')).toBe('-1,235');
+  });
+
+  it('▲ は - と同じ位置（prefix の後）、括弧は prefix〜suffix の全体を囲む・% は本体に含む', () => {
+    const tri = compile({ type: 'number', grouping: true, prefix: '¥', suffix: ' 円', negative: { style: 'triangle' } });
+    expect(tri.formatText('col-1', '-1234')).toBe('¥▲1,234 円');
+    const paren = compile({ type: 'number', grouping: true, prefix: '¥', suffix: ' 円', negative: { style: 'parentheses' } });
+    expect(paren.formatText('col-1', '-1234')).toBe('(¥1,234 円)');
+    expect(paren.formatText('col-1', '1234')).toBe('¥1,234 円');
+    const pct = compile({ type: 'number', percent: true, decimals: 1, negative: { style: 'parentheses' } });
+    expect(pct.formatText('col-1', '-0.1234')).toBe('(12.3%)');
+  });
+
+  it('0 に丸まる負数は負として扱わない（括弧・▲ を付けない＝-0 正規化を維持）', () => {
+    const paren = compile({ type: 'number', decimals: 1, negative: { style: 'parentheses' } });
+    expect(paren.formatText('col-1', '-0.04')).toBe('0.0');
+    expect(paren.formatText('col-1', '-0')).toBe('0.0');
+    const tri = compile({ type: 'number', decimals: 0, negative: { style: 'triangle' } });
+    expect(tri.formatText('col-1', '-0.4')).toBe('0');
+    expect(tri.formatText('col-1', '-0.5')).toBe('▲1'); // half-up で 1 へ繰り上がる＝負のまま
+  });
+
+  it('非数値 raw は素通し（負の数の書式も付けない）', () => {
+    const c = compile({ type: 'number', grouping: true, negative: { style: 'parentheses', color: '#c00' } });
+    expect(c.formatText('col-1', '-abc')).toBe('-abc');
+    expect(c.formatText('col-1', '-')).toBe('-');
+    expect(c.formatText('col-1', '-1,234')).toBe('-1,234');
+    expect(c.formatText('col-1', '')).toBe('');
+  });
+});
+
+describe('compileDisplayFormats: 描画テキストの装飾（DD-059 色・括弧の右余白）', () => {
+  const compile = (fmt: GridColumnDisplayFormat) =>
+    compileDisplayFormats({ 'col-1': fmt }, undefined, COLUMN_ORDER);
+
+  it('parentheses＋color: 負の数は色、正の数と 0 は右余白 `)`', () => {
+    const c = compile({ type: 'number', grouping: true, decimals: 0, negative: { style: 'parentheses', color: '#c00' } });
+    expect(c.hasDecorations()).toBe(true);
+    expect(c.decorationFor('col-1', '-1234.5')).toEqual({ textColor: '#c00' });
+    expect(c.decorationFor('col-1', '1234')).toEqual({ trailingPad: ')' });
+    expect(c.decorationFor('col-1', '0')).toEqual({ trailingPad: ')' });
+  });
+
+  it('color だけなら負の数だけに色（正の数は装飾なし）・parentheses だけなら色なしで右余白だけ', () => {
+    const colorOnly = compile({ type: 'number', negative: { color: 'red' } });
+    expect(colorOnly.decorationFor('col-1', '-5')).toEqual({ textColor: 'red' });
+    expect(colorOnly.decorationFor('col-1', '5')).toBeUndefined();
+    const parenOnly = compile({ type: 'number', negative: { style: 'parentheses' } });
+    expect(parenOnly.decorationFor('col-1', '-5')).toBeUndefined();
+    expect(parenOnly.decorationFor('col-1', '5')).toEqual({ trailingPad: ')' });
+  });
+
+  it('0 に丸まる負数は正の数と同じ扱い（色を付けず括弧列なら右余白）', () => {
+    const c = compile({ type: 'number', decimals: 1, negative: { style: 'parentheses', color: '#c00' } });
+    expect(c.decorationFor('col-1', '-0.04')).toEqual({ trailingPad: ')' });
+    expect(c.decorationFor('col-1', '-0.05')).toEqual({ textColor: '#c00' }); // -0.1 へ丸まる＝負
+  });
+
+  it('非数値 raw・装飾のない列・未知列・書式のない列は undefined', () => {
+    const c = compileDisplayFormats(
+      {
+        'col-1': { type: 'number', negative: { style: 'parentheses', color: '#c00' } },
+        'col-2': { type: 'number', grouping: true },
+        'col-3': { type: 'number', negative: { style: 'triangle' } },
+      },
+      undefined,
+      COLUMN_ORDER,
+    );
+    expect(c.decorationFor('col-1', 'abc')).toBeUndefined();
+    expect(c.decorationFor('col-1', '-abc')).toBeUndefined();
+    expect(c.decorationFor('col-1', '')).toBeUndefined();
+    expect(c.decorationFor('col-2', '-5')).toBeUndefined();
+    expect(c.decorationFor('col-3', '-5')).toBeUndefined(); // ▲ は文字だけで表せる＝装飾なし
+    expect(c.decorationFor('col-0', '-5')).toBeUndefined();
+  });
+
+  it('hasDecorations は color か parentheses のある列があるときだけ true（cheap path）', () => {
+    expect(compileDisplayFormats(undefined, undefined, COLUMN_ORDER).hasDecorations()).toBe(false);
+    expect(compile({ type: 'number', grouping: true }).hasDecorations()).toBe(false);
+    expect(compile({ type: 'number', negative: { style: 'triangle' } }).hasDecorations()).toBe(false);
+    expect(compile({ type: 'number', negative: {} }).hasDecorations()).toBe(false);
+    expect(compile({ type: 'number', negative: { color: 'red' } }).hasDecorations()).toBe(true);
+    expect(compile({ type: 'number', negative: { style: 'parentheses' } }).hasDecorations()).toBe(true);
+  });
+
+  it('装飾は列ごとの不変オブジェクト（描画ホットパスで毎回生成しない）', () => {
+    const c = compile({ type: 'number', negative: { style: 'parentheses', color: '#c00' } });
+    expect(c.decorationFor('col-1', '-1')).toBe(c.decorationFor('col-1', '-2'));
+    expect(c.decorationFor('col-1', '1')).toBe(c.decorationFor('col-1', '2'));
+    expect(Object.isFrozen(c.decorationFor('col-1', '-1'))).toBe(true);
+    expect(Object.isFrozen(c.decorationFor('col-1', '1'))).toBe(true);
+  });
+});
+
 describe('compileDisplayFormats: date 書式（AC4・フィールド直取り・TZ 非経由）', () => {
   const compile = (pattern: string) =>
     compileDisplayFormats({ 'col-2': { type: 'date', pattern } }, undefined, COLUMN_ORDER);
@@ -194,6 +308,49 @@ describe('compileDisplayFormats: fail-fast（AC7・code=column-display-invalid �
     ).toBe('invalid-pattern');
   });
 
+  it('negative の不正 style・空/空白/非文字列 color・非オブジェクト → invalid-negative（DD-059 AC4）', () => {
+    const bad = (negative: unknown) =>
+      reasonOf(() =>
+        compileDisplayFormats(
+          { 'col-1': { type: 'number', negative } as unknown as GridColumnDisplayFormat },
+          undefined,
+          COLUMN_ORDER,
+        ),
+      );
+    expect(bad({ style: 'brackets' })).toBe('invalid-negative');
+    expect(bad({ style: '' })).toBe('invalid-negative');
+    expect(bad({ color: '' })).toBe('invalid-negative');
+    expect(bad({ color: '   ' })).toBe('invalid-negative');
+    expect(bad({ color: 0xcc0000 })).toBe('invalid-negative');
+    expect(bad('parentheses')).toBe('invalid-negative');
+    expect(bad(null)).toBe('invalid-negative');
+    // 受理値（3 種の style・色だけ・空オブジェクト）は throw しない。
+    for (const negative of [{ style: 'minus' }, { style: 'parentheses' }, { style: 'triangle' }, { color: '#c00' }, {}]) {
+      expect(() =>
+        compileDisplayFormats(
+          { 'col-1': { type: 'number', negative } as unknown as GridColumnDisplayFormat },
+          undefined,
+          COLUMN_ORDER,
+        ),
+      ).not.toThrow();
+    }
+  });
+
+  it('invalid-negative の message は列と不正値を含む', () => {
+    try {
+      compileDisplayFormats(
+        { 'col-1': { type: 'number', negative: { style: 'brackets' } } as unknown as GridColumnDisplayFormat },
+        undefined,
+        COLUMN_ORDER,
+      );
+      expect.unreachable();
+    } catch (error) {
+      expect((error as DisplayConfigError).columnId).toBe('col-1');
+      expect((error as DisplayConfigError).message).toContain('col-1');
+      expect((error as DisplayConfigError).message).toContain('brackets');
+    }
+  });
+
   it('DisplayConfigError は columnId と message を保持する', () => {
     try {
       compileDisplayFormats(undefined, { 'col-x': 'X' }, COLUMN_ORDER);
@@ -274,5 +431,7 @@ describe('compileDisplayFormats: columnFormats 併用の判定不変（AC6・mat
 // 型が公開契約として import できることの smoke。
 const _numberSmoke: GridColumnDisplayFormat = { type: 'number', grouping: true, decimals: 2 };
 const _dateSmoke: GridColumnDisplayFormat = { type: 'date', pattern: 'YYYY-MM-DD' };
+const _negativeSmoke: GridColumnDisplayFormat = { type: 'number', grouping: true, negative: { style: 'parentheses', color: '#c00' } };
 void _numberSmoke;
 void _dateSmoke;
+void _negativeSmoke;

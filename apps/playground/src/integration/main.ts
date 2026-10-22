@@ -15,6 +15,7 @@ import type {
   GridColumnType,
   GridEvent,
   GridInstance,
+  GridNegativeNumberFormat,
   GridPresenceUser,
   GridRemoteChange,
 } from '@nanairo-sheet/grid';
@@ -251,9 +252,11 @@ function parseColumnCaptions(raw: string | null): Record<string, string> | undef
 }
 // DD-033-2: 数値/日付の表示書式を URL で指定できる（E2E 用・?format= と同流儀）。
 // 形式: `?display=<列>:<spec>,<列>:<spec>`。spec は `;` 区切りトークン。
-//   number: `number` に続けて `group`（カンマ）・`dec<N>`（小数桁）・`pct`（%）・`pre<文字列>`（prefix）・`suf<文字列>`（suffix）。
+//   number: `number` に続けて `group`（カンマ）・`dec<N>`（小数桁）・`pct`（%）・`pre<文字列>`（prefix）・`suf<文字列>`（suffix）・
+//           `neg<表記>`（負の数の表記 minus/parentheses/triangle・DD-059）・`negcolor<色>`（負の数の色・DD-059）。
 //   date:   `date` に続けて 1 つ目のトークンをパターンとして扱う（例 `date;YYYY/MM/DD`）。
 //   例: `?display=col-4:number;group;dec0;pre¥,col-5:date;YYYY-MM-DD HH:mm,col-6:number;pct;dec1`
+//       `?display=col-4:number;group;negparentheses;negcolor#cc0000`
 const displayParam = params.get('display');
 function parseColumnDisplayFormats(raw: string | null): Record<string, GridColumnDisplayFormat> | undefined {
   if (raw === null || raw === '') {
@@ -279,7 +282,9 @@ function parseColumnDisplayFormats(raw: string | null): Record<string, GridColum
         percent?: boolean;
         prefix?: string;
         suffix?: string;
+        negative?: GridNegativeNumberFormat;
       } = { type: 'number' };
+      const negative: { style?: string; color?: string } = {};
       for (const token of tokens.slice(1)) {
         if (token === 'group') {
           fmt.grouping = true;
@@ -291,7 +296,15 @@ function parseColumnDisplayFormats(raw: string | null): Record<string, GridColum
           fmt.prefix = token.slice(3);
         } else if (token.startsWith('suf')) {
           fmt.suffix = token.slice(3);
+        } else if (token.startsWith('negcolor')) {
+          negative.color = token.slice(8);
+        } else if (token.startsWith('neg')) {
+          negative.style = token.slice(3);
         }
+      }
+      if (negative.style !== undefined || negative.color !== undefined) {
+        // 不正な表記も fail-fast の E2E で使うため検査せずに渡す（検査は grid の mount 時）。
+        fmt.negative = negative as GridNegativeNumberFormat;
       }
       displays[columnId] = fmt;
     } else if (kind === 'date') {

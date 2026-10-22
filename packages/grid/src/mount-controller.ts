@@ -1425,7 +1425,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
       values,
       // DD-033-2: 内容幅は **display**（描画テキスト）で測る（描画と測定の一致・DD-027-3 Fable P3 の教訓踏襲）。
       // 判定（バッジ match）は raw のまま。書式のない列は formatText が raw を返すため現行と一致（AC9）。
-      (value) => cellTextCache.measureWidth(compiledDisplay?.formatText(String(columnId), value) ?? value, CELL_FONT),
+      // DD-059: 括弧表記の列の正の数と 0 は描画で右に `)` 1文字分をあける＝その幅も足す（バッジは余白なしで描く）。
+      (value) => {
+        const id = String(columnId);
+        const width = cellTextCache.measureWidth(compiledDisplay?.formatText(id, value) ?? value, CELL_FONT);
+        const pad = compiledDisplay?.decorationFor(id, value)?.trailingPad;
+        if (pad === undefined || compiledFormats?.getStyle(id, value)?.badge === true) {
+          return width;
+        }
+        return width + cellTextCache.measureWidth(pad, CELL_FONT);
+      },
       // バッジ指定値は丸角チップ幅（テキスト＋左右パディング）で見積もる（描画の drawBadgeCell と整合）。match は raw。
       (value) => (compiledFormats?.getStyle(String(columnId), value)?.badge === true ? BADGE_TEXT_PADDING * 2 : 0),
       AUTO_FIT_MAX_SCAN,
@@ -2399,6 +2408,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
             formatCellText: (colIndex: number, rawValue: string) => {
               const id = backend.view.columnIdAt(colIndex);
               return id === undefined ? rawValue : (compiledDisplay?.formatText(String(id), rawValue) ?? rawValue);
+            },
+          }
+        : {}),
+      // DD-059: 負の数の色・括弧表記の右余白のフック。該当する列が無ければ束縛せず描画コスト増ゼロ（判定は raw）。
+      ...(compiledDisplay?.hasDecorations() === true
+        ? {
+            cellTextDecoration: (colIndex: number, rawValue: string) => {
+              const id = backend.view.columnIdAt(colIndex);
+              return id === undefined ? undefined : compiledDisplay?.decorationFor(String(id), rawValue);
             },
           }
         : {}),

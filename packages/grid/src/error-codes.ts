@@ -14,7 +14,7 @@ export const GRID_ERROR_CODES = [
   'standalone-options-conflict', // 単独モードに server 系 options（serverUrl/displayName/clientId）を混在指定（config phase・DD-024）
   'standalone-options-invalid', // 単独モードで columnOrder が未指定/空（config phase・DD-024）
   'column-types-invalid', // columnTypes/columnFormats mount オプションが不正（未知列・候補0件・重複・未対応 type〔DD-027-1〕・リンク×wrap 併用〔DD-027-2〕・空ルール配列/match 重複〔DD-027-3〕）→ fail-fast（config phase）
-  'column-display-invalid', // columnCaptions/columnDisplayFormats mount オプションが不正（未知列・空/空白キャプション・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap 併用・link 併用〔DD-033-2〕）→ fail-fast（config phase）
+  'column-display-invalid', // columnCaptions/columnDisplayFormats mount オプションが不正（未知列・空/空白キャプション・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap 併用・link 併用〔DD-033-2〕・negative の不正 style/空 color〔DD-059〕）→ fail-fast（config phase）
 ] as const;
 export type GridErrorCode = (typeof GRID_ERROR_CODES)[number];
 

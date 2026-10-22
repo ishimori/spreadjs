@@ -466,6 +466,30 @@ grid.setRows([{ rowId: 'r1', cells: { 'col-a': '更新後' } }]);
 grid.setRows([{ rowId: 'r99', cells: { 'col-a': '新規行' } }]);
 ```
 
+### 負の数の表示（`columnDisplayFormats` の `negative`・DD-059）
+
+会計帳票の `#,##0_);[Red](#,##0)` のように、負の数を括弧・赤字で表示できる（両モード共通・描画のみ）。
+cell-commit・コピー TSV・`setData` で受け渡す値は従来どおり `-1234` のまま変わらない。
+
+```ts
+const grid = mount(
+  { container },
+  {
+    mode: 'standalone',
+    columnOrder: ['item', 'amount', 'diff'],
+    columnDisplayFormats: {
+      // -1234 → (1,234) を赤字。正の数と 0 は右に ")" 1文字分あけて、正負の一の位をそろえる。
+      amount: { type: 'number', grouping: true, decimals: 0, negative: { style: 'parentheses', color: '#c00' } },
+      // -1234 → ▲1,234（style を省くと従来どおり -1,234。color だけの指定もできる）。
+      diff: { type: 'number', grouping: true, negative: { style: 'triangle' } },
+    },
+    initialData,
+  },
+);
+```
+
+`columnFormats` の `textColor` が一致したセルは、そちらの色が負の数の色より優先される。
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

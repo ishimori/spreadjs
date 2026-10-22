@@ -35,6 +35,7 @@ import type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rul
 export type {
   GridColumnDisplayFormat,
   GridNumberDisplayFormat,
+  GridNegativeNumberFormat,
   GridDateDisplayFormat,
 } from './display-format';
 import type { GridColumnDisplayFormat } from './display-format';
@@ -329,16 +330,20 @@ export interface GridCommonMountOptions {
    * - **契約不変（raw 維持）**: cell-commit/setData round-trip・コピー TSV・columnFormats（DD-027-3）の完全一致・
    *   編集ドラフトは従来の表示文字列（raw）のまま。数値の右寄せ判定・columnFormats の match はすべて raw で行う
    *   （判定は raw・描画は display）。全クライアントの設定一致は利用側責務。
-   * - **number** `{ type:'number', grouping?, decimals?, percent?, prefix?, suffix? }`: raw が数値形のときだけ整形し
-   *   非数値 raw は素通し。文字列十進・half-up 丸め（decimals 未指定=丸めなし）・grouping=カンマ固定・percent は丸め前に
+   * - **number** `{ type:'number', grouping?, decimals?, percent?, prefix?, suffix?, negative? }`: raw が数値形のときだけ
+   *   整形し非数値 raw は素通し。文字列十進・half-up 丸め（decimals 未指定=丸めなし）・grouping=カンマ固定・percent は丸め前に
    *   2桁右シフト・出力順 `prefix + 本体 + ('%') + suffix`。
+   * - **負の数**（DD-059）`negative: { style?, color? }`: `style` は `'minus'`（既定 `-1,234`）・`'triangle'`（`▲1,234`・
+   *   `-` と同じ位置）・`'parentheses'`（`(1,234)`・prefix〜suffix の全体を囲む）。`'parentheses'` の列は正の数と 0 の右に
+   *   `)` 1文字分の余白を取り正負の桁をそろえる（Excel の `_)`）。`color` は負の数の文字色で、columnFormats の textColor が
+   *   一致したセルはそちらが勝つ。0 に丸まる負数は負として扱わない。
    * - **date** `{ type:'date', pattern }`: 受理形 `YYYY-MM-DD` と `YYYY-MM-DD[T|空白]HH:mm(:ss)` のみ整形
    *   （フィールド直取り・タイムゾーン非経由）。トークン `YYYY/MM/DD/HH/mm/ss` を置換しトークン以外はリテラル素通し。
    *   非受理形・時刻欠落 raw への時刻トークンは raw 素通し（00 を埋めない）。
    * - **併用制約**: wrapColumns 同一列・link 列との併用は mount 時 fail-fast（構造不整合/クリック乖離）。select 列は許可
    *   （候補・検証・ドロップダウン表示は raw のまま）。Excel 書式文字列互換・Intl ロケール書式は v1 対象外（拡張点メモ）。
-   * - 不正設定（未知列・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・wrap/link 併用）は mount 時に
-   *   `error`（phase=`config`・code=`column-display-invalid`）で fail-fast する。
+   * - 不正設定（未知列・不正 type・decimals 非整数/0〜20外・pattern 空/既知トークン皆無・negative の不正 style/空 color・
+   *   wrap/link 併用）は mount 時に `error`（phase=`config`・code=`column-display-invalid`）で fail-fast する。
    */
   readonly columnDisplayFormats?: Readonly<Record<string, GridColumnDisplayFormat>>;
   /**
