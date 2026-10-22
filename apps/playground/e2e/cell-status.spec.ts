@@ -230,6 +230,116 @@ test('level が不正なセルは無視され、診断 cell-status-invalid が�
   }
 });
 
+test('DD-061: cellStatusColors で指定した色で描き、省略した項目は既定色のまま', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await openStatus(page, new URLSearchParams({ statuscolors: JSON.stringify({ error: { frame: '#0000ff' } }) }).toString());
+    const colB = (await sa.colIdAt(page, 1))!;
+    const colC = (await sa.colIdAt(page, 2))!;
+    await sa.selectCell(page, 10, 0);
+    await setRows(page, [{ rowId: 'r2', cellStatus: { [colB]: { level: 'error' }, [colC]: { level: 'warning' } } }]);
+    const errorCell = (await sa.cellRectAt(page, 2, 1))!;
+    await expect.poll(async () => countColor(page, errorCell, [0, 0, 255]), { message: '指定した枠の色' }).toBeGreaterThan(100);
+    expect(await countColor(page, errorCell, ERROR_FRAME), '既定の枠の色は使わない').toBe(0);
+    expect(await countColor(page, errorCell, ERROR_BG), '背景は既定色のまま').toBeGreaterThan(500);
+    expect(await countColor(page, (await sa.cellRectAt(page, 2, 2))!, WARNING_FRAME), 'warning は既定色のまま').toBeGreaterThan(100);
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-061: 不正な cellStatusColors は mount 時に column-types-invalid', async ({ page }) => {
+  await page.goto(`/standalone.html?${new URLSearchParams({ statuscolors: JSON.stringify({ info: { frame: '#000' } }) })}`);
+  await expect
+    .poll(() => page.evaluate(() => window.__standalone?.events.some((e) => e.type === 'error' && (e as { code?: string }).code === 'column-types-invalid')))
+    .toBe(true);
+  await expect(page.locator('textarea.int-cell-editor')).toHaveCount(0);
+});
+
+async function setCellStatus(page: Page, rows: StatusRow[]): Promise<void> {
+  await page.evaluate((r: StatusRow[]) => {
+    (window as unknown as { __gridInstance?: { setCellStatus(rows: StatusRow[]): void } }).__gridInstance?.setCellStatus(r);
+  }, rows);
+}
+
+test('DD-062: 単独モードの setCellStatus は setRows の cellStatus と同じ状態を置き換え合い、setData で作り直される', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await openStatus(page);
+    const colB = (await sa.colIdAt(page, 1))!;
+    const colC = (await sa.colIdAt(page, 2))!;
+    await sa.selectCell(page, 10, 0);
+    const undoBefore = await sa.undoDepth(page);
+    const b = (await sa.cellRectAt(page, 2, 1))!;
+    const c = (await sa.cellRectAt(page, 2, 2))!;
+
+    await setCellStatus(page, [{ rowId: 'r2', cellStatus: { [colB]: { level: 'error' } } }]);
+    await expect.poll(async () => countColor(page, b, ERROR_FRAME), { message: 'setCellStatus で付く' }).toBeGreaterThan(100);
+    expect(await sa.undoDepth(page)).toBe(undoBefore);
+
+    await setRows(page, [{ rowId: 'r2', cellStatus: { [colC]: { level: 'warning' } } }]); // 同じ行を丸ごと置き換え
+    await expect.poll(async () => countColor(page, b, ERROR_FRAME), { message: 'setRows の cellStatus で置き換わる' }).toBe(0);
+    expect(await countColor(page, c, WARNING_FRAME)).toBeGreaterThan(100);
+
+    await page.evaluate(() => window.__standalone?.reinject({ rows: [{ rowId: 'r2', cells: { 'col-a': 'x' } }] })); // setData
+    await expect.poll(async () => countColor(page, c, WARNING_FRAME), { message: 'setData で作り直される' }).toBe(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-062: boot 前に setData → setCellStatus の順で呼ぶと、その順で適用されて状態が残る', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await openStatus(page, 'prebootstatus=1');
+    await sa.selectCell(page, 4, 0);
+    const cell = (await sa.cellRectAt(page, 1, 1))!;
+    await expect.poll(async () => countColor(page, cell, ERROR_FRAME), { message: 'boot 前の setCellStatus が残る' }).toBeGreaterThan(100);
+    // 間に挟んだ不正な形（null・[null, { rowId: 5 }]）で queue の再生が止まらず、後続の setRows まで適用される（Codex P2）。
+    expect(await sa.displayCell(page, 'r2', 'col-a')).toBe('boot 前の setRows');
+    expect((await diagnosticCodes(page)).filter((c) => c === 'cell-status-invalid').length).toBeGreaterThanOrEqual(2);
+  } finally {
+    await context.close();
+  }
+});
+
+test('DD-062: setCellStatus に不正な形を渡しても例外にならず、正しい行だけ適用される（Codex P2）', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await openStatus(page);
+    const colB = (await sa.colIdAt(page, 1))!;
+    await sa.selectCell(page, 10, 0);
+    const thrown = await page.evaluate((colB: string) => {
+      const grid = (window as unknown as { __gridInstance?: { setCellStatus(rows: unknown): void } }).__gridInstance!;
+      try {
+        grid.setCellStatus(null);
+        grid.setCellStatus({});
+        grid.setCellStatus([null, 'r1', { rowId: 3 }, { rowId: 'r2', cellStatus: { [colB]: { level: 'error' } } }]);
+        return null;
+      } catch (error) {
+        return String(error);
+      }
+    }, colB);
+    expect(thrown).toBeNull();
+    await expect.poll(async () => countColor(page, (await sa.cellRectAt(page, 2, 1))!, ERROR_FRAME)).toBeGreaterThan(100);
+    expect(await diagnosticCodes(page)).toContain('cell-status-invalid');
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P2: 単独モードで配列でない columnOrder を渡すと、従来どおり standalone-options-invalid で通知され handle が返る', async ({ page }) => {
+  await page.goto('/standalone.html?badcolumnorder=1');
+  await expect
+    .poll(() => page.evaluate(() => window.__standalone?.events.some((e) => e.type === 'error' && (e as { code?: string }).code === 'standalone-options-invalid')))
+    .toBe(true);
+  expect(await page.evaluate(() => window.__gridInstance !== undefined)).toBe(true);
+});
+
 /** 証跡（スクショ）の保存先絶対パス（test-results/dd-evidence/DD-060/ 直下）。 */
 function evidencePath(fileName: string): string {
   return fileURLToPath(new URL(`../../../test-results/dd-evidence/DD-060/${fileName}`, import.meta.url));

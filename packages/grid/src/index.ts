@@ -151,7 +151,7 @@ export type GridEvent =
    * イベントが 1 回発火する。`rect` はセルの viewport 矩形（px・スクロール反映済み）で、利用側がツールチップ等を
    * 自前で描画するための位置情報（**SDK 自体はホバー表示を描画しない**）。
    * DD-060: セルに状態表示（`GridStandaloneRow.cellStatus`）があれば `status` に載る（無ければキー自体を付けない）。
-   * ホバー中のセルの状態が `setRows`／`setData` で変わったときは、同じセルのままでも出し直す。
+   * ホバー中のセルの状態が `setRows`／`setData`／`setCellStatus`（DD-062）で変わったときは、同じセルのままでも出し直す。
    */
   | {
       readonly type: 'cell-hover';
@@ -159,6 +159,18 @@ export type GridEvent =
       readonly columnId: string | null;
       readonly rect: GridCellRect | null;
       readonly status?: GridCellStatus;
+    }
+  /**
+   * 確定前の検証（mount オプション `validateCell`）で拒否された通知（Experimental 0.x・DD-063・両モード共通）。
+   * 拒否された入力は捨てられ（文書・サーバー・Undo は変わらない）、編集は閉じる。`source` は確定の経路
+   * （`edit`=IME/textarea・`select`=選択式の候補・`date`=日付のカレンダー・`paste`=貼り付け）。貼り付けは 1 件でも
+   * 不正なら全体を拒否し、不正なセルを全部 `cells` に載せる。確定処理が終わった後（microtask）に出るので、
+   * 購読者から `setActiveCell` 等を呼んでも後続の移動に上書きされない。
+   */
+  | {
+      readonly type: 'cell-invalid';
+      readonly source: 'edit' | 'select' | 'date' | 'paste';
+      readonly cells: readonly GridInvalidCell[];
     };
 
 /**
@@ -169,6 +181,38 @@ export type GridEvent =
 export interface GridCellStatus {
   readonly level: 'error' | 'warning';
   readonly message?: string;
+}
+
+/** `validateCell` に渡す、確定しようとしているセル（DD-063）。`value` は cell-commit の `value` と同じ表示文字列。 */
+export interface GridCellValidationInput {
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly value: string;
+}
+
+/** `cell-invalid` イベントで拒否されたセル（DD-063）。`message` は `validateCell` が返した文字列。 */
+export interface GridInvalidCell extends GridCellValidationInput {
+  readonly message: string;
+}
+
+/** `setCellStatus` に渡す 1 行（DD-062）。`cellStatus` は ColumnId 文字列→状態（`{}` でその行の状態を消す）。 */
+export interface GridCellStatusRow {
+  readonly rowId: string;
+  readonly cellStatus: Readonly<Record<string, GridCellStatus>>;
+}
+
+/** セルの状態表示の 1 水準の色（DD-061・省略した項目は既定色）。 */
+export interface GridCellStatusColor {
+  /** 罫線の内側の 2px の枠の色。 */
+  readonly frame?: string;
+  /** セル全体の背景の色。 */
+  readonly background?: string;
+}
+
+/** セルの状態表示の色（mount オプション `cellStatusColors`・DD-061）。 */
+export interface GridCellStatusColors {
+  readonly error?: GridCellStatusColor;
+  readonly warning?: GridCellStatusColor;
 }
 
 /** セルの viewport 矩形（px・DD-052-5）。内部の CellRect（render package）は露出しない（R7）。 */
@@ -269,7 +313,8 @@ export interface GridStandaloneRow {
    * DD-060: この行のセルの状態表示（ColumnId 文字列→状態・Experimental 0.x）。consumer が確定後に検証して付け外しする。
    * 文書のデータではない（cell-commit・コピー・Undo/Redo の対象外。利用者がセルを編集しても消えない）。
    * `setRows` では渡した行の状態を丸ごと置き換え、省略した行は前の状態を保つ（`{}` で消す＝`readOnlyColumns` と同じ）。
-   * `setData`／`initialData` では文書と一緒に作り直す。**standalone モード専用**。未知列は静かにスキップし、
+   * `setData`／`initialData` では文書と一緒に作り直す。行データでの指定は **standalone モード専用**（両モードで使える
+   * `GridInstance.setCellStatus`〔DD-062〕と同じ置き場）。未知列は静かにスキップし、
    * `level` が `error`/`warning` 以外のセルは無視して診断 `warn`（code=`cell-status-invalid`）を出す。
    */
   readonly cellStatus?: Readonly<Record<string, GridCellStatus>>;
@@ -472,6 +517,21 @@ export interface GridCommonMountOptions {
    * 文書状態・protocol・snapshot・hash・cell-commit・コピー TSV は変更しない。
    */
   readonly rowBackgrounds?: Readonly<Record<string, string>>;
+  /**
+   * セルの状態表示（`GridCellStatus`・DD-060）の色（Experimental 0.x・DD-061）。両モード共通・mount 時固定。
+   * 省略した水準・項目は既定色（error=枠 `#d93025`・背景 `#fce8e6`、warning=枠 `#e37400`・背景 `#fef7e0`）。
+   * `error`/`warning` 以外のキー・`frame`/`background` 以外のキー・空や空白だけの色は mount 時 fail-fast
+   * （code=`column-types-invalid`）。CSS の色としての妥当性は検査しない（不正な色は既定色で描く）。
+   */
+  readonly cellStatusColors?: GridCellStatusColors;
+  /**
+   * 確定前の検証（Experimental 0.x・DD-063）。両モード共通・同期。確定しようとしている値ごとに呼ばれ、文字列を返すと
+   * 拒否（その文字列がメッセージ）、`null` なら通す。拒否された入力は捨てられ、`cell-invalid` イベントで通知される。
+   * - 検証する経路: IME/textarea の確定・選択式の候補の確定・日付のカレンダーの確定・貼り付け（1 件でも不正なら全体を拒否）
+   * - 検証しない経路: 空にする確定（Delete・範囲クリア・cut・空のまま確定）・Undo/Redo・`setRows`/`setData`・リモートの変更
+   * - 例外を投げたら通す（診断 `error`・code=`validate-cell-threw`）。読み取り専用・選択式の候補検証が先に効く
+   */
+  readonly validateCell?: (cell: GridCellValidationInput) => string | null;
   /** 行ID→上下の罫線（CSS px、0超〜8以下）。未知行はwarn後に遅延解決。mount時固定・表示専用。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
   /** 列ID→左右の罫線。隣接指定は太い線、同幅は右列leftが勝つ。文字overflowは指定境界で止まる。 */
@@ -556,6 +616,14 @@ export interface GridInstance {
    * `setData` と同様に保留し、呼ばれた順に構築後適用する。
    */
   setRows(rows: readonly GridStandaloneRow[]): void;
+  /**
+   * セルの状態表示（`GridCellStatus`・DD-060）を付け外しする（Experimental 0.x・DD-062・**両モード共通**）。
+   * 渡した行の状態を丸ごと置き換え、`{}` で消す（単独モードの `setRows` の `cellStatus` と同じ決まり・同じ置き場）。
+   * 状態は各クライアントの画面だけに持つ（view-local）。サーバーへ送らず、他の参加者には共有しない。文書・Undo・
+   * cell-commit・コピーの対象外。未知の RowId（まだ届いていない行）も受け付け、行が現れれば描く。解決できない列は描かない。
+   * 単独モードの `setData` は状態も含めて作り直す。boot 前に呼んでもよい（単独モードは `setData`/`setRows` と同じ順で適用）。
+   */
+  setCellStatus(rows: readonly GridCellStatusRow[]): void;
   /**
    * 行を挿入する（Experimental 0.x・DD-021-1・両モード）。`afterRowId` の直後へ `count` 行（既定 1）を挿入する
    * （`afterRowId=null` で先頭へ）。新 RowId は `crypto.randomUUID` で採番し `row-structure-change`（kind=insert）で

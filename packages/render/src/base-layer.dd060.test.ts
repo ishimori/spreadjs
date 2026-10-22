@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createColumnId, createRowId, type ColumnId, type RowId } from '@nanairo-sheet/types';
 
 import { createAxis } from './axis';
-import { CELL_STATUS_COLORS, createBaseLayer, type CellStatusMark } from './base-layer';
+import { CELL_STATUS_COLORS, createBaseLayer, type CellStatusColorOverrides, type CellStatusMark } from './base-layer';
 import type { BoundaryBorder } from './border-layer';
 import { createChunkStore } from './chunk-store';
 import { createViewportTransform } from './viewport';
@@ -23,7 +23,8 @@ function createCtxStub(): { ctx: CanvasRenderingContext2D; calls: Call[] } {
       return fillStyle;
     },
     set fillStyle(value: string | CanvasGradient | CanvasPattern) {
-      fillStyle = String(value);
+      // Canvas 2D と同じく、構文不正な色の代入は無視して直前値を保つ（DD-061 の既定色への縮退を確かめる）。
+      if (value !== 'not-a-color') fillStyle = String(value);
     },
     strokeStyle: '',
     lineWidth: 1,
@@ -76,6 +77,7 @@ function setup(options: {
   frozenColCount?: number;
   rowBorder?: (boundaryIndex: number) => BoundaryBorder | undefined;
   columnBorder?: (boundaryIndex: number) => BoundaryBorder | undefined;
+  statusColors?: CellStatusColorOverrides;
 }): Call[] {
   const { ctx, calls } = createCtxStub();
   const store = createChunkStore();
@@ -99,6 +101,7 @@ function setup(options: {
     ...(statuses !== undefined ? { cellStatusesInRow: (row: number) => statuses[row] } : {}),
     ...(options.rowBorder !== undefined ? { rowBorder: options.rowBorder } : {}),
     ...(options.columnBorder !== undefined ? { columnBorder: options.columnBorder } : {}),
+    ...(options.statusColors !== undefined ? { cellStatusColors: options.statusColors } : {}),
   });
   const transform = createViewportTransform({
     rowAxis,
@@ -254,5 +257,33 @@ describe('DD-060: セルの状態表示（cellStatusesInRow）', () => {
       expect(fills(calls, color)).toEqual([]);
     }
     expect(fills(calls, VALUE_BG)).toHaveLength(1);
+  });
+});
+
+describe('DD-061: 状態表示の色（cellStatusColors）', () => {
+  it('指定した項目だけを差し替え、省略した項目・水準は既定色のまま', () => {
+    const calls = setup({
+      statuses: { 3: [{ colIndex: 1, level: 'error' }, { colIndex: 2, level: 'warning' }] },
+      statusColors: { error: { frame: '#0000ff' } },
+    });
+    expect(fills(calls, '#0000ff')).toHaveLength(4); // error の枠
+    expect(fills(calls, ERROR.frame)).toEqual([]);
+    expect(fills(calls, ERROR.background)).toHaveLength(1); // 背景は既定色
+    expect(fills(calls, WARNING.frame)).toHaveLength(4); // warning は既定色のまま
+    expect(fills(calls, WARNING.background)).toHaveLength(1);
+  });
+
+  it('不正な色は既定色で描き、直前に描いた色を引き継がない', () => {
+    const calls = setup({
+      statuses: { 3: [{ colIndex: 1, level: 'warning' }, { colIndex: 2, level: 'error' }] },
+      statusColors: { error: { frame: 'not-a-color', background: 'not-a-color' } },
+    });
+    expect(fills(calls, ERROR.frame)).toHaveLength(4);
+    expect(fills(calls, ERROR.background)).toHaveLength(1);
+    // error のセル（列 2）の帯に warning の色が漏れていない。
+    const leaked = calls.filter(
+      (c): c is FillRect => c.kind === 'fillRect' && (c.style === WARNING.frame || c.style === WARNING.background) && c.x >= cellX(2),
+    );
+    expect(leaked).toEqual([]);
   });
 });

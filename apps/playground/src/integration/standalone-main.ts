@@ -7,7 +7,9 @@
 
 import { mount, GRID_API_VERSION } from '@nanairo-sheet/grid';
 import { borderOptions } from './border-options';
+import { validateCellOption } from './validate-options';
 import type {
+  GridCellStatusColors,
   GridColumnDisplayFormat,
   GridColumnFormatRule,
   GridColumnType,
@@ -260,6 +262,17 @@ function parseFrozenCount(raw: string | null): number | undefined {
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
+/** JSON のクエリ値（未指定・空は undefined。JSON でなければ文字列のまま返して SDK の検証に任せる）。 */
+function parseJsonParam(raw: string | null): unknown {
+  if (raw === null || raw === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
 function parseStaticBackgrounds(raw: string | null): Record<string, string> | undefined {
   if (raw === null || raw === '') {
     return undefined;
@@ -282,6 +295,9 @@ const frozenRowCount = parseFrozenCount(searchParams.get('frozenrows'));
 const frozenColumnCount = parseFrozenCount(searchParams.get('frozencols'));
 const columnBackgrounds = parseStaticBackgrounds(searchParams.get('colbg'));
 const rowBackgrounds = parseStaticBackgrounds(searchParams.get('rowbg'));
+// DD-061: 状態表示の色（例 `?statuscolors={"error":{"frame":"#0000ff"}}`）。JSON でなければ文字列のまま渡し、
+// SDK の fail-fast（column-types-invalid）を E2E から確かめられるようにする（ハーネス境界）。
+const cellStatusColors = parseJsonParam(searchParams.get('statuscolors')) as GridCellStatusColors | undefined;
 const readOnlyRows = (searchParams.get('readonlyrows') ?? '').split(',').filter((r) => r !== '');
 const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTypes);
 
@@ -385,7 +401,8 @@ const handle: StandaloneHandle = {
       { container: stage },
       {
         mode: 'standalone',
-        columnOrder: COLUMN_ORDER,
+        // Codex P2 回帰確認用（E2E 専用）: `?badcolumnorder=1` で JS の consumer の配列でない columnOrder を再現する。
+        columnOrder: searchParams.get('badcolumnorder') === '1' ? ({} as never) : COLUMN_ORDER,
         initialData: buildInitialData(),
         ...(columnTypesWithDate !== undefined ? { columnTypes: columnTypesWithDate } : {}),
         ...(columnFormats !== undefined ? { columnFormats } : {}),
@@ -400,7 +417,9 @@ const handle: StandaloneHandle = {
         ...(frozenColumnCount !== undefined ? { frozenColumnCount } : {}),
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
         ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
+        ...(cellStatusColors !== undefined ? { cellStatusColors } : {}),
         ...borderOptions(searchParams),
+        ...validateCellOption(searchParams),
         ...(searchParams.has('wrap') ? { wrapColumns: searchParams.get('wrap')!.split(',').filter(Boolean) } : {}),
         onEvent,
         onDiagnostic: (entry) => {
@@ -467,4 +486,17 @@ if (searchParams.get('prebootorder') === '1') {
       { rowId: 'r1', cells: { 'col-a': 'setData-r1' } },
     ],
   });
+}
+
+// DD-062 回帰確認用（E2E 専用）: boot（microtask）完了前に setData→setCellStatus の順で同期呼び出しする consumer を
+// 再現する（`?prebootstatus=1`）。setCellStatus を保留せずに置き場へ書くと、後から適用される setData の作り直しで消える。
+if (searchParams.get('prebootstatus') === '1') {
+  window.__gridInstance?.setData({
+    rows: Array.from({ length: 5 }, (_v, i) => ({ rowId: `r${i}`, cells: { 'col-a': `行${i}` } })),
+  });
+  // Codex P2: JS の consumer の不正な形を混ぜても、queue の再生が止まらず後続が適用される。
+  window.__gridInstance?.setCellStatus(null as never);
+  window.__gridInstance?.setCellStatus([null, { rowId: 5 }] as never);
+  window.__gridInstance?.setCellStatus([{ rowId: 'r1', cellStatus: { 'col-b': { level: 'error', message: 'boot 前' } } }]);
+  window.__gridInstance?.setRows([{ rowId: 'r2', cells: { 'col-a': 'boot 前の setRows' } }]);
 }

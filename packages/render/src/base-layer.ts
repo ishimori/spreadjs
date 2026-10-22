@@ -62,6 +62,11 @@ export const CELL_STATUS_COLORS: Readonly<Record<CellStatusLevel, { readonly fra
   warning: { frame: '#e37400', background: '#fef7e0' },
 };
 
+/** 状態表示の色の上書き（DD-061・省略した水準・項目は `CELL_STATUS_COLORS`）。 */
+export type CellStatusColorOverrides = Readonly<
+  Partial<Record<CellStatusLevel, { readonly frame?: string; readonly background?: string }>>
+>;
+
 /** 状態表示の枠の太さ（CSS px・DD-060）。device px へ丸めて描く。 */
 export const CELL_STATUS_FRAME_WIDTH = 2;
 
@@ -154,6 +159,8 @@ export interface BaseLayerDeps extends BorderLayerDeps {
    * pane ごとに可視行の数だけ呼ぶ。未指定なら追加描画ゼロ。
    */
   readonly cellStatusesInRow?: (rowIndex: number) => readonly CellStatusMark[] | undefined;
+  /** 状態表示の色の上書き（DD-061）。未指定・省略した項目は `CELL_STATUS_COLORS`。不正な色は既定色で描く。 */
+  readonly cellStatusColors?: CellStatusColorOverrides;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -230,6 +237,18 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   const columnBackgroundFn = deps.columnBackground;
   const rowBackgroundFn = deps.rowBackground;
   const cellStatusesInRowFn = deps.cellStatusesInRow;
+  const cellStatusColors = deps.cellStatusColors;
+  /**
+   * 状態表示の色を fillStyle に入れる（DD-061）。既定色を入れてから上書きする: Canvas は不正な色の代入を無視して
+   * 直前の色を残すため、上書きだけだと前のセルの色を引き継ぐ（engineering-patterns #27）。
+   */
+  const setStatusFill = (level: CellStatusLevel, part: 'frame' | 'background'): void => {
+    ctx.fillStyle = CELL_STATUS_COLORS[level][part];
+    const custom = cellStatusColors?.[level]?.[part];
+    if (custom !== undefined) {
+      ctx.fillStyle = custom;
+    }
+  };
   const frozenColCount = deps.frozenColCount ?? 0;
   const cellFontSizePx = parseFontSizePx(cellFont);
   const lineHeight = deps.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
@@ -633,7 +652,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     for (const [row, cols] of statuses) {
       for (const [col, level] of cols) {
         const rect = frame.transform.cellRect(row, col);
-        ctx.fillStyle = CELL_STATUS_COLORS[level].background;
+        setStatusFill(level, 'background');
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
     }
@@ -668,7 +687,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
         }
         const tx = Math.min(thickness, width);
         const ty = Math.min(thickness, height);
-        ctx.fillStyle = CELL_STATUS_COLORS[level].frame;
+        setStatusFill(level, 'frame');
         ctx.fillRect(left / d, top / d, width / d, ty / d);
         ctx.fillRect(left / d, (bottom - ty) / d, width / d, ty / d);
         ctx.fillRect(left / d, top / d, tx / d, height / d);

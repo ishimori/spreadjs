@@ -9,6 +9,7 @@
 
 import { mount } from '@nanairo-sheet/grid';
 import { borderOptions } from './border-options';
+import { validateCellOption } from './validate-options';
 import type {
   GridColumnDisplayFormat,
   GridColumnFormatRule,
@@ -462,6 +463,7 @@ const instance = mount(
     ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
     ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
     ...borderOptions(params),
+    ...validateCellOption(params),
     onEvent: renderStatus,
   },
 );

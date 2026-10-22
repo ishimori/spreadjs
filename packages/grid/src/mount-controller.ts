@@ -86,6 +86,8 @@ import type { GridConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
 import type { GridDebugApi, GridDebugCellAddress } from './internal';
+import { cellStatusInvalidMessage, createCellStatusStore, validateCellStatusColors } from './cell-status';
+import type { CellStatusStore } from './cell-status';
 import { createStandaloneSession } from './standalone-session';
 import type { StandaloneSession } from './standalone-session';
 import { validateStandaloneOptions } from './standalone-options';
@@ -93,7 +95,10 @@ import type { GridBackend } from './grid-backend';
 import type {
   GridCellRect,
   GridCellStatus,
+  GridCellStatusColors,
+  GridCellStatusRow,
   GridCollaborationMountOptions,
+  GridInvalidCell,
   GridConnectionState,
   GridEvent,
   GridFlushOptions,
@@ -113,6 +118,8 @@ const HEADER_WIDTH = 52;
 const HEADER_HEIGHT = 24;
 const ROW_HEIGHT = 22;
 const COL_WIDTH = 80;
+/** DD-063: 確定前の検証をする経路（`cell-invalid` の `source`）。 */
+type CellValidationSource = 'edit' | 'select' | 'date' | 'paste';
 const TICK_INTERVAL_MS = 1_000;
 // リンク列 dblclick の2打目抑止窓（ms・DD-027-2）。同一セルでこの間隔内の連打は「2打目」と見なし link-open を再発火しない
 // （実ブラウザーは PointerEvent.detail>=2 が主判定・本窓は detail=0 固定の synthetic 環境を補完する）。標準 dblclick 相当。
@@ -190,9 +197,24 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // 捨てない）。DD-052-4（Codex P2）: setData 用・setRows 用に別々のキューへ分けると、2 つの API を跨いだ
   // 呼び出し順（例: setRows→setData の順で呼んだのに boot 側で setData を先に適用してしまう）が壊れるため、
   // 呼ばれた順そのままを 1 本の queue に積む（setData は都度フル置換なので複数回積んでも最終状態は変わらない）。
+  // DD-062: setCellStatus も同じ queue に積む（boot 前の setData→setCellStatus の順を、保留した setData の
+  // 作り直しで setCellStatus の状態が消える形へ逆転させない）。
   const pendingStandaloneCalls: Array<
-    { readonly kind: 'data'; readonly data: GridStandaloneData } | { readonly kind: 'rows'; readonly rows: readonly GridStandaloneRow[] }
+    | { readonly kind: 'data'; readonly data: GridStandaloneData }
+    | { readonly kind: 'rows'; readonly rows: readonly GridStandaloneRow[] }
+    | { readonly kind: 'status'; readonly rows: readonly GridCellStatusRow[] }
   > = [];
+  // DD-060/062: セルの状態表示の置き場（view-local・両モード共通）。単独モードは列が mount 時に確定するので未知列を
+  // 入力時に落とし、共同編集モードは列がサーバーの文書から来るのでそのまま持って描画時に解決する。
+  // 列の集合は最初に使うときに作る: mount の同期部分で作ると、JS の consumer が配列でない columnOrder を渡したときに
+  // ここで例外になり、boot の検証（standalone-options-invalid の config エラー）へ届かない（Codex P2）。
+  const standaloneColumns: unknown = options.mode === 'standalone' ? options.columnOrder : undefined;
+  let standaloneColumnSet: ReadonlySet<unknown> | undefined;
+  const cellStatusStore = createCellStatusStore(
+    options.mode === 'standalone'
+      ? (columnId) => (standaloneColumnSet ??= new Set(Array.isArray(standaloneColumns) ? standaloneColumns : [])).has(columnId)
+      : undefined,
+  );
   let editor: IntegrationEditor | undefined;
   let browserTransport: BrowserWebSocketTransport | undefined;
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
@@ -206,6 +228,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledBackgrounds: CompiledColumnBackgrounds | undefined;
   // DD-045: 静的行背景。hasAny()=false なら rowBackground フックを束縛せず、描画コスト増ゼロ。
   let compiledRowBackgrounds: CompiledRowBackgrounds | undefined;
+  // DD-061: 状態表示の色の上書き（検証済みの写し・未指定なら undefined＝既定色）。
+  let compiledStatusColors: GridCellStatusColors | undefined;
   let compiledBorders: CompiledBorders | undefined;
   let rowBordersChecked = false;
   // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
@@ -1040,7 +1064,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let hoveredStatus: GridCellStatus | undefined;
   /** DD-060: セルの cell-hover イベントを作る（状態表示があれば status を載せ、無ければキー自体を付けない）。 */
   function cellHoverEvent(rowId: string, columnId: string, rect: GridCellRect): GridEvent {
-    const status = standalone?.cellStatusOf(rowId, columnId);
+    const status = cellStatusStore.statusOf(rowId, columnId);
     hoveredStatus = status;
     return status === undefined
       ? { type: 'cell-hover', rowId, columnId, rect }
@@ -1048,7 +1072,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
   /** DD-060: このセルの今の状態表示が、直近の cell-hover に載せたもの（level・message）と違うか。 */
   function hoverStatusChanged(cell: { readonly rowId: string; readonly columnId: string }): boolean {
-    const status = standalone?.cellStatusOf(cell.rowId, cell.columnId);
+    const status = cellStatusStore.statusOf(cell.rowId, cell.columnId);
     return status?.level !== hoveredStatus?.level || status?.message !== hoveredStatus?.message;
   }
   /**
@@ -1882,6 +1906,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
       // DD-045: 静的行背景をプリコンパイル（空色は fail-fast、RowId の存在は初回描画後に warn）。
       compiledRowBackgrounds = compileRowBackgrounds(options.rowBackgrounds);
+      // DD-061: 状態表示の色（未知のキー・空の色 → column-types-invalid＝rowBackgrounds と同経路）。
+      compiledStatusColors = validateCellStatusColors(options.cellStatusColors);
       compiledBorders = compileBorders(options.rowBorders, options.columnBorders, columnOrder, (color) => normalizeCanvasBorderColor(baseCtx, color), options.defaultRowBorder);
       // DD-033-2: 列見出しキャプション＋表示書式をプリコンパイル（fail-fast）。wrap/link 併用検査は wrapColumnStrings と
       // 直前に生成した columnTypeRegistry を渡して同所で実施する。不正は column-display-invalid へ写像する（別 code）。
@@ -2063,7 +2089,55 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * 単独モードは submitLocalOperation 内で cell-commit を通知する（onCellCommit→emit・DD-024 決定②）。
    * ローカル楽観適用の直後に、変更行の自動行高を再計算する（D5 トリガー②＝ローカル・SetCells のみ）。
    */
-  function submitSetCells(op: SetCellsOperation): OperationId | void {
+  /**
+   * DD-063: consumer の `validateCell` で SetCells を検証する。拒否するセルがあれば true（呼び出し側は submit しない＝
+   * 入力を捨てる）。空にする変更は検証しない（Excel の入力規則と同じ）。`validateCell` が例外を投げたセルは通す
+   * （診断 error。consumer の不具合で入力そのものを止めない）。`cell-invalid` は確定処理（IME 状態機械の移動・
+   * 貼り付け後の選択）が終わった後の microtask で出す: 同期で出すと、購読者が呼んだ setActiveCell 等が後続の移動に
+   * 上書きされる（engineering-patterns #14）。
+   */
+  function rejectInvalidCells(op: SetCellsOperation, source: CellValidationSource): boolean {
+    const validate = options.validateCell;
+    if (validate === undefined) {
+      return false;
+    }
+    const invalid: GridInvalidCell[] = [];
+    for (const change of op.changes) {
+      if (change.value.kind === 'blank') {
+        continue;
+      }
+      const rowId = String(change.rowId);
+      const columnId = String(change.columnId);
+      const value = cellScalarToDisplay(change.value);
+      let message: unknown;
+      try {
+        message = validate({ rowId, columnId, value });
+      } catch (error) {
+        diag.emit('error', 'validate-cell-threw', `validateCell が例外を投げたため通します（${rowId}/${columnId}）: ${errorMessage(error)}`);
+        continue;
+      }
+      if (typeof message === 'string') {
+        invalid.push({ rowId, columnId, value, message });
+      }
+    }
+    if (invalid.length === 0) {
+      return false;
+    }
+    diag.emit('info', 'cell-invalid', `validateCell が ${invalid.length} 件を拒否（${source}・未 submit・文書無変更）`);
+    queueMicrotask(() => {
+      if (!destroyed) {
+        emit({ type: 'cell-invalid', source, cells: invalid });
+      }
+    });
+    return true;
+  }
+
+  /**
+   * @param validationSource DD-063: 確定前の検証をする経路（IME/textarea・選択式・日付）。読み取り専用の破棄の**後**・
+   * Undo 捕捉の**前**で検証する（読み取り専用が先に効き、拒否した入力は Undo に積まない）。範囲クリア・cut（空にする
+   * 変更）と、手前で検証済みの貼り付けは渡さない。
+   */
+  function submitSetCells(op: SetCellsOperation, validationSource?: CellValidationSource): OperationId | void {
     const backend = sync;
     if (backend === undefined) {
       return;
@@ -2089,6 +2163,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // RC3（DD-052-3）: 行データ指定のセル単位 readOnly の保証層（列版・行版と同型・undo 記録前・standalone 専用）。
     if (hasReadOnlyCellRows() && touchesReadOnlyCell(op.changes, isReadOnlyCellId)) {
       diag.emit('warn', 'readonly-cell-blocked', 'readOnly セル: submitSetCells で SetCells を破棄（undo 記録前）');
+      return;
+    }
+    // DD-063: 確定前の検証（入力を捨てて cell-invalid で通知・Undo には積まない）。
+    if (validationSource !== undefined && rejectInvalidCells(op, validationSource)) {
       return;
     }
     // DD-020-3: submit 直前に **view（committed＋own pending）** から逆値（前値）を捕捉する（単一記録点＝両モード同一経路）。
@@ -2382,8 +2460,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
-    // DD-060: 状態表示は単独モードの行データだけが持つ（共同編集モードでは束縛しない）。
-    const standaloneBackend = standalone;
     baseLayer = createBaseLayer({
       ctx: baseCtx,
       store: backend.view.store,
@@ -2442,13 +2518,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
             },
           }
         : {}),
-      // DD-060: セルの状態表示（単独モードの行データ）。setRows で後から付くため単独モードでは常に束縛し、0 件なら
-      // 即 undefined を返す。RowId→ColumnId を描画のたびに index へ解決する（行の挿入・削除・列の並びに追従）。
-      ...(standaloneBackend !== undefined
-        ? {
-            cellStatusesInRow: (rowIndex: number) => cellStatusMarksAt(standaloneBackend, backend, rowIndex),
-          }
-        : {}),
+      // DD-060/062: セルの状態表示。後から付くため両モードで常に束縛し、0 件なら即 undefined を返す。
+      // RowId→ColumnId を描画のたびに index へ解決する（行の挿入・削除・列の並びに追従。解決できない列は描かない）。
+      cellStatusesInRow: (rowIndex: number) => cellStatusMarksAt(cellStatusStore, backend, rowIndex),
+      ...(compiledStatusColors !== undefined ? { cellStatusColors: compiledStatusColors } : {}),
       // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
       // 完全一致（AC9）。判定は raw・描画は display（columnHeaderLabel=ヘッダー・formatCellText=セル）。
       ...(compiledDisplay?.hasAny() === true
@@ -2682,6 +2755,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
           if (op === null) {
             return true; // DD-038 決定⑦: 文書無変更 → 選択も activeCell も動かさない（拒否・noop と同じ扱い）
           }
+          // DD-063: 1 件でも validateCell が拒否したら全体を拒否する（全成功/全失敗・選択も動かさない＝決定⑦と同じ）。
+          if (rejectInvalidCells(op, 'paste')) {
+            return true;
+          }
           // DD-038（Codex P2）: 選択遷移は submit の**前**に完了させる。単独モードは submitLocalOperation の
           // 内側から cell-commit を同期発火し（standalone-session）、共同編集も pending 通知で同様に再入しうる。
           // その購読者が公開 API（setActiveCell / setData）を呼んだ場合、submit の後に選択を動かすと consumer の
@@ -2798,7 +2875,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       inDeferredLockCommit = allowDuringDeferredLock;
       try {
-        return submitSetCells(op);
+        return submitSetCells(op, 'edit');
       } finally {
         inDeferredLockCommit = false;
       }
@@ -2958,7 +3035,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
           },
         ],
       };
-      submitSetCells(op); // 既存 chokepoint（Undo 記録・cell-commit 通知・自動行高が既存経路で成立）
+      submitSetCells(op, 'select'); // 既存 chokepoint（Undo 記録・cell-commit 通知・自動行高が既存経路で成立）・DD-063 の検証
       backend.view.markCellDirty();
     };
 
@@ -3074,7 +3151,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
           },
         ],
       };
-      submitSetCells(op);
+      submitSetCells(op, 'date'); // DD-063: 日付のカレンダーの確定も検証する
       backend.view.markCellDirty();
     };
 
@@ -3642,6 +3719,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       onCellStatusInvalid: (message) => {
         diag.emit('warn', 'cell-status-invalid', message);
       },
+      // DD-062: 状態の置き場は setCellStatus と共有する（setData の作り直しは setCellStatus の分も含む）。
+      cellStatusStore,
     });
     sync = standalone;
     attachBackendRendering();
@@ -3651,8 +3730,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const call = pendingStandaloneCalls.shift()!;
       if (call.kind === 'data') {
         applyStandaloneData(call.data);
-      } else {
+      } else if (call.kind === 'rows') {
         applyStandaloneSetRows(call.rows);
+      } else {
+        applyCellStatus(call.rows);
       }
     }
   }
@@ -3716,6 +3797,44 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
   }
 
+  /**
+   * DD-062: 両モード共通の状態表示の付け外し（`setCellStatus`）を適用する。渡した行の状態を丸ごと置き換える
+   * （`{}` で消す）。状態は view-local で文書・サーバー・Undo には触れない。描画中なら可視セルの再描画を要求し、
+   * ホバー中のセルの状態が変わっていれば cell-hover を出し直す。
+   */
+  function applyCellStatus(rows: readonly GridCellStatusRow[]): void {
+    // JS の consumer の不正な形（配列でない・行がオブジェクトでない・rowId が文字列でない）は例外にせず、その行だけ
+    // 飛ばして診断する（Codex P2: 単独モードの boot 前は queue の再生ごと止まり、後続の setData/setRows まで失われる）。
+    const list: unknown = rows;
+    if (!Array.isArray(list)) {
+      diag.emit('warn', 'cell-status-invalid', 'setCellStatus: rows は { rowId, cellStatus } の配列が必要（無視）');
+      return;
+    }
+    const invalid: string[] = [];
+    const malformed: number[] = [];
+    let updated = false;
+    list.forEach((row: unknown, index) => {
+      const rowId: unknown = typeof row === 'object' && row !== null ? (row as { rowId?: unknown }).rowId : undefined;
+      if (typeof rowId !== 'string') {
+        malformed.push(index);
+        return;
+      }
+      if (cellStatusStore.replaceRow(rowId, (row as { cellStatus?: unknown }).cellStatus, invalid)) {
+        updated = true;
+      }
+    });
+    if (malformed.length > 0) {
+      diag.emit('warn', 'cell-status-invalid', `setCellStatus: rows[${malformed.join(', ')}] は { rowId, cellStatus } ではないため無視しました`);
+    }
+    if (invalid.length > 0) {
+      diag.emit('warn', 'cell-status-invalid', cellStatusInvalidMessage(invalid));
+    }
+    if (updated) {
+      sync?.view.markCellDirty();
+      refreshHoverStatus();
+    }
+  }
+
   // ---- 公開ハンドル ----
   const instance: GridInstance = {
     get documentId(): string {
@@ -3771,6 +3890,18 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       diag.emit('warn', 'setRows', 'setRows は単独モード専用（共同編集モードでは無視）');
+    },
+    setCellStatus(rows: readonly GridCellStatusRow[]) {
+      // DD-062: 両モード共通。単独モードの boot 前は setData/setRows と同じ queue に積んで呼び出し順を保つ
+      // （保留した setData の作り直しで、先に付けた状態が消えないように）。共同編集モードはすぐ置き場へ書く。
+      if (destroyed) {
+        return;
+      }
+      if (isStandalone && standalone === undefined) {
+        pendingStandaloneCalls.push({ kind: 'status', rows });
+        return;
+      }
+      applyCellStatus(rows);
     },
     insertRows(options: { readonly afterRowId: string | null; readonly count?: number }) {
       performInsertRows(options.afterRowId, options.count ?? 1);
@@ -4029,12 +4160,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
  * DD-060: 行 index → その行の状態表示セル（base-layer の cellStatusesInRow フック）。状態が 0 件なら RowId の解決もせず
  * 即 undefined（状態を使わない画面の描画コストを増やさない）。列が見つからない状態は描かない。
  */
-function cellStatusMarksAt(standalone: StandaloneSession, backend: GridBackend, rowIndex: number): readonly CellStatusMark[] | undefined {
-  if (!standalone.hasAnyCellStatus()) {
+function cellStatusMarksAt(store: CellStatusStore, backend: GridBackend, rowIndex: number): readonly CellStatusMark[] | undefined {
+  if (!store.hasAny()) {
     return undefined;
   }
   const rowId = backend.view.rowIdAt(rowIndex);
-  const statuses = rowId === undefined ? undefined : standalone.cellStatusRow(String(rowId));
+  const statuses = rowId === undefined ? undefined : store.row(String(rowId));
   if (statuses === undefined) {
     return undefined;
   }

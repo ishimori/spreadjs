@@ -23,6 +23,9 @@ import {
 import {
   mount,
   type GridCellCommitChange,
+  type GridCellStatusColors,
+  type GridCellStatusRow,
+  type GridCellValidationInput,
   type GridColumnDisplayFormat,
   type GridColumnFormatRule,
   type GridRowBorders,
@@ -97,6 +100,8 @@ export interface NanairoSheetViewCommonProps {
   readonly columnBackgrounds?: Readonly<Record<string, string>>;
   /** 行単位の静的背景色（grid rowBackgrounds・DD-045）。RowId → CSS color。 */
   readonly rowBackgrounds?: Readonly<Record<string, string>>;
+  /** セルの状態表示の色（grid cellStatusColors・DD-061）。値が変われば開き直す（rowBackgrounds と同じ）。 */
+  readonly cellStatusColors?: GridCellStatusColors;
   /** 行ID→上下の罫線。grid rowBordersと同じmount時固定の表示設定。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
   /** 列ID→左右の罫線。grid columnBordersと同じ契約。 */
@@ -126,6 +131,11 @@ export interface NanairoSheetViewCommonProps {
   readonly onEvent?: (event: GridEvent) => void;
   /** grid 診断 hook（opt-in・grid onDiagnostic へ直結）。 */
   readonly onDiagnostic?: GridDiagnosticHook;
+  /**
+   * 確定前の検証（grid validateCell・DD-063）。関数が変わっても開き直さず、最新の関数を呼ぶ（onEvent と同じ）。
+   * 指定の有無が変わったときだけ開き直す（未指定の間は grid に検証させない＝現行挙動）。
+   */
+  readonly validateCell?: (cell: GridCellValidationInput) => string | null;
   // --- DOM ホスト ---
   readonly className?: string;
   readonly style?: CSSProperties;
@@ -164,6 +174,8 @@ export interface NanairoSheetViewHandle {
   setData(data: GridStandaloneData): void;
   /** 単独グリッドモードの行単位の部分更新（grid GridInstance.setRows 直結・DD-052-4/DD-054）。collab は grid 側で no-op+warn。 */
   setRows(rows: readonly GridStandaloneRow[]): void;
+  /** セルの状態表示の付け外し（grid GridInstance.setCellStatus 直結・DD-062・両モード共通・view-local）。 */
+  setCellStatus(rows: readonly GridCellStatusRow[]): void;
   /** グリッドへフォーカス（常駐 textarea）。 */
   focus(): void;
   /** 現在の接続状態（未 mount 時は 'stopped'）。 */
@@ -245,6 +257,7 @@ interface CallbackBag {
   onPresenceChange?: NanairoSheetViewCommonProps['onPresenceChange'];
   onError?: NanairoSheetViewCommonProps['onError'];
   onEvent?: NanairoSheetViewCommonProps['onEvent'];
+  validateCell?: NanairoSheetViewCommonProps['validateCell'];
 }
 
 /** React-Facade レベルの診断 warn（grid の診断とは別系統。onDiagnostic があれば流し、無ければ console.warn）。 */
@@ -306,9 +319,12 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     frozenColumnCount: props.frozenColumnCount ?? null,
     columnBackgrounds: props.columnBackgrounds === undefined ? null : canonicalJson(props.columnBackgrounds),
     rowBackgrounds: props.rowBackgrounds === undefined ? null : canonicalJson(props.rowBackgrounds),
+    cellStatusColors: props.cellStatusColors === undefined ? null : canonicalJson(props.cellStatusColors),
     rowBorders: props.rowBorders === undefined ? null : canonicalJson(props.rowBorders, true),
     columnBorders: props.columnBorders === undefined ? null : canonicalJson(props.columnBorders, true),
     defaultRowBorder: props.defaultRowBorder === undefined ? null : canonicalJson(props.defaultRowBorder, true),
+    // DD-063: validateCell は関数の同一性ではなく有無だけで開き直す（関数の差し替えは最新 ref で呼ぶ）。
+    validateCell: props.validateCell !== undefined,
   });
 }
 
@@ -356,6 +372,7 @@ function toMountOptions(
   props: NanairoSheetViewProps,
   onEvent: (event: GridEvent) => void,
   onDiagnostic: GridDiagnosticHook | undefined,
+  validateCell: ((cell: GridCellValidationInput) => string | null) | undefined,
 ): GridMountOptions {
   const common = omitUndefined({
     columnWidths: props.initialColumnWidths,
@@ -377,11 +394,13 @@ function toMountOptions(
     frozenColumnCount: props.frozenColumnCount,
     columnBackgrounds: props.columnBackgrounds,
     rowBackgrounds: props.rowBackgrounds,
+    cellStatusColors: props.cellStatusColors,
     rowBorders: props.rowBorders,
     columnBorders: props.columnBorders,
     defaultRowBorder: props.defaultRowBorder,
     onEvent,
     onDiagnostic,
+    validateCell,
   });
   if (props.mode === 'standalone') {
     return {
@@ -438,6 +457,7 @@ function NanairoSheetViewImpl(
       onPresenceChange: props.onPresenceChange,
       onError: props.onError,
       onEvent: props.onEvent,
+      validateCell: props.validateCell,
     };
     propsRef.current = props;
     diagnosticRef.current = props.onDiagnostic;
@@ -465,6 +485,14 @@ function NanairoSheetViewImpl(
           return;
         }
         instance.setRows(rows);
+      },
+      setCellStatus(rows: readonly GridCellStatusRow[]): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'setCellStatus を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.setCellStatus(rows);
       },
       focus(): void {
         const instance = instanceRef.current;
@@ -579,7 +607,13 @@ function NanairoSheetViewImpl(
         ? (entry) => diagnosticRef.current?.(entry)
         : undefined;
 
-    const instance = mount({ container }, toMountOptions(propsRef.current, onEvent, onDiagnostic));
+    // DD-063: 検証も「mount 時に validateCell があれば」最新 ref を読む安定ラッパー（関数の差し替えで開き直さない）。
+    const validateCell =
+      propsRef.current.validateCell !== undefined
+        ? (cell: GridCellValidationInput): string | null => callbacksRef.current.validateCell?.(cell) ?? null
+        : undefined;
+
+    const instance = mount({ container }, toMountOptions(propsRef.current, onEvent, onDiagnostic, validateCell));
     instanceRef.current = instance;
     appliedReadOnlyRef.current = propsRef.current.readOnly === true; // DD-056 H12: この mount が持つ readOnly
     // 接続状態キャッシュを instance の実値で初期化する（remount で旧状態を引き継がず、

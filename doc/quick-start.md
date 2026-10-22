@@ -526,7 +526,40 @@ grid.subscribe((event) => {
 
 - `cellStatus` を省略した `setRows`（`cells` だけの更新）では、その行の状態は残る。`setData`／`initialData` では作り直す
 - 状態は文書のデータではない。cell-commit・コピー TSV・Undo/Redo に混ざらず、利用者がセルを編集しても消えない（検証し直して付け外しする）
-- 確定そのものを止める機能はない。申請・保存の前に、状態の付いたセルが残っていないかを consumer が確かめて止める
+- 申請・保存の前に、状態の付いたセルが残っていないかを consumer が確かめて止める（確定そのものを止めたいときは下の `validateCell`）
+- **両モード共通の `setCellStatus`**（DD-062）: `grid.setCellStatus([{ rowId, cellStatus: { [columnId]: { level: 'error', message } } }])` でも
+  同じ決まり（行を丸ごと置き換え・`{}` で消す）で付け外しできる。共同編集モードでも使え、状態は各クライアントの画面だけに持つ
+  （サーバーへ送らず、他の参加者には出ない）。単独モードでは `setRows` の `cellStatus` と同じ置き場を使う
+- **色を変える**（DD-061）: mount オプション `cellStatusColors: { error: { frame: '#b00020', background: '#fdecee' } }`。
+  省略した水準・項目は既定色。React は同名 props
+
+### 確定前の検証（`validateCell`・DD-063）
+
+規則に合わない値を、文書に入る前に止める（両モード共通）。文字列を返すと拒否（その文字列がメッセージ）、`null` なら通す。
+拒否された入力は捨てられ（文書・サーバー・Undo は変わらない）、`cell-invalid` イベントで通知される。
+
+```ts
+const grid = mount(
+  { container },
+  {
+    mode: 'standalone',
+    columnOrder,
+    initialData,
+    validateCell: ({ columnId, value }) => (columnId === 'amount' && value.replace('-', '').length > 8 ? '8桁を超えています' : null),
+  },
+);
+grid.subscribe((event) => {
+  if (event.type === 'cell-invalid') {
+    // source: 'edit' | 'select' | 'date' | 'paste'。貼り付けは 1 件でも不正なら全体を拒否し、不正なセルを全部載せる。
+    showToast(event.cells.map((c) => c.message).join('\n'));
+  }
+});
+```
+
+- 検証するのは IME/textarea・選択式の候補・日付のカレンダーの確定と貼り付け。空にする確定（Delete・範囲クリア・cut）・Undo/Redo・
+  `setRows`/`setData`・リモートの変更は検証しない（必須の確認は申請時に行う）
+- `cell-invalid` は確定処理が終わった後に届くので、受け取って `setActiveCell` で元のセルへ戻すこともできる
+- `validateCell` が例外を投げたら通す（診断 `validate-cell-threw`）。React では関数を差し替えても開き直さない
 
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 

@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.15`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.16`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.16` | `alpha` | `0.1.0-experimental` | DD-061・DD-062・DD-063（DD-060 の範囲外の対応）。状態表示の色、共同編集モードの `setCellStatus`、確定前の検証 `validateCell` |
 | `0.1.0-alpha.15` | `alpha` | `0.1.0-experimental` | DD-059・DD-060（OFIC O1・O2）。負の数の表示書式（括弧・▲・赤字）、セルの状態表示（`cellStatus`） |
 | `0.1.0-alpha.14` | `alpha` | `0.1.0-experimental` | DD-058（広島空港 H15）。高DPIでのCanvasのにじみ・配置移動とDPR単独変更への追従 |
 | `0.1.0-alpha.13` | `alpha` | `0.1.0-experimental` | DD-057（広島空港 H14）。候補のみの選択式列で打った文字を前方一致の候補選択に使う |
@@ -29,6 +30,30 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.16] - 2026-10-22
+
+### Added
+
+- **grid 状態表示の色（mount オプション `cellStatusColors`・DD-061）**: `{ error?: { frame?, background? }; warning?: { … } }` で
+  DD-060 のセルの状態表示の枠と背景の色を変える（両モード共通・mount 時固定）。省略した水準・項目は既定色。未知のキー・空の色は
+  mount 時に `column-types-invalid`。CSS の色としての妥当性は検査せず、不正な色は既定色で描く。React は同名 props（値が変われば開き直す）。
+- **grid 両モード共通の状態の付け外し（`GridInstance.setCellStatus`・DD-062）**: `setCellStatus([{ rowId, cellStatus }])` で、
+  共同編集モードでもセルの状態表示を付け外しできる（行を丸ごと置き換え・`{}` で消す）。状態は各クライアントの画面だけに持ち、
+  サーバーへ送らず他の参加者には出ない。単独モードでは `setRows`／`setData` の `cellStatus` と同じ置き場を使う（`setData` は作り直す）。
+  boot 前に呼んでもよい（単独モードは `setData`/`setRows` と呼んだ順に適用）。`cell-hover` の `status` も両モードで載る。
+  公開型 `GridCellStatusRow`。React の ref handle にも `setCellStatus`。
+- **grid 確定前の検証（mount オプション `validateCell`・イベント `cell-invalid`・DD-063）**: `validateCell({ rowId, columnId, value })`
+  が文字列を返すと、その値の確定を止める（両モード共通・同期）。拒否された入力は捨てられ（文書・サーバー・Undo は変わらない）、
+  編集は閉じ、`cell-invalid`（`source`＝`edit`/`select`/`date`/`paste`・`cells`＝拒否したセルとメッセージ）が確定処理の後に出る。
+  貼り付けは 1 件でも不正なら全体を拒否する。空にする確定（Delete・範囲クリア・cut）・Undo/Redo・`setRows`/`setData`・リモートの
+  変更は検証しない。例外を投げたら通して診断 `validate-cell-threw`。読み取り専用が先に効く。公開型 `GridCellValidationInput`・
+  `GridInvalidCell`。React の `validateCell` props は関数を差し替えても開き直さない（有無が変わったときだけ開き直す）。
+
+### Changed
+
+- **grid セルの状態表示の置き場を backend から切り出した（DD-062）**: 単独モードの挙動（`setRows`・`setData`・`initialData` の
+  `cellStatus`、未知列のスキップ、不正値の `cell-status-invalid`）は変わらない。
 
 ## [0.1.0-alpha.15] - 2026-10-22
 
