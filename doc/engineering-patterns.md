@@ -220,3 +220,10 @@
 - **原因**: async IIFE は最初の await より前に callback を呼びうる。「work を作ってから追跡する」順では再入時に未登録である。入口でだけ対象を確認しても、同期 callback の間に対象が撤去される。
 - **正しいやり方**: work の開始を microtask へ送り、待機対象への登録を先に済ませる。callback から戻った後、Room への投入など不可逆な処理の直前に対象と接続メタを再確認する。撤去済みの対象はストア close の成功まで後始末管理に残し、close に失敗しても他のストアを試す。再試行では成功済みの close を繰り返さない。
 - **元DD**: DD-056-3（xhighレビューP1×1・P2×2。callbackからの撤去・停止とclose失敗を回帰テストで固定）
+
+## 27. Canvas の fillStyle へ不正な色を代入しても例外は出ず、直前の色が残る（既定色を入れてから上書きする）
+
+- **症状**: 利用側が渡した色（`textColor` 等）が不正だと、直前に塗った色（そのセルの背景・バッジのチップ色・前の列の帯）で文字や帯が描かれ、読めなくなる・別の色が漏れる。
+- **原因**: Canvas 2D は構文不正な色の代入を黙って無視する（例外を投げない）。`ctx.fillStyle = userColor ?? defaultColor` は、userColor が「定義済みだが不正」のとき既定色へ落ちない。
+- **正しいやり方**: ❌ `ctx.fillStyle = style.textColor ?? defaultColor` ／ ✅ `ctx.fillStyle = defaultColor; if (style.textColor !== undefined) ctx.fillStyle = style.textColor;`。色を入れる全経路（数値・文字・バッジ・はみ出し・帯）でそろえる。テストの ctx スタブは fillStyle の setter で不正な色を無視させ、直前の色が漏れないことを確かめる。
+- **元DD**: DD-036（列背景・行背景の帯）・DD-059（文字色。columnFormats の textColor の既存不具合も同時に修正）
