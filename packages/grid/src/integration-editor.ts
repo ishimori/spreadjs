@@ -81,7 +81,7 @@ export interface IntegrationEditorConfig {
    * 常駐 textarea が blur したときの通知（DD-027-1・Fable 5 P3-9）。grid コンテナ外クリック等で focus が外れたら
    * mount-controller が選択式ドロップダウンを閉じる。IME 状態機械への blur dispatch は従来どおり（本 hook は追加通知）。
    */
-  readonly onBlur?: () => void;
+  readonly onBlur?: (relatedTarget: EventTarget | null) => void;
   /**
    * 表示専用モード（DD-033-1）の初期値。true のとき常駐 textarea に `readOnly` 属性を付け（実 IME/実キーボード入力を物理遮断）、
    * composition 系・beforeinput・input・dblclick の DOM イベントを状態機械へ dispatch しない（synthetic も論理遮断）。
@@ -459,9 +459,9 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   on('focus', () => {
     dispatch({ type: 'focus' });
   });
-  on('blur', () => {
+  on('blur', (event) => {
     dispatch({ type: 'blur' }); // IME 状態機械への通知（従来どおり・無改変）
-    config.onBlur?.(); // DD-027-1: focus 外れでドロップダウンを閉じる（追加通知のみ）
+    config.onBlur?.(event.relatedTarget); // 検索付き候補への focus 移動は呼び出し側で区別する。
     scheduleSettleIfAwaitingFinalInput(); // DD-056 §4.5: 変換確定の直後の blur は保留になるだけなので、最終 input の代わりを予約する
   });
   // 常駐 textarea 自身のダブルクリック（active セルの既存値編集）。

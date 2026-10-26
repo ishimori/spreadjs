@@ -33,6 +33,8 @@ export interface GridSelectColumnType {
    * 入力できる」＝Excel の入力規則リスト（エラー停止なし）相当が表現できる。
    */
   readonly allowFreeText?: boolean;
+  /** 検索入力付きの候補選択。NFKC・大小文字・空白を正規化した部分一致。単一クリックでも開く。既定 false。 */
+  readonly searchable?: boolean;
 }
 
 /**
@@ -137,6 +139,7 @@ export interface ColumnTypeRegistry {
   getLinkType(columnId: string): GridLinkColumnType | undefined;
   /** 選択式列の候補（選択式でなければ undefined）。 */
   getSelectOptions(columnId: string): readonly string[] | undefined;
+  isSearchableSelect(columnId: string): boolean;
   /** その列で自由入力が許可されているか（非選択式列は true＝制約なし）。 */
   allowsFreeText(columnId: string): boolean;
   /**
@@ -321,6 +324,7 @@ export function createColumnTypeRegistry(
     isLinkColumn: (columnId) => linkOf(columnId) !== undefined,
     getLinkType: (columnId) => linkOf(columnId),
     getSelectOptions: (columnId) => selectOf(columnId)?.options,
+    isSearchableSelect: (columnId) => selectOf(columnId)?.searchable === true,
     allowsFreeText: (columnId) => {
       const select = selectOf(columnId);
       return select === undefined || select.allowFreeText === true;

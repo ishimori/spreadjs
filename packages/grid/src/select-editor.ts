@@ -5,7 +5,8 @@
 // を純関数として切り出す（integration-editor の interceptKeydown から状態機械の前で評価する・IME 経路無改変）。
 // listbox の位置は可視域に収める（DD-055・popup-placement の純関数）。
 //
-// 【IME 経路無改変（📐・T1 非該当）】editor-state-machine・ime-editing-session・常駐 textarea は改変しない。
+// セル編集用の状態機械は変更しない。searchable の検索欄は独立した native input で、候補だけを既存確定経路へ渡す。
+// 既定の候補欄は従来どおり常駐 textarea に focus を保つ。検索欄だけは focus を移し、内部移動と外部 blur を区別する。
 //   フォーカスは常駐 textarea のまま（I-5 維持）。↑↓/Enter/Esc は mount-controller の interceptKeydown が消費して
 //   本コントローラへ転送する。候補クリックは listbox の pointerdown（preventDefault で focus を textarea に保つ）。
 //   composition 中は decideSelectKey が必ず 'none' を返す（前段消費しない＝I-3）。
@@ -37,6 +38,13 @@ export function findOptionIndexByPrefix(options: readonly string[], prefix: stri
   }
   const needle = prefix.toLowerCase();
   return options.findIndex((option) => option.toLowerCase().startsWith(needle));
+}
+
+/** 検索付き候補用。表示値は保持し、検索キーだけ NFKC・大小文字・空白を正規化する。 */
+export function filterOptionsBySubstring(options: readonly string[], query: string): readonly string[] {
+  const normalize = (value: string): string => value.normalize('NFKC').toLowerCase().replace(/\s+/gu, '');
+  const needle = normalize(query);
+  return options.filter((option) => normalize(option).includes(needle));
 }
 
 export interface SelectController {
@@ -254,12 +262,15 @@ const INDICATOR_Z = '11';
 const HIGHLIGHT_BG = '#e8f0fe';
 // listbox の高さの既定の上限。可視域の余白がこれより狭ければ余白の高さまで縮める（DD-055）。
 const LISTBOX_MAX_HEIGHT = 220;
+let dropdownSequence = 0;
 
 export interface SelectDropdownConfig {
   /** listbox/indicator を配置するコンテナ（position:relative の stage）。 */
   readonly host: HTMLElement;
   /** 候補クリック（pointerdown）での確定要求。mount-controller が SetCells を組んで submit する。 */
   readonly onConfirm: () => void;
+  readonly onDismiss?: (restoreFocus: boolean) => void;
+  readonly font?: string;
   /** DD-055（RC16）: 可視域（ネイティブスクロールバーを除く stage 座標の幅・高さ）。listbox をこの中に収める（開いている間だけ読む）。 */
   readonly visibleArea: () => VisibleArea;
 }
@@ -267,6 +278,7 @@ export interface SelectDropdownConfig {
 export interface SelectDropdown {
   readonly controller: SelectController;
   isOpen(): boolean;
+  contains(target: EventTarget | null): boolean;
   /**
    * 開く（セルの真下。下に入りきらず上の余白のほうが広ければセルの上＝DD-055）。向きは開いた時点で決め、閉じるまで保つ。
    * `highlight:false` はハイライト無しで開く（DD-037 suggest モード）。
@@ -276,6 +288,7 @@ export interface SelectDropdown {
     readonly options: readonly string[];
     readonly currentValue: string;
     readonly highlight?: boolean;
+    readonly searchable?: boolean;
   }): void;
   /** 開いたまま候補を差し替える（DD-037 決定③の絞り込み。ハイライトは解除される）。 */
   setOptions(options: readonly string[]): void;
@@ -310,7 +323,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   listbox.style.border = '1px solid #1a73e8';
   listbox.style.borderRadius = '3px';
   listbox.style.boxShadow = '0 2px 8px rgba(0,0,0,0.18)';
-  listbox.style.font = '13px system-ui, sans-serif';
+  listbox.style.font = config.font ?? '13px system-ui, sans-serif';
   listbox.style.color = '#202124';
   listbox.style.maxHeight = `${LISTBOX_MAX_HEIGHT}px`;
   listbox.style.overflowY = 'auto';
@@ -335,20 +348,67 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   indicator.style.lineHeight = '1';
   host.appendChild(indicator);
 
+  const optionsBox = document.createElement('div');
+  optionsBox.id = `ns-select-options-${++dropdownSequence}`;
+  const search = document.createElement('input');
+  search.type = 'text';
+  search.className = 'ns-select-search';
+  search.placeholder = '名前の一部で検索';
+  search.setAttribute('aria-label', '候補を検索');
+  search.setAttribute('role', 'combobox');
+  search.setAttribute('aria-autocomplete', 'list');
+  search.setAttribute('aria-controls', optionsBox.id);
+  search.style.cssText = 'position:sticky;top:0;z-index:1;width:100%;box-sizing:border-box;padding:8px;border:0;border-bottom:1px solid #cbd5e1;background:white;color:#202124;font:inherit;outline-offset:-2px';
+  const empty = document.createElement('div');
+  empty.textContent = '候補がありません';
+  empty.setAttribute('role', 'status');
+  empty.style.padding = '8px 10px';
+  let searchable = false;
+  let allOptions: readonly string[] = [];
+  let composing = false;
+  let compositionSettling = false;
+  search.addEventListener('pointerdown', (event) => event.stopPropagation());
+  search.addEventListener('compositionstart', () => { composing = true; });
+  search.addEventListener('compositionend', () => {
+    composing = false;
+    // 同一イベントループの IME 確定 Enter を候補確定に転用しない。
+    compositionSettling = true;
+    queueMicrotask(() => { compositionSettling = false; });
+    updateSearch();
+  });
+  search.addEventListener('input', () => { if (!composing) updateSearch(); });
+  search.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (composing || compositionSettling || event.isComposing || event.keyCode === 229) return;
+    switch (event.key) {
+      case 'ArrowDown': event.preventDefault(); controller.highlightNext(); paintHighlight(); break;
+      case 'ArrowUp': event.preventDefault(); controller.highlightPrev(); paintHighlight(); break;
+      case 'Enter': event.preventDefault(); config.onConfirm(); break;
+      case 'Escape': event.preventDefault(); config.onDismiss?.(true); break;
+      case 'Tab': config.onDismiss?.(true); break;
+    }
+  });
+  search.addEventListener('blur', (event) => {
+    if (controller.isOpen() && !(event.relatedTarget instanceof Node && listbox.contains(event.relatedTarget))) {
+      config.onDismiss?.(false);
+    }
+  });
+
   let optionEls: HTMLDivElement[] = [];
   // DD-055: 開いた時点で決めた向き（スクロール・絞り込みで上下に跳ねないよう閉じるまで保つ）。閉じている間は null。
   let direction: PopupDirection | null = null;
 
   function renderOptions(): void {
-    listbox.replaceChildren();
+    optionsBox.replaceChildren();
     optionEls = controller.getOptions().map((value, index) => {
       const el = document.createElement('div');
       el.className = 'ns-select-option';
       el.setAttribute('role', 'option');
+      el.id = `${optionsBox.id}-${index}`;
       el.dataset.value = value;
       el.dataset.index = String(index);
       el.textContent = value === '' ? ' ' : value;
-      el.style.padding = '3px 10px';
+      el.style.padding = searchable ? '7px 10px' : '3px 10px';
       el.style.cursor = 'pointer';
       el.style.whiteSpace = 'nowrap';
       // 候補クリックは pointerdown で確定する。preventDefault で常駐 textarea の focus を奪わない（I-5）。
@@ -362,9 +422,19 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
         controller.setHighlight(index);
         paintHighlight();
       });
-      listbox.appendChild(el);
+      optionsBox.appendChild(el);
       return el;
     });
+    if (searchable && optionEls.length === 0) optionsBox.appendChild(empty);
+  }
+
+  function updateSearch(): void {
+    if (!controller.isOpen()) return;
+    controller.setOptions(filterOptionsBySubstring(allOptions, search.value));
+    controller.setHighlight(0);
+    renderOptions();
+    listbox.scrollTop = 0;
+    paintHighlight();
   }
 
   function paintHighlight(): void {
@@ -373,13 +443,17 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
       el.style.background = index === hi ? HIGHLIGHT_BG : '';
       el.setAttribute('aria-selected', index === hi ? 'true' : 'false');
     });
+    const selected = optionEls[hi];
+    if (selected) search.setAttribute('aria-activedescendant', selected.id);
+    else search.removeAttribute('aria-activedescendant');
     // ハイライトが表示外なら listbox 内をスクロールして可視化する。
     const active = optionEls[hi];
     if (active !== undefined) {
-      const boxTop = listbox.scrollTop;
-      const boxBottom = boxTop + listbox.clientHeight;
+      const searchHeight = searchable ? search.offsetHeight : 0;
+      const boxTop = listbox.scrollTop + searchHeight;
+      const boxBottom = listbox.scrollTop + listbox.clientHeight;
       if (active.offsetTop < boxTop) {
-        listbox.scrollTop = active.offsetTop;
+        listbox.scrollTop = active.offsetTop - searchHeight;
       } else if (active.offsetTop + active.offsetHeight > boxBottom) {
         listbox.scrollTop = active.offsetTop + active.offsetHeight - listbox.clientHeight;
       }
@@ -390,7 +464,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
     if (rect === null) {
       return;
     }
-    listbox.style.minWidth = `${Math.max(rect.width, 80)}px`;
+    listbox.style.minWidth = `${Math.min(config.visibleArea().width, Math.max(rect.width, searchable ? 260 : 80))}px`;
     // 余白で縮める前の高さ＝中身の高さ＋上下の枠（既定の上限まで）。max-height を変えずに測る（内部スクロール位置を保つ）。
     const naturalHeight = Math.min(LISTBOX_MAX_HEIGHT, listbox.scrollHeight + listbox.offsetHeight - listbox.clientHeight);
     const placement = computePopupPlacement({
@@ -409,13 +483,24 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   return {
     controller,
     isOpen: () => controller.isOpen(),
-    open: ({ rect, options, currentValue, highlight }) => {
+    contains: (target) => target instanceof Node && listbox.contains(target),
+    open: ({ rect, options, currentValue, highlight, searchable: enableSearch = false }) => {
+      searchable = enableSearch;
+      allOptions = [...options];
+      composing = false;
+      search.value = '';
+      search.setAttribute('aria-expanded', 'true');
+      listbox.replaceChildren(...(searchable ? [search, optionsBox] : [optionsBox]));
+      listbox.setAttribute('role', searchable ? 'presentation' : 'listbox');
+      if (searchable) { optionsBox.setAttribute('role', 'listbox'); optionsBox.setAttribute('aria-label', '候補'); }
+      else optionsBox.removeAttribute('role');
       controller.open({ options, currentValue, highlight });
       direction = null;
       renderOptions();
       listbox.style.display = 'block';
       placeListbox(rect);
       paintHighlight(); // 高さが決まってから、現値のハイライトを listbox の表示範囲へスクロールする
+      if (searchable) search.focus({ preventScroll: true });
     },
     setOptions: (options) => {
       if (!controller.isOpen()) {
@@ -434,16 +519,17 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
       paintHighlight();
     },
     typeCharacter: (character) => {
-      controller.typeCharacter(character);
-      paintHighlight();
+      if (searchable) { search.value += character; updateSearch(); }
+      else { controller.typeCharacter(character); paintHighlight(); }
     },
     backspace: () => {
-      controller.backspace();
-      paintHighlight();
+      if (searchable) { search.value = search.value.slice(0, -1); updateSearch(); }
+      else { controller.backspace(); paintHighlight(); }
     },
     confirmValue: () => {
       const value = controller.getHighlightedValue();
       controller.close();
+      search.setAttribute('aria-expanded', 'false');
       listbox.style.display = 'none';
       listbox.replaceChildren();
       optionEls = [];
@@ -452,6 +538,7 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
     },
     close: () => {
       controller.close();
+      search.setAttribute('aria-expanded', 'false');
       listbox.style.display = 'none';
       listbox.replaceChildren();
       optionEls = [];

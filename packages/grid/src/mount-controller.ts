@@ -240,6 +240,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // createGridController 直下の handler（dblclick・pointerdown・redraw）からは以下の ref 経由で呼ぶ。
   let openSelectForActive: (() => void) | undefined;
   let isSelectColumnIndex: ((colIndex: number) => boolean) | undefined;
+  let isSearchableSelectColumnIndex: ((colIndex: number) => boolean) | undefined;
+  let searchSelectCandidate: { pointerId: number; row: number; col: number } | null = null;
   let closeSelectDropdown: (() => void) | undefined;
   let refreshSelectPlacement: ((transform: ViewportTransform) => void) | undefined;
   // DD-035 R2: 日付カレンダー（select と同方式の ref。attachBackendRendering 内で backend/editor を閉じ込めて定義する）。
@@ -1396,6 +1398,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (selectionDrag === null || selectionDrag.pointerId !== pointerId) {
       return;
     }
+    searchSelectCandidate = null;
     selectionDrag = null; // release より先に null 化（release が誘発する lostpointercapture の二重処理を無効化）
     if (scroller.hasPointerCapture(pointerId)) {
       scroller.releasePointerCapture(pointerId);
@@ -1597,6 +1600,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         ) {
           linkCandidate = null;
         }
+        if (searchSelectCandidate !== null && (hit?.area !== 'cell' || hit.rowIndex !== searchSelectCandidate.row || hit.colIndex !== searchSelectCandidate.col)) searchSelectCandidate = null;
         // セル領域のみ focus を更新する（ヘッダー上・viewport 外は直近セルを保持）。
         if (hit !== null && hit.area === 'cell') {
           selectionCtrl.updateDrag({ row: hit.rowIndex, col: hit.colIndex });
@@ -1641,8 +1645,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
   scroller.addEventListener(
     'pointerup',
     (event) => {
+      const candidate = searchSelectCandidate;
+      const point = stageLocal(event);
+      const hit = currentTransform()?.hitTest(point.x, point.y);
+      const openSearch = candidate?.pointerId === event.pointerId && hit?.area === 'cell'
+        && hit.rowIndex === candidate.row && hit.colIndex === candidate.col;
       finishResize(event.pointerId, true);
       finishSelectionDrag(event.pointerId, true);
+      if (openSearch) openSelectForActive?.();
       // DD-027-2: 選択ドラッグ確定の直後に、リンク候補が生きていれば link-open を発火する（同一セルクリック＝📐）。
       maybeEmitLinkOpen(event.pointerId);
     },
@@ -1757,6 +1767,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // pointerdownCell 処理後に Navigation なら（元から Navigation / 編集は確定済み）ドラッグ選択を開始する。
       // composition 中は開始しない（クリックは pendingNavigation 経路のまま・composition を乱さない・AC7）。
       if (!editor.session.isComposing() && editor.session.getPhase() === 'Navigation') {
+        searchSelectCandidate = !selectDropdownWasOpen && !datePickerWasOpen && !event.ctrlKey && !event.metaKey && !event.altKey
+          && isSearchableSelectColumnIndex?.(cell.col) === true
+          ? { pointerId: event.pointerId, row: cell.row, col: cell.col } : null;
         selectionDrag = { pointerId: event.pointerId };
         selectionCtrl.beginDrag(cell);
         scroller.setPointerCapture(event.pointerId);
@@ -2969,7 +2982,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
       ensureActiveCellVisible();
       const transform = currentTransform();
       const placement = transform === undefined ? null : computeEditorPlacement(transform, active.row, active.col, placementConfig());
+      selectOpenMode = 'picker';
       selectDropdown.open({
+        searchable: columnTypeRegistry.isSearchableSelect(String(columnId)),
         rect: placement !== null && placement.visible ? placement.rect : null,
         options,
         currentValue,
@@ -3051,7 +3066,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     // 選択式ドロップダウンは選択式列があるときだけ配線する（無ければ overhead ゼロ）。
     if (columnTypeRegistry?.hasAnySelectColumn() === true) {
-      selectDropdown = createSelectDropdown({ host: stage, onConfirm: () => confirmSelect(), visibleArea });
+      selectDropdown = createSelectDropdown({
+        host: stage, font: appearance.cellFont, visibleArea,
+        onConfirm: () => { confirmSelect(); editor?.focus(); },
+        onDismiss: (restoreFocus) => { cancelSelect(); if (restoreFocus) editor?.focus(); },
+      });
     }
 
     // ---- DD-035 R2 日付列（カレンダー・ポップオーバー・editor 経路無改変）----
@@ -3220,6 +3239,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // createGridController 直下の handler（dblclick・pointerdown・redraw）から呼ぶための ref を公開する。
     openSelectForActive = openSelect;
     isSelectColumnIndex = isSelectCellIndex;
+    isSearchableSelectColumnIndex = (index) => {
+      const id = backend.view.columnIdAt(index);
+      return id !== undefined && columnTypeRegistry?.isSearchableSelect(String(id)) === true;
+    };
     closeSelectDropdown = cancelSelect;
     /**
      * DD-037 決定③: 自由入力併存列（allowFreeText:true）の**編集中**に、draft の前方一致で候補リストを自動表示する
@@ -3377,8 +3400,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
       // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
       // DD-035 R2: 日付カレンダーも同様に閉じる。
-      onBlur: () => {
-        cancelSelect();
+      onBlur: (target) => {
+        if (!selectDropdown?.contains(target)) cancelSelect();
         cancelDate();
       },
       layout: editorLayout,

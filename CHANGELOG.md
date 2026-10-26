@@ -6,13 +6,15 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.16`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.18`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.18` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。選択式列に任意の検索入力（部分一致）を追加 |
+| `0.1.0-alpha.17` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。Canvas・編集欄の文字と罫線の外観設定 |
 | `0.1.0-alpha.16` | `alpha` | `0.1.0-experimental` | DD-061・DD-062・DD-063（DD-060 の範囲外の対応）。状態表示の色、共同編集モードの `setCellStatus`、確定前の検証 `validateCell` |
 | `0.1.0-alpha.15` | `alpha` | `0.1.0-experimental` | DD-059・DD-060（OFIC O1・O2）。負の数の表示書式（括弧・▲・赤字）、セルの状態表示（`cellStatus`） |
 | `0.1.0-alpha.14` | `alpha` | `0.1.0-experimental` | DD-058（広島空港 H15）。高DPIでのCanvasのにじみ・配置移動とDPR単独変更への追従 |
@@ -718,3 +720,7 @@
 - **Tier 1 対応環境**: Windows Chrome / Edge のみ（ADR-0015 D2・CG-4）。他 OS / ブラウザは対象外（明示・非検証）。
 - **配布形態**: TS ソース配布を継続（`main: ./src/index.ts`）。consumer は TS を透過コンパイルできるビルド環境（vite 等）が前提。dist ビルド配布は Stage 2。
 - **registry 昇格**: private registry publish は Stage 2/子DD（package.json に `publishConfig` を足し `npm publish --tag alpha` へ切替可能な形で据え置き）。
+
+## 0.1.0-alpha.18 — 検索付き候補選択（nanairoware3 DD-243-10）
+
+`GridSelectColumnType.searchable?: boolean` を追加（既定 false・既存APIと共存、移行不要）。true の列は単一クリックでも開き、独立した検索入力で部分一致（NFKC・大小文字・空白を正規化）に絞る。検索文字そのものは保存せず、候補だけを既存の検証・競合検出経路で確定する。IME変換中・変換確定Enterで候補を確定しない。既定の前方一致の文字選択・自由入力の補完は維持。実OS IME・スクリーンリーダーは未受入れ。
