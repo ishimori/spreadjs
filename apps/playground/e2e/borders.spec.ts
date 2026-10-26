@@ -141,6 +141,9 @@ test('DD-048 S3 2クライアントのinsert/delete/Undo/RedoとPresence・文�
     await collab.composeOpen(a.page, ['点線を保つ']);
     await collab.composeFinalizeAndCommit(a.page, '点線を保つ');
     await expect.poll(() => collab.committedCell(b.page, editId!, editCol!)).toBe('点線を保つ');
+    // Bへの反映とAのACKは別。pending中のUndoは仕様上無効なので、発行元の確定を待つ。
+    await expect.poll(async () => (await collab.snapshot(a.page)).pendingCount, { message: 'A のセル編集が ACK 済み' }).toBe(0);
+    await expect.poll(() => collab.canUndo(a.page), { message: 'A のセル編集を Undo できる' }).toBe(true);
     await a.page.keyboard.press('Control+z');
     await expect.poll(() => collab.committedCell(b.page, editId!, editCol!)).toBe('');
     // undoの補償opがACKされる前にredoを打つと取りこぼす（undo-redo-collab.spec.tsと同じゲート）。

@@ -61,3 +61,16 @@ Before/Afterは実装前後ではなく、同じ実装でのscroll/resize前後�
 成果物の公開・push・松下への適用は本作業では実施していない。
 
 配布ZIP `release/nanairo-sheet-0.1.0-alpha.5.zip`: 338543 bytes / 12 entries。ZIP内10tarballのSHA-256/bytesをmanifestと照合してPASS。
+
+## 2026-10-26 CIの待機条件補修
+
+失敗した[CI run 40301657045](https://github.com/ishimori/spreadjs/actions/runs/40301657045)は`6b0490b9a9ff4013722bed912cca4580892bba1e`。S3の`borders.spec.ts:145`で、Undo後の空文字に対して`点線を保つ`が残り、8秒のpollがタイムアウトした。
+
+製品ソースの`packages/grid/src/undo-stack.ts`では、発行元のpendingが0であることをUndo/Redoの必要条件としている。S3は受信側Bの値反映だけを待ち、発行元AのACKはUndo前に確認していなかった。既存`undo-redo-collab.spec.ts`と同様、AのpendingCount=0とcanUndo=trueを先に確認してからUndoする。固定sleep・timeout拡大・retry増加で吸収せず、元の検証内容を維持する。
+
+検証環境はWindows / ローカルChromium。製品コード・依存・Playwright設定は変更していない。
+
+- 修正前: `CI=1 npm run test:e2e -- borders.spec.ts --grep "DD-048 S3" --repeat-each 10 --retries 0` → 9成功/1失敗、CIと同じ行/値で再現。
+- 修正後: `CI=1 npm run test:e2e -- borders.spec.ts --grep "DD-048 S3" --repeat-each 20 --retries 0` → 20成功/0失敗。
+- 関連回帰: `CI=1 npm run test:e2e -- borders.spec.ts undo-redo-collab.spec.ts --retries 0` → 38成功/0失敗。
+- `npx eslint apps/playground/e2e/borders.spec.ts`、`bash scripts/doc-check.sh`、`bash scripts/dd-health.sh --dd DD-048`、`git diff --check` → PASS。DD-INDEXをスクリプトで再生成し、内容差分なし。
