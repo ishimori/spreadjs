@@ -25,6 +25,8 @@ exports[`contract: Facade export surface snapshot > @nanairo-sheet/server-hono �
 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/grid の公開宣言 closure 1`] = `
 "// ==== packages/grid/src/index.ts ====
+import type { GridAppearance } from './appearance';
+export type { GridAppearance } from './appearance';
 export { GRID_ERROR_CODES, GRID_CONFLICT_CODES } from './error-codes';
 export type { GridErrorCode, GridConflictCode } from './error-codes';
 export type { GridDiagnostic, GridDiagnosticLevel, GridDiagnosticHook } from './diagnostics';
@@ -356,6 +358,8 @@ export interface GridMountTarget {
  * 両モード共通の mount オプション（Experimental 0.x）。共同編集・単独グリッドの双方で使える描画/購読系。
  */
 export interface GridCommonMountOptions {
+    /** 初回mountに適用する表示専用のfont/罫線設定。行高はrowHeightsで指定する。 */
+    readonly appearance?: GridAppearance;
     /**
      * 初期の列幅 override（ColumnId 文字列→px・Experimental 0.x・DD-012-4 D2）。利用側が保存した設定を
      * 渡すと初期表示がその幅になる（F5 リロードでの復元手段）。既定値でよい列は含めない。
@@ -722,6 +726,26 @@ export declare const GRID_API_VERSION: "0.1.0-experimental";
  */
 export declare function mount(target: GridMountTarget, options: GridMountOptions): GridInstance;
 
+// ==== packages/grid/src/appearance.ts ====
+/** 表示専用の描画設定。初回mountで固定し、値・選択・保存の契約には影響しない。 */
+export interface GridAppearance {
+    /** pxを含むCSS font shorthand（例: 14px Meiryo, sans-serif）。 */
+    readonly cellFont?: string;
+    readonly headerFont?: string;
+    /** 列ごとのfont。列幅の自動調整・入力欄も同じfontを使う。 */
+    readonly columnFonts?: Readonly<Record<string, string>>;
+    readonly gridLineColor?: string;
+}
+export declare const DEFAULT_CELL_FONT = "13px system-ui, sans-serif";
+export declare const DEFAULT_HEADER_FONT = "12px system-ui, sans-serif";
+export interface CompiledAppearance {
+    readonly cellFont: string;
+    readonly headerFont: string;
+    readonly gridLineColor: string | undefined;
+    fontFor(columnId: string): string;
+}
+export declare function compileAppearance(input: GridAppearance | undefined, columns: readonly string[], validFont: (font: string) => boolean, normalizeColor: (color: string) => string | undefined): CompiledAppearance;
+
 // ==== packages/grid/src/border-rules.ts ====
 /** widthはCSS px（有限の0超〜8以下）、colorはCanvasで解釈できるCSS色。 */
 export interface GridBorder {
@@ -1080,12 +1104,12 @@ export interface GridColumnFormatRule {
  */
 export declare class FormatRuleConfigError extends Error {
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors';
+    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors' | 'invalid-appearance';
     /** 対象列 ID（診断用）。 */
     readonly columnId: string;
     constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors',
+    reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors' | 'invalid-appearance',
     /** 対象列 ID（診断用）。 */
     columnId: string, message: string);
 }
@@ -1141,7 +1165,7 @@ export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<st
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
+import { type GridAppearance, type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridPresenceUser, type GridRemoteChange, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -1152,6 +1176,8 @@ export interface NanairoSheetViewError {
 }
 /** 両モード共通 props（初期値系＋識別系の一部＋callback 系＋DOM ホスト）。 */
 export interface NanairoSheetViewCommonProps {
+    /** 表示専用のfont/罫線設定。値の変更で再mountする。 */
+    readonly appearance?: GridAppearance;
     /** 初期の列幅 override（grid columnWidths へ写像。初回 mount のみ）。 */
     readonly initialColumnWidths?: Readonly<Record<string, number>>;
     /** 初期の行高 override（grid rowHeights へ写像。初回 mount のみ）。 */

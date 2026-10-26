@@ -93,6 +93,17 @@ describe('DD-062 ref handle の setCellStatus', () => {
   });
 });
 
+describe('consumer appearance の写像', () => {
+  it('キー順に依存せず、fontを変えた場合だけ開き直す', () => {
+    const { rerender } = render(createElement(NanairoSheetView, standaloneProps({ appearance: { cellFont: '14px sans-serif', headerFont: '600 14px sans-serif' } })));
+    expect(h.instances[0]!.options.appearance).toEqual({ cellFont: '14px sans-serif', headerFont: '600 14px sans-serif' });
+    rerender(createElement(NanairoSheetView, standaloneProps({ appearance: { headerFont: '600 14px sans-serif', cellFont: '14px sans-serif' } })));
+    expect(h.instances).toHaveLength(1);
+    rerender(createElement(NanairoSheetView, standaloneProps({ appearance: { cellFont: '15px sans-serif' } })));
+    expect(h.instances).toHaveLength(2);
+  });
+});
+
 describe('DD-063 validateCell の写像', () => {
   type Validate = (cell: { rowId: string; columnId: string; value: string }) => string | null;
   const passed = (inst: FakeInstance): Validate => inst.options.validateCell as Validate;

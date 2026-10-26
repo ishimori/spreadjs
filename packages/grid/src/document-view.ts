@@ -53,6 +53,7 @@ export interface DocumentViewConfig {
   wrapCache?: TextMetricsCache;
   /** セル文字フォント（wrapLines の測定に使う・base-layer と一致させる）。 */
   cellFont?: string;
+  columnFont?: (columnId: string) => string;
   /** wrap 折り返し行の行高（px・base-layer の lineHeight と一致・既定 CELL_TEXT_LINE_HEIGHT）。 */
   lineHeight?: number;
 }
@@ -107,6 +108,7 @@ export class DocumentView {
   private readonly wrapColumnSet: Set<ColumnId>;
   private readonly wrapCache: TextMetricsCache | undefined;
   private readonly cellFont: string;
+  private readonly columnFont: ((columnId: string) => string) | undefined;
   private readonly lineHeight: number;
   private readonly wrapEnabled: boolean;
   /** 直近の自動行高一括計算の所要（ms・D6 予算判定・perf 記録用）。 */
@@ -146,6 +148,7 @@ export class DocumentView {
     this.wrapColumnSet = new Set((config.wrapColumns ?? []).map((id) => createColumnId(id)));
     this.wrapCache = config.wrapCache;
     this.cellFont = config.cellFont ?? '13px system-ui, sans-serif';
+    this.columnFont = config.columnFont;
     this.lineHeight = config.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
     this.wrapEnabled = this.wrapColumnSet.size > 0 && this.wrapCache !== undefined;
     this.currentColAxis = createAxis({
@@ -305,7 +308,7 @@ export class DocumentView {
         continue;
       }
       const maxWidth = this.currentColAxis.size(colIdx) - CELL_TEXT_PADDING * 2;
-      lineCounts.push(cache.wrapLines(text, this.cellFont, maxWidth).length);
+      lineCounts.push(cache.wrapLines(text, this.columnFont?.(String(columnId)) ?? this.cellFont, maxWidth).length);
     }
     return autoRowHeight({
       lineCounts,

@@ -59,7 +59,7 @@ export interface GridColumnFormatRule {
 export class FormatRuleConfigError extends Error {
   constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors',
+    readonly reason: 'unknown-column' | 'empty-rules' | 'empty-match' | 'duplicate-match' | 'empty-color' | 'invalid-status-colors' | 'invalid-appearance',
     /** 対象列 ID（診断用）。 */
     readonly columnId: string,
     message: string,

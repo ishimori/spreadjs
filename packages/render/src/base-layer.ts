@@ -100,6 +100,7 @@ export interface BaseLayerDeps extends BorderLayerDeps {
   readonly headerHeight: number;
   readonly colors?: BaseLayerColors;
   readonly cellFont?: string;
+  readonly columnFont?: (colIndex: number) => string | undefined;
   readonly headerFont?: string;
   /**
    * measureText キャッシュ（DD-012-5）。指定すると base-layer は自前生成せず共有インスタンスを使う。
@@ -223,8 +224,9 @@ function findPane(panes: readonly PaneRange[], id: PaneId): PaneRange {
 export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   const { ctx, store, headerWidth, headerHeight } = deps;
   const colors = deps.colors ?? DEFAULT_BASE_COLORS;
-  const cellFont = deps.cellFont ?? '13px system-ui, sans-serif';
-  const linkUnderlineOffsetPx = linkUnderlineOffset(parseFontSizePx(cellFont));
+  const defaultCellFont = deps.cellFont ?? '13px system-ui, sans-serif';
+  let cellFont = defaultCellFont;
+  let linkUnderlineOffsetPx = linkUnderlineOffset(parseFontSizePx(cellFont));
   const headerFont = deps.headerFont ?? '12px system-ui, sans-serif';
   const isWrapColumn = deps.isWrapColumn ?? (() => false);
   const isLinkColumn = deps.isLinkColumn ?? (() => false);
@@ -250,7 +252,16 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
   };
   const frozenColCount = deps.frozenColCount ?? 0;
-  const cellFontSizePx = parseFontSizePx(cellFont);
+  let cellFontSizePx = parseFontSizePx(cellFont);
+  const useColumnFont = (col: number): void => {
+    const next = deps.columnFont?.(col) ?? defaultCellFont;
+    if (next !== cellFont) {
+      cellFont = next;
+      cellFontSizePx = parseFontSizePx(next);
+      linkUnderlineOffsetPx = linkUnderlineOffset(cellFontSizePx);
+    }
+    ctx.font = cellFont;
+  };
   const lineHeight = deps.lineHeight ?? CELL_TEXT_LINE_HEIGHT;
   const textCache =
     deps.textCache ??
@@ -476,6 +487,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       const display = formatCellText(col, value);
       // DD-027-3: セル書式（値ベース・非空セルのみ）。**match は raw 完全一致のまま**（display で match しない・DD-033-2）。
       // 背景色は罫線 inset で文字より先に塗る（罫線保存・1 pass）。
+      useColumnFont(col);
       const style = getCellStyle(col, value);
       // DD-059: 表示書式由来の装飾（負の数の色・括弧表記の右余白）。formatCellText と同じく判定は raw。
       const decoration = cellTextDecoration(col, value);
@@ -543,6 +555,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
         }
         // DD-027-3: バッジ指定値は単行チップ＝オーバーフロー対象外（流入させない）。textColor は流入文字にも適用する
         // （背景色は origin セル自身の矩形〔可視左外〕にのみ塗るため、ここでは塗らない＝流入先の空セルを汚さない）。
+        useColumnFont(originCol);
         const originStyle = getCellStyle(originCol, value);
         if (originStyle?.badge === true) {
           continue;

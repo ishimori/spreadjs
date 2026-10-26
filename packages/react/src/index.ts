@@ -21,6 +21,7 @@ import {
   type ForwardedRef,
 } from 'react';
 import {
+  type GridAppearance,
   mount,
   type GridCellCommitChange,
   type GridCellStatusColors,
@@ -59,6 +60,8 @@ export interface NanairoSheetViewError {
 
 /** 両モード共通 props（初期値系＋識別系の一部＋callback 系＋DOM ホスト）。 */
 export interface NanairoSheetViewCommonProps {
+  /** 表示専用のfont/罫線設定。値の変更で再mountする。 */
+  readonly appearance?: GridAppearance;
   // --- 初期値系（初回 mount のみ有効・変更は無視＋診断 warn・契約 §4 分類2） ---
   /** 初期の列幅 override（grid columnWidths へ写像。初回 mount のみ）。 */
   readonly initialColumnWidths?: Readonly<Record<string, number>>;
@@ -304,6 +307,7 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     // 列数規模（数十列）の小さな設定オブジェクトのため毎 render の直列化コストは無視できる（initialData とは異なる）。
     // Record 系はキー順非依存で正準化（Codex P2）。readOnlyColumns は集合＝ソート。wrapColumns は従来どおり順序保持。
     columnTypes: props.columnTypes === undefined ? null : canonicalJson(props.columnTypes),
+    appearance: props.appearance === undefined ? null : canonicalJson(props.appearance),
     columnFormats: props.columnFormats === undefined ? null : canonicalJson(props.columnFormats),
     columnCaptions: props.columnCaptions === undefined ? null : canonicalJson(props.columnCaptions),
     columnDisplayFormats: props.columnDisplayFormats === undefined ? null : canonicalJson(props.columnDisplayFormats),
@@ -380,6 +384,7 @@ function toMountOptions(
     wrapColumns: props.wrapColumns,
     // DD-035: 列スキーマ系（grid 同名オプションへ 1:1）。未指定は渡さない（grid 側で未指定＝現行挙動）。
     columnTypes: props.columnTypes,
+    appearance: props.appearance,
     columnFormats: props.columnFormats,
     columnCaptions: props.columnCaptions,
     columnDisplayFormats: props.columnDisplayFormats,

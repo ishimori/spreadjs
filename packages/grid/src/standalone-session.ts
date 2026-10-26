@@ -53,6 +53,7 @@ export interface StandaloneSessionConfig {
   readonly stringColumns?: readonly string[];
   readonly wrapCache?: TextMetricsCache;
   readonly cellFont?: string;
+  readonly columnFont?: (columnId: string) => string;
   readonly lineHeight?: number;
   /** 確定値（SetCells）が適用されたら表示文字列の batch を通知する（mount-controller が cell-commit へ写す）。 */
   readonly onCellCommit: (changes: readonly GridCellCommitChange[]) => void;
@@ -121,6 +122,7 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     ...(config.wrapColumns !== undefined ? { wrapColumns: config.wrapColumns } : {}),
     ...(config.wrapCache !== undefined ? { wrapCache: config.wrapCache } : {}),
     ...(config.cellFont !== undefined ? { cellFont: config.cellFont } : {}),
+    ...(config.columnFont !== undefined ? { columnFont: config.columnFont } : {}),
     ...(config.lineHeight !== undefined ? { lineHeight: config.lineHeight } : {}),
   });
 

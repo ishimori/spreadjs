@@ -52,6 +52,7 @@ export interface KeydownInterceptInput {
 }
 
 export interface IntegrationEditorConfig {
+  readonly fontForColumn?: (columnId: string) => string;
   /** textarea/badge を配置するコンテナ（position:relative の stage）。 */
   readonly host: HTMLElement;
   readonly document: EditingDocumentPort;
@@ -203,6 +204,7 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   // port/badge のクロージャは session 生成後に実行されるため、前方参照を ref で保持する。
   const sessionRef: { current: ImeEditingSession | undefined } = { current: undefined };
   let currentRect: CellRect | null = null;
+  let currentInputFont = CELL_FONT;
   // RC2: 現在 setEditingVisual(true) 中か（Navigation では常に単一行・固定高のまま = 既存挙動を保つ）。
   let editingVisual = false;
 
@@ -277,6 +279,10 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
       }
       textarea.style.display = 'block';
       textarea.style.left = `${rect.x}px`;
+      const active = sessionRef.current?.getActiveCell();
+      const column = active === undefined ? undefined : config.document.colIdAt(active.col);
+      const nextFont = column === undefined ? CELL_FONT : config.fontForColumn?.(String(column)) ?? CELL_FONT;
+      if (nextFont !== currentInputFont) { textarea.style.font = nextFont; currentInputFont = nextFont; }
       textarea.style.top = `${rect.y}px`;
       textarea.style.width = `${rect.width}px`;
       applyHeight(rect);

@@ -20,6 +20,7 @@ import {
   columnLabel,
   correctScroll,
   createBaseLayer,
+  DEFAULT_BASE_COLORS,
   createOverlayLayer,
   createTextMetricsCache,
   createViewportTransform,
@@ -49,6 +50,7 @@ import { createDatePicker, decideDateKey } from './date-editor';
 import type { DatePicker } from './date-editor';
 import type { EditingDocumentPort } from './ime-editing-session';
 import { createIntegrationEditor } from './integration-editor';
+import { compileAppearance } from './appearance';
 import type { IntegrationEditor } from './integration-editor';
 import { createLoadMetrics } from './initial-load-metrics';
 import type { VisibleArea } from './popup-placement';
@@ -125,9 +127,7 @@ const TICK_INTERVAL_MS = 1_000;
 // （実ブラウザーは PointerEvent.detail>=2 が主判定・本窓は detail=0 固定の synthetic 環境を補完する）。標準 dblclick 相当。
 const LINK_DBLCLICK_MS = 400;
 // セル文字フォント（base-layer 描画・自動行高の測定で共有する。両者で一致していないと wrap 行数がずれる・DD-012-5）。
-const CELL_FONT = '13px system-ui, sans-serif';
 // 列ヘッダーフォント（base-layer と一致。auto-fit のヘッダーラベル幅測定に使う・DD-027-3）。
-const HEADER_FONT = '12px system-ui, sans-serif';
 // auto-fit の非空セル走査上限（DD-027-3・C級）。50k 行列の単発 dblclick でも予算内に収めるため、これを超えたら
 // それまでの最大幅を採用して打ち切る（診断 info）。
 const AUTO_FIT_MAX_SCAN = 10_000;
@@ -154,6 +154,7 @@ interface FlushWaiter {
 
 /** GridMountOptions を受けて grid を container へ配線し、GridInstance を返す（同期 return・boot は非同期進行）。 */
 export function createGridController(target: GridMountTarget, options: GridMountOptions): GridInstance {
+  let appearance = compileAppearance(undefined, [], () => true, () => undefined);
   const scaffold = buildScaffold(target.container);
   const { stage, baseCanvas, overlayCanvas, scroller, spacer, baseCtx, overlayCtx } = scaffold;
 
@@ -1496,12 +1497,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-059: 括弧表記の列の正の数と 0 は描画で右に `)` 1文字分をあける＝その幅も足す（バッジは余白なしで描く）。
       (value) => {
         const id = String(columnId);
-        const width = cellTextCache.measureWidth(compiledDisplay?.formatText(id, value) ?? value, CELL_FONT);
+        const width = cellTextCache.measureWidth(compiledDisplay?.formatText(id, value) ?? value, appearance.fontFor(id));
         const pad = compiledDisplay?.decorationFor(id, value)?.trailingPad;
         if (pad === undefined || compiledFormats?.getStyle(id, value)?.badge === true) {
           return width;
         }
-        return width + cellTextCache.measureWidth(pad, CELL_FONT);
+        return width + cellTextCache.measureWidth(pad, appearance.fontFor(id));
       },
       // バッジ指定値は丸角チップ幅（テキスト＋左右パディング）で見積もる（描画の drawBadgeCell と整合）。match は raw。
       (value) => (compiledFormats?.getStyle(String(columnId), value)?.badge === true ? BADGE_TEXT_PADDING * 2 : 0),
@@ -1512,7 +1513,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-033-2: ヘッダー幅はキャプション（指定時）で測る（未指定は列記号 A/B/…）。base-layer と同じ headerFont・描画と一致。
       headerLabelWidth: cellTextCache.measureWidth(
         compiledDisplay?.captionFor(String(columnId)) ?? columnLabel(colIndex),
-        HEADER_FONT,
+        appearance.headerFont,
       ),
       padding: CELL_TEXT_PADDING * 2,
     });
@@ -1901,6 +1902,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-035 R4: readOnlyColumns も同じ registry で検証（未知列・重複 → column-types-invalid）・参照する（列タイプと直交）。
       columnTypeRegistry = createColumnTypeRegistry(options.columnTypes, columnOrder, wrapColumnStrings, options.readOnlyColumns);
       // DD-027-3: セル書式ルールをプリコンパイル（fail-fast）。不正は columnTypes と同じ column-types-invalid へ写像する。
+      appearance = compileAppearance(options.appearance, columnOrder, (font) => {
+        const probe = document.createElement('span');
+        probe.style.font = font;
+        return probe.style.font !== '';
+      }, (color) => normalizeCanvasBorderColor(baseCtx, color));
       compiledFormats = compileFormatRules(options.columnFormats, columnOrder);
       // DD-036 C2: 静的列背景をプリコンパイル（fail-fast・未知列/空色 → column-types-invalid＝columnFormats と同経路）。
       compiledBackgrounds = compileColumnBackgrounds(options.columnBackgrounds, columnOrder);
@@ -2048,7 +2054,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-012-5: wrap 列・行分割キャッシュ・フォント・行高を DocumentView へ渡す（自動行高の計算基盤）。
       ...(wrapEnabled ? { wrapColumns } : {}),
       wrapCache: cellTextCache,
-      cellFont: CELL_FONT,
+      cellFont: appearance.cellFont,
+      columnFont: appearance.fontFor,
       lineHeight: CELL_TEXT_LINE_HEIGHT,
       onConnected: () => {
         metrics.mark('wsConnected');
@@ -2466,7 +2473,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       headerWidth: HEADER_WIDTH,
       headerHeight: HEADER_HEIGHT,
       // DD-012-5: 共有キャッシュ・wrap 判定・pane 境界・折り返し行高を渡す（オーバーフロー／折り返し描画）。
-      cellFont: CELL_FONT,
+      cellFont: appearance.cellFont,
+      headerFont: appearance.headerFont,
+      columnFont: (index) => appearance.fontFor(String(backend.view.columnIdAt(index))),
+      colors: { ...DEFAULT_BASE_COLORS, gridLine: appearance.gridLineColor ?? DEFAULT_BASE_COLORS.gridLine },
       textCache: cellTextCache,
       frozenColCount,
       lineHeight: CELL_TEXT_LINE_HEIGHT,
@@ -3344,6 +3354,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       cellHeight: ROW_HEIGHT,
     };
     editor = createIntegrationEditor({
+      fontForColumn: appearance.fontFor,
       host: stage,
       document: docPort,
       submit: editorSubmit,
@@ -3701,7 +3712,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       ...(wrapEnabled ? { wrapColumns } : {}),
       ...(stringColumnStrings.size > 0 ? { stringColumns } : {}),
       wrapCache: cellTextCache,
-      cellFont: CELL_FONT,
+      cellFont: appearance.cellFont,
+      columnFont: appearance.fontFor,
       lineHeight: CELL_TEXT_LINE_HEIGHT,
       // RC13（DD-052-4）: submitSetCells が積んだ逆値パッチを、consumer 通知（onCellCommit）より前に記録する。
       beforeCellCommit: () => {

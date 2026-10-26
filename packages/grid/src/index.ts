@@ -9,6 +9,8 @@
 // 本 Facade が定義する。内部 SessionEvent/ConflictQueueEntry を写像して露出する）。boundary lint が本 index.ts を検査する。
 
 import { createGridController } from './mount-controller';
+import type { GridAppearance } from './appearance';
+export type { GridAppearance } from './appearance';
 
 // 公開エラー語彙・診断 hook は Facade 自前モジュールが定義する（内部 package 型ではない＝R7 に反さない）。
 export { GRID_ERROR_CODES, GRID_CONFLICT_CODES } from './error-codes';
@@ -337,6 +339,8 @@ export interface GridMountTarget {
  * 両モード共通の mount オプション（Experimental 0.x）。共同編集・単独グリッドの双方で使える描画/購読系。
  */
 export interface GridCommonMountOptions {
+  /** 初回mountに適用する表示専用のfont/罫線設定。行高はrowHeightsで指定する。 */
+  readonly appearance?: GridAppearance;
   /**
    * 初期の列幅 override（ColumnId 文字列→px・Experimental 0.x・DD-012-4 D2）。利用側が保存した設定を
    * 渡すと初期表示がその幅になる（F5 リロードでの復元手段）。既定値でよい列は含めない。

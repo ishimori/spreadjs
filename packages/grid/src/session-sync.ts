@@ -85,6 +85,7 @@ export interface SessionSyncConfig {
   wrapCache?: TextMetricsCache;
   /** セル文字フォント（wrapLines 測定用・base-layer と一致）。 */
   cellFont?: string;
+  columnFont?: (columnId: string) => string;
   /** wrap 折り返し行の行高（px・base-layer の lineHeight と一致）。 */
   lineHeight?: number;
   /** 接続確立時（#6 計測 wsConnected）。 */
@@ -130,6 +131,7 @@ export function createSessionSync(config: SessionSyncConfig): SessionSync {
     ...(config.wrapColumns !== undefined ? { wrapColumns: config.wrapColumns } : {}),
     ...(config.wrapCache !== undefined ? { wrapCache: config.wrapCache } : {}),
     ...(config.cellFont !== undefined ? { cellFont: config.cellFont } : {}),
+    ...(config.columnFont !== undefined ? { columnFont: config.columnFont } : {}),
     ...(config.lineHeight !== undefined ? { lineHeight: config.lineHeight } : {}),
   });
 

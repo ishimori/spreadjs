@@ -131,6 +131,21 @@ packages/
 | [doc/DOC-MAP.md](doc/DOC-MAP.md) | doc/ 内の全ドキュメントの場所と目的 |
 | [AGENTS.md](AGENTS.md) | 開発フロー・コマンド・規約（AIエージェント／開発者共通の正本） |
 
+## 組み込み先の文字・罫線設定（alpha.17）
+
+`mount`と`NanairoSheetView`の`appearance`は表示専用の初期設定です。省略時の本文13px・見出し12pxは維持します。利用側の画面に揃える場合は次のように指定します。
+
+```tsx
+<NanairoSheetView mode="standalone" columnOrder={['name', 'memo']} appearance={{
+  cellFont: '14px Meiryo, sans-serif',
+  headerFont: '600 14px Meiryo, sans-serif',
+  columnFonts: { name: '600 14px Meiryo, sans-serif' },
+  gridLineColor: '#e3e8ef',
+}} />
+```
+
+fontはpxを含むCSS font shorthandです。Canvas描画・省略/折り返し幅・列幅の自動調整・セル入力欄に同じ指定を使い、文書値・選択・保存には影響しません。行高は従来どおり`rowHeights`（Reactは`initialRowHeights`）で指定し、折り返し行間は既存16pxです。Reactは設定値が変わると再mountします。今回の変更は利用側の既存DD-243-10で追跡し、ユーザー指示により新しいDDは起票しません。
+
 ## 開発の進め方
 
 本プロジェクトは **DD（設計文書）駆動** で進めます。いきなりコードを書かず、次のフローに従います。
