@@ -6,7 +6,7 @@
 // 持たず、代わりに destroy() で全リソース（RAF/interval/listener/ResizeObserver/WS/canvas/textarea）を解放する
 // （再mountで leak しない・AC2）④E2E 用 introspection は debugRegistry 経由（test-support）で露出する。
 
-import { SETCELLS_MAX_CELLS, cloneCellScalar, documentHash, displayRowOrder, getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
+import { SETCELLS_MAX_CELLS, cloneCellScalar, displayRowOrder, getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
 import type { CellAddressById, DeleteRowsOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
@@ -99,7 +99,6 @@ import { decideFlush, resolveFlushTimeout, timeoutResult } from './flush-state';
 import type { GridConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
-import type { GridDebugApi, GridDebugCellAddress } from './internal';
 import { cellStatusInvalidMessage, createCellStatusStore, validateCellStatusColors } from './cell-status';
 import type { CellStatusStore } from './cell-status';
 import { createStandaloneSession } from './standalone-session';
@@ -128,27 +127,21 @@ import type {
   GridStandaloneMountOptions,
   GridStandaloneRow,
 } from './index';
+import {
+  AUTO_FIT_MAX_SCAN,
+  COL_WIDTH,
+  HEADER_HEIGHT,
+  HEADER_WIDTH,
+  LINK_DBLCLICK_MS,
+  NO_PRESENCE_USERS,
+  PENDING_COMMANDS_MAX,
+  ROW_HEIGHT,
+  TICK_INTERVAL_MS,
+  errorMessage,
+} from './mount/constants';
+import type { CellValidationSource } from './mount/constants';
+import { createDebugApi } from './mount/debug-api';
 
-const HEADER_WIDTH = 52;
-/** 見出し 1 段の高さ（DD-064 K4: 2段の見出しでは上の段・下の段がそれぞれこの高さ）。 */
-const HEADER_HEIGHT = 24;
-const ROW_HEIGHT = 22;
-const COL_WIDTH = 80;
-/** DD-063: 確定前の検証をする経路（`cell-invalid` の `source`）。 */
-type CellValidationSource = 'edit' | 'select' | 'date' | 'paste';
-const TICK_INTERVAL_MS = 1_000;
-// リンク列 dblclick の2打目抑止窓（ms・DD-027-2）。同一セルでこの間隔内の連打は「2打目」と見なし link-open を再発火しない
-// （実ブラウザーは PointerEvent.detail>=2 が主判定・本窓は detail=0 固定の synthetic 環境を補完する）。標準 dblclick 相当。
-const LINK_DBLCLICK_MS = 400;
-// セル文字フォント（base-layer 描画・自動行高の測定で共有する。両者で一致していないと wrap 行数がずれる・DD-012-5）。
-// 列ヘッダーフォント（base-layer と一致。auto-fit のヘッダーラベル幅測定に使う・DD-027-3）。
-// auto-fit の非空セル走査上限（DD-027-3・C級）。50k 行列の単発 dblclick でも予算内に収めるため、これを超えたら
-// それまでの最大幅を採用して打ち切る（診断 info）。
-const AUTO_FIT_MAX_SCAN = 10_000;
-// DD-035 R6: 命令 API（scrollToRow/setActiveCell）の保留上限（構造 flush 待ち・初回描画待ち）。
-const PENDING_COMMANDS_MAX = 64;
-// DD-049 H5: 参加者なし（単独モード・初回 join 前・destroy 後）の共有空一覧。
-const NO_PRESENCE_USERS: readonly GridPresenceUser[] = Object.freeze([]);
 
 interface ResolvedConfig {
   documentId: string;
@@ -4352,160 +4345,29 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
   };
 
-  // ---- E2E 用 introspection（test-support 経由）----
-  const debugApi: GridDebugApi = {
-    ready: () => sync !== undefined && firstDataDrawn && sync.view.rowAxis.count() > 1,
-    online: () => sync?.session.isOnline ?? false,
-    connectionState: () =>
-      isStandalone
-        ? 'standalone'
-        : sync === undefined
-          ? 'offline'
-          : sync.session.isStopped
-            ? 'stopped'
-            : sync.session.isOnline
-              ? 'online'
-              : 'offline',
-    lastEventType: () => lastSessionEvent?.type ?? '',
-    rowCount: () => sync?.view.rowAxis.count() ?? 0,
-    committedRevision: () => sync?.session.committedDocument.revision ?? 0,
-    committedHash: () => (sync === undefined ? '' : documentHash(sync.session.committedDocument)),
-    pendingCount: () => sync?.session.pendingCount ?? 0,
-    conflictCount: () => sync?.session.conflictQueue.length ?? 0,
-    divertedCount: () => editor?.session.divertedDrafts().length ?? 0,
-    knownPresenceCount: () => sync?.session.knownPresences().length ?? 0,
-    bootstrapRevision: () => sync?.session.bootstrapRevision ?? 0,
-    appliedServerOpCount: () => sync?.session.appliedServerOpCount ?? 0,
-    presences: () =>
-      (sync?.session.knownPresences() ?? []).map((p) => ({
-        displayName: p.displayName,
-        activeCell: toAddress(p.activeCell),
-        editingCell: toAddress(p.editingCell),
-        selectionRanges: p.selectionRanges.map((r) => ({
-          startRowId: String(r.startRowId),
-          startColumnId: String(r.startColumnId),
-          endRowId: String(r.endRowId),
-          endColumnId: String(r.endColumnId),
-        })),
-      })),
-    isConflicting: () => editor?.session.isConflicting() ?? false,
-    isTargetLost: () => editor?.session.isTargetLost() ?? false,
-    isComposing: () => editor?.session.isComposing() ?? false,
-    draft: () => editor?.session.getDraft() ?? '',
-    activeCell: () => editor?.session.getActiveCell() ?? { row: 0, col: 0 },
-    selectionRange: () => selectionCtrl.getRange(),
-    dragRange: () => selectionCtrl.getDragRange(),
-    // DD-027-1: 選択式ドロップダウンの観測（開閉・候補・ハイライト）。
-    selectOpen: () => selectDropdown?.isOpen() ?? false,
-    selectOptions: () => [...(selectDropdown?.options() ?? [])],
-    selectHighlightedIndex: () => selectDropdown?.highlightedIndex() ?? -1,
-    selectHighlightedValue: () => selectDropdown?.highlightedValue() ?? null,
-    // DD-035 R2: 日付カレンダーの観測（開閉・ハイライト・表示月）。
-    dateOpen: () => datePicker?.isOpen() ?? false,
-    dateHighlightedValue: () => datePicker?.highlightedValue() ?? null,
-    dateViewMonth: () => datePicker?.viewMonth() ?? null,
-    // DD-020-3: Undo/Redo 可否・深さ（pending が読めないときは undo 不可側に倒す）。
-    canUndo: () => undoCtrl.canUndo(sync?.session.pendingCount ?? 1),
-    canRedo: () => undoCtrl.canRedo(sync?.session.pendingCount ?? 1),
-    undoDepth: () => undoCtrl.undoDepth(),
-    redoDepth: () => undoCtrl.redoDepth(),
-    editingTarget: () => {
-      const t = editor?.session.getEditingTarget() ?? null;
-      return t === null ? null : { rowId: String(t.rowId), columnId: String(t.columnId) };
-    },
-    rowIdAt: (index) => {
-      const id = sync?.view.rowIdAt(index);
-      return id === undefined ? undefined : String(id);
-    },
-    colIdAt: (index) => {
-      const id = sync?.view.columnIdAt(index);
-      return id === undefined ? undefined : String(id);
-    },
-    rowIndexOf: (rowId) => sync?.view.rowIndexOf(createRowId(rowId)) ?? -1,
-    cellRectAt: (row, col) => currentTransform()?.cellRect(row, col) ?? null,
-    // DD-035 R6: scrollToRow の観測（scroller の実 scrollTop/Left）。
-    scrollTop: () => scroller.scrollTop,
-    scrollLeft: () => scroller.scrollLeft,
-    columnHeaderRectAt: (col) => currentTransform()?.columnHeaderRect(col) ?? null,
-    rowHeaderRectAt: (row) => currentTransform()?.rowHeaderRect(row) ?? null,
-    columnWidthOverrides: () => sync?.view.columnWidthOverrideRecord() ?? {},
-    rowHeightOverrides: () => sync?.view.rowHeightOverrideRecord() ?? {},
-    committedCell: (rowId, columnId) => {
-      if (sync === undefined) {
-        return '';
-      }
-      const record = getCell(sync.session.committedDocument, createRowId(rowId), createColumnId(columnId));
-      return record === undefined ? '' : cellScalarToDisplay(record.value);
-    },
-    committedCellKind: (rowId, columnId) => {
-      if (sync === undefined) {
-        return 'blank';
-      }
-      const record = getCell(sync.session.committedDocument, createRowId(rowId), createColumnId(columnId));
-      return record === undefined ? 'blank' : record.value.kind;
-    },
-    displayCell: (rowId, columnId) =>
-      sync === undefined ? '' : sync.view.cellDisplay(createRowId(rowId), createColumnId(columnId)),
-    // DD-033-2: base-layer が実際に描く display テキスト（raw→表示書式適用後）。canvas 文字は DOM から読めないため、
-    // 描画経路と同じ compiledDisplay.formatText を通した結果を E2E に露出する（判定は raw・描画は display の検証用）。
-    cellRenderText: (rowId, columnId) => {
-      if (sync === undefined) {
-        return '';
-      }
-      const raw = sync.view.cellDisplay(createRowId(rowId), createColumnId(columnId));
-      return compiledDisplay?.formatText(columnId, raw) ?? raw;
-    },
-    // DD-033-2: 列ヘッダーに描く見出し（キャプション指定列はキャプション・未指定列は列記号 A/B/…）。
-    columnHeaderText: (col) => {
-      const id = sync?.view.columnIdAt(col);
-      const caption = id === undefined ? undefined : compiledDisplay?.captionFor(String(id));
-      return caption ?? columnLabel(col);
-    },
-    // DD-064: 直前の描画で張った結合範囲（canvas の描画を DOM から読めないための E2E 観測用）。
-    mergedRanges: () => currentMerges().all().map((range) => ({ ...range })),
-    // DD-064 K4: 見出しの高さ（2段なら 48）。
-    headerHeight: () => headerHeight,
-    // DD-033-1（統合レビュー P3-1）: debug API（test-support）も readOnly では文書 Operation を送信しない。
-    // 行操作は submitToBackend を通らず session.submitLocalOperation 直呼びのため、素通しだと
-    // 「送信ゼロの構造的保証」の唯一の例外になる（perform* 先頭ガードの設計規約に合わせる）。
-    submitInsertRowsAfter: (afterRowId, newRowId) => {
-      if (sync === undefined) {
-        return;
-      }
-      if (readOnly) {
-        diag.emit('warn', 'readonly-blocked', 'readOnly: debug submitInsertRowsAfter を破棄');
-        return;
-      }
-      const op: InsertRowsOperation = {
-        type: 'insertRows',
-        afterRowId: afterRowId === null ? null : createRowId(afterRowId),
-        rows: [{ rowId: createRowId(newRowId) }],
-      };
-      sync.session.submitLocalOperation(op);
-    },
-    submitDeleteRow: (rowId) => {
-      if (sync === undefined) {
-        return;
-      }
-      if (readOnly) {
-        diag.emit('warn', 'readonly-blocked', 'readOnly: debug submitDeleteRow を破棄');
-        return;
-      }
-      const op: DeleteRowsOperation = { type: 'deleteRows', rowIds: [createRowId(rowId)] };
-      sync.session.submitLocalOperation(op);
-    },
-    simulateDrop: () => {
-      browserTransport?.dropForTest();
-    },
-    simulateReconnect: () => {
-      browserTransport?.resumeReconnectForTest();
-    },
-  };
-  debugRegistry.set(instance, debugApi);
-
-  function toAddress(cell: { rowId: RowId; columnId: ColumnId } | undefined): GridDebugCellAddress | null {
-    return cell === undefined ? null : { rowId: String(cell.rowId), columnId: String(cell.columnId) };
-  }
+  // ---- E2E 用 introspection（test-support 経由・区画⑧は mount/debug-api.ts）----
+  debugRegistry.set(
+    instance,
+    createDebugApi({
+      isStandalone,
+      headerHeight,
+      scroller,
+      diag,
+      selectionCtrl,
+      undoCtrl,
+      backend: () => sync,
+      editor: () => editor,
+      lastSessionEventType: () => lastSessionEvent?.type ?? '',
+      isFirstDataDrawn: () => firstDataDrawn,
+      isReadOnly: () => readOnly,
+      currentTransform,
+      display: () => compiledDisplay,
+      merges: currentMerges,
+      selectDropdown: () => selectDropdown,
+      datePicker: () => datePicker,
+      transport: () => browserTransport,
+    }),
+  );
 
   // ---- 起動（rAF ループ・tick interval・boot）----
   syncLayout();
@@ -4560,8 +4422,4 @@ function cellStatusMarksAt(store: CellStatusStore, backend: GridBackend, rowInde
     }
   }
   return marks;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
