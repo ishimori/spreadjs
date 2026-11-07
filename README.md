@@ -146,6 +146,35 @@ packages/
 
 fontはpxを含むCSS font shorthandです。Canvas描画・省略/折り返し幅・列幅の自動調整・セル入力欄に同じ指定を使い、文書値・選択・保存には影響しません。行高は従来どおり`rowHeights`（Reactは`initialRowHeights`）で指定し、折り返し行間は既存16pxです。Reactは設定値が変わると再mountします。今回の変更は利用側の既存DD-243-10で追跡し、ユーザー指示により新しいDDは起票しません。
 
+## セルの結合と2段の見出し（alpha.19）
+
+明細ごとに複数行（予算・実績＋見通し・差異など）を持つ表で、属性の列を行にまたがって 1 つのセルに見せ（`mergedCells`）、月の見出しを上期・下期でまとめる（`columnGroups`）ことができます（DD-064）。
+
+```tsx
+const mergedCells = useMemo(
+  () => details.flatMap((d) => ['no', 'item'].map((columnId) => ({ rowId: `${d.id}:budget`, columnId, rowSpan: 3 }))),
+  [details],
+);
+<NanairoSheetView
+  ref={ref}
+  mode="standalone"
+  columnOrder={columns}
+  frozenRowCount={0}
+  frozenColumnCount={2}
+  initialData={{ rows }}
+  mergedCells={mergedCells}
+  columnGroups={[
+    { caption: '上期', columnIds: ['m04', 'm05', 'm06', 'm07', 'm08', 'm09'] },
+    { caption: '下期', columnIds: ['m10', 'm11', 'm12', 'm01', 'm02', 'm03'] },
+  ]}
+/>
+```
+
+- 結合は表示の設定（view-local）で、結合したセルは読むだけです。値は左上のセルのもので、範囲の中は編集・消去できず、貼り付けは範囲のセルを飛ばします。コピーは左上に値・残りは空です。
+- 行を入れ直すとき（`ref.setData`）は、`mergedCells` も同じ commit で新しい行に合わせて変えてください。結合は次の描画の時の行に張るので、どちらが先でも構いません。React では値が変わっても開き直さず、grid の `setMergedCells` を呼びます（`mount` を直接使う場合は `instance.setMergedCells`）。
+- `frozenRowCount` の既定は 1（先頭のデータ行が固定）です。先頭の行から結合するときは `frozenRowCount: 0` にしてください。固定行・固定列の境界をまたぐ結合とまとまりは張れません。
+- 指定の誤り（未知の列など）は mount 時に `onError`（code=`merged-cells-invalid`／まとまりは `column-display-invalid`）、行が無い・重なる・行の挿入で壊れた結合は `onDiagnostic` の warn で分かります。細目は `CHANGELOG.md` の alpha.19 と DD-064 の `contract.md`。
+
 ## 開発の進め方
 
 本プロジェクトは **DD（設計文書）駆動** で進めます。いきなりコードを書かず、次のフローに従います。

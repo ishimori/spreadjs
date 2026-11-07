@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.18`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.19`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.19` | `alpha` | `0.1.0-experimental` | DD-064（広島 計画策定 K1〜K4）。セルの結合（`mergedCells`・`setMergedCells`）と 2 段の見出し（`columnGroups`） |
 | `0.1.0-alpha.18` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。選択式列に任意の検索入力（部分一致）を追加 |
 | `0.1.0-alpha.17` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。Canvas・編集欄の文字と罫線の外観設定 |
 | `0.1.0-alpha.16` | `alpha` | `0.1.0-experimental` | DD-061・DD-062・DD-063（DD-060 の範囲外の対応）。状態表示の色、共同編集モードの `setCellStatus`、確定前の検証 `validateCell` |
@@ -32,6 +33,58 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.19] - 2026-11-08
+
+### Added
+
+- **grid セルの結合（mount オプション `mergedCells`・`GridInstance.setMergedCells`・DD-064）**: 左上のセル（`rowId`・`columnId`）と
+  行数・列数（`rowSpan`・`columnSpan`・省略は 1）で範囲を指定すると、1 つのセルとして描く（背景・文字・書式・状態表示は左上のセル。
+  範囲の中のグリッド線と `rowBorders`・`columnBorders`・`defaultRowBorder` は描かない。文字は範囲の中に収め、収まらなければ …）。
+  両モード共通・**view-local**（文書・Operation・cell-commit・Undo は変わらない）。公開型 `GridMergedCell`。
+  - **読むだけ**: 範囲の中は編集開始・Delete／Backspace・候補欄・カレンダーを開かない。貼り付け・範囲の消去・cut は範囲のセルだけ
+    飛ばす（診断 `merged-cell-skipped`）。Undo／Redo・`setData`・`setRows`・リモートの変更は通す
+  - **選択・移動**: 範囲の中のクリック・`setActiveCell` は左上を選び、枠は範囲全体。矢印・Tab・Enter は範囲を 1 つのセルとして動く。
+    範囲の選択（Shift＋矢印・Shift＋クリック・ドラッグ）は結合を含むまで広がる。コピーは左上に値・残りは空。`cell-hover` は左上の
+    セルと範囲全体の `rect`
+  - **張る時**: 次の描画の時に、その時の行の並びで範囲の行 ID を覚えて張る（`setData` と `setMergedCells` は同じ処理の中なら
+    どちらを先に呼んでもよい）。範囲の上下に行が入っても一緒に動き、範囲の行が欠けた・間に行が入った結合は捨てる（`merged-cell-broken`）。
+    左上の行が無い・行が足りない間は描かない（`merged-cell-unresolved`・行が届けば張る）。固定行の境界をまたぐ・先の指定と重なる
+    結合は描かない（`merged-cell-conflict`）。`frozenRowCount` の既定は 1 なので、先頭の行から結合するときは `frozenRowCount: 0`
+  - 結合範囲の文字で行の高さを自動で伸ばさない（Excel と同じ）
+- **grid 2 段の見出し（mount オプション `columnGroups`・DD-064）**: `[{ caption, columnIds }]` で列のまとまりの名前を見出しの上の段に
+  出す（両モード共通・mount 時固定・表示だけ・見出しは 48px）。まとめていない列は 2 段ぶんの高さに名前。上の段のクリックは
+  `header-click` を出さない。公開型 `GridColumnGroup`。
+- **公開エラーコード `merged-cells-invalid`**: `mergedCells` の形の誤り（未知の列・右端を越える・固定列の境界をまたぐ・1×1・
+  span が 1 以上の整数でない・同じ左上の重複）で mount 時に fail-fast（config phase）。`setMergedCells` の形の誤りは throw せず、
+  その指定だけ捨てて診断 warn（同じ code）。`columnGroups` の形の誤りは既存の `column-display-invalid`。
+- **react**: `mergedCells` props（値が変わっても開き直さずに `setMergedCells` を呼ぶ・`readOnly` と同じ）と `columnGroups` props
+  （値が変われば開き直す）。
+
+### Changed
+
+- **`GridErrorCode` に `merged-cells-invalid` を追加**（union の拡張。`GridErrorCode` で網羅的に分岐している consumer は分岐を足す）。
+
+### Notes
+
+- 実 IME での確認（結合範囲の隣のセルへ矢印キーで移って入力を始める）は未実施。結合範囲は textarea を読み取り専用にするため
+  変換は始まらない設計（readOnlyColumns と同じ機構）。
+- 契約: `doc/DD/DD-064/contract.md`（DD のアーカイブ後は `doc/archived/DD/DD-064/contract.md`）。
+
+## [0.1.0-alpha.18] - 2026-10-26
+
+### Added
+
+- **選択式列の検索入力（`GridSelectColumnType.searchable`・nanairoware3 DD-243-10）**: `GridSelectColumnType.searchable?: boolean` を追加（既定 false・既存APIと共存、移行不要）。true の列は単一クリックでも開き、独立した検索入力で部分一致（NFKC・大小文字・空白を正規化）に絞る。検索文字そのものは保存せず、候補だけを既存の検証・競合検出経路で確定する。IME変換中・変換確定Enterで候補を確定しない。既定の前方一致の文字選択・自由入力の補完は維持。実OS IME・スクリーンリーダーは未受入れ。
+
+## [0.1.0-alpha.17] - 2026-10-26
+
+### Added
+
+- **表示の文字と罫線の設定（mount オプション `appearance`・nanairoware3 DD-243-10）**: 本文・見出しの font、列ごとの font、
+  グリッド線の色を初回 mount で指定できる（表示専用。省略時は本文 13px・見出し 12px のまま）。Canvas 描画・省略／折り返し幅・
+  列幅の自動調整・セル入力欄に同じ指定を使い、文書値・選択・保存には影響しない。React は同名 props（値が変われば開き直す）。
+  詳細は README「組み込み先の文字・罫線設定（alpha.17）」。
 
 ## [0.1.0-alpha.16] - 2026-10-22
 
@@ -720,7 +773,3 @@
 - **Tier 1 対応環境**: Windows Chrome / Edge のみ（ADR-0015 D2・CG-4）。他 OS / ブラウザは対象外（明示・非検証）。
 - **配布形態**: TS ソース配布を継続（`main: ./src/index.ts`）。consumer は TS を透過コンパイルできるビルド環境（vite 等）が前提。dist ビルド配布は Stage 2。
 - **registry 昇格**: private registry publish は Stage 2/子DD（package.json に `publishConfig` を足し `npm publish --tag alpha` へ切替可能な形で据え置き）。
-
-## 0.1.0-alpha.18 — 検索付き候補選択（nanairoware3 DD-243-10）
-
-`GridSelectColumnType.searchable?: boolean` を追加（既定 false・既存APIと共存、移行不要）。true の列は単一クリックでも開き、独立した検索入力で部分一致（NFKC・大小文字・空白を正規化）に絞る。検索文字そのものは保存せず、候補だけを既存の検証・競合検出経路で確定する。IME変換中・変換確定Enterで候補を確定しない。既定の前方一致の文字選択・自由入力の補完は維持。実OS IME・スクリーンリーダーは未受入れ。

@@ -1,6 +1,6 @@
 {
   "_doc": "機能カタログの単一データ源（DD-017-2 D2）。正本は doc/plan/phase1-dd-roadmap.md §4／stage2-backlog.md／roadmap §6。DD完了時に本ファイルを更新する（AGENTS.md ドキュメント更新義務）。status: available=提供中 / planned=開発予定 / out-of-scope=対象外。",
-  "updated": "2026-10-13",
+  "updated": "2026-11-08",
   "stage": {
     "current": "Stage 1「社内SDK Alpha」到達",
     "date": "2026-07-15"
@@ -186,6 +186,14 @@
       "source": "DD-036・DD-045・DD-047",
       "meta": "60×200 / 70×382 / 50,000×200行列・DPR 1/1.25/2 ／ unit・実ブラウザーE2E・性能検証",
       "demo": "./demo.html?scenario=matrix-view"
+    },
+    {
+      "id": "merged-cells",
+      "title": "セルの結合・2段の見出し",
+      "status": "available",
+      "summary": "明細ごとに複数行（予算・実績＋見通し・差異など）を持つ表で、属性の列を行にまたがって 1 つのセルに見せる（mergedCells＝左上のセルと行数・列数。実行中は setMergedCells で置き換え）。結合範囲は 1 つのセルとして描き（背景・文字・状態表示は左上・範囲の中の罫線なし）、クリック・矢印キー・範囲選択・コピー・貼り付けを範囲に合わせます。結合したセルは読むだけで、貼り付けは範囲のセルを飛ばします。行を入れ直しても次の描画の時の行に張り、範囲の上下の行の挿入には追従し、範囲の中の行が欠けたら外します。月の見出しを上期・下期でまとめる 2 段の見出し（columnGroups）も使えます。どちらも表示の設定（view-local）で、React では同名 props です。",
+      "source": "DD-064",
+      "meta": "単独・共同編集の両モード ／ unit・実ブラウザーE2E（クリック・キー・コピー・貼り付け・固定列・行の挿入）"
     },
     {
       "id": "formula",
