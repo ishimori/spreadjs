@@ -36,12 +36,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # DD-065: サイズのガードが push 前のコミット・PR のベースの baseline と比べるため
       - uses: actions/setup-node@v4
         with:
           node-version: 22 # engines.node ">=22"（D-002）
           cache: npm
       - run: npm ci
-      - run: npm run lint # eslint ＋ boundary lint（R1〜R7）
+      - run: npm run lint # eslint ＋ boundary lint（R1〜R7）＋ サイズのガード（DD-065）
+        env:
+          # サイズのガードの比較元（PR はベース・push は push 前のコミット。schedule・手動は空＝HEAD と比べる）
+          SIZE_GUARD_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
       - run: npm run typecheck
       - run: npm run typecheck:consumer-strict # DD-050: consumer の厳格な tsconfig（exactOptionalPropertyTypes・noUncheckedIndexedAccess）でも SDK ソースが通る
       - run: npm test # vitest 全件（tests/invariants・tests/contract 込み）

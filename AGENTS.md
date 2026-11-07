@@ -25,7 +25,7 @@ spreadjs — 業務Webアプリへ組み込む TypeScript製リアルタイム�
 | `npm run test` | 全 workspace の Vitest を一括実行 |
 | `npm run typecheck` | 全 workspace の `tsc --noEmit`（`types` パッケージは DOM lib なしで型検査） |
 | `npm run typecheck:consumer-strict` | consumer の厳格な tsconfig（`exactOptionalPropertyTypes`・`noUncheckedIndexedAccess`）で、Facade 3 つの入口から辿れる SDK ソースを型検査（DD-050。CI の checks にも入っている） |
-| `npm run lint` | ESLint（flat config・typescript-eslint recommended）を一括実行 |
+| `npm run lint` | ESLint（flat config・typescript-eslint recommended）＋境界の検査（`lint:boundary`）＋サイズのガード（`lint:size`・下の「サイズのガード」）を一括実行 |
 | `bash scripts/dev-start.sh` | playground(Vite :5885)＋collaboration-server(:9499) を同時起動（ポートは標準+712で他プロジェクトと非衝突。`--integration` で統合PoCシード付き） |
 | `bash scripts/dev-start.sh --showcase` | SDK紹介サイト・機能カタログ＋動作デモ(:5886)＋server(:9499・50k行シード＋永続化) を起動（DD-017-2。台本: `apps/showcase/README.md`。`--server-only` で server のみ） |
 | `bash scripts/dev-kill.sh` | 上記ポート(5885/5886/9499)で LISTEN 中のプロセスを全て kill（`--server` で 9499 のみ） |
@@ -40,6 +40,15 @@ spreadjs — 業務Webアプリへ組み込む TypeScript製リアルタイム�
 - 検証済みの同じ配布対象をpackする際は `scripts/release/build-release.sh --skip-verify` を使い、重複検証を避ける。生成後のmanifest・内容検査は省略しない。未検証の変更を含む状態で `--skip-verify` を使わない。
 - 文書だけの変更では文書整合性と差分を確認し、実行コードや配布内容に影響がなければSDK全体テストを追加しない。利用側アプリだけの変更でもSDK全体テストは不要。本節は既存の必須チェックやCIのゲートを免除しない。
 - この恒久ルールは本ファイルを正本とし、DDには個別の検証結果と未確認範囲を記録する。DDをアーカイブしても本ルールは維持する。
+
+## サイズのガード（DD-065）
+
+`npm run lint`（CI の checks でも走る）の中の `npm run lint:size` が、`packages/*/src` のテスト以外について**ファイル 1,000 行・関数の循環的複雑度 30** を超えていないかを見る。既存の超過は `scripts/size-guard/baseline.json` に記録してあり、**増やすと失敗**する。
+
+- 失敗したら、切り出して減らす。baseline に載っているファイル・関数へ機能を足すときは、先に別のファイルへ分けて空ける
+- 減らしたら `npm run lint:size -- --update-baseline` で減った値を固定する（固定しないと失敗する。このコマンドで増やす・足すことはできない）
+- baseline を上げる・項目を足すのは最後の手段。`baseline.json` のその項目に `"exception": { "dd": "DD-NNN", "reason": "…" }` を書き、その DD のログにも理由を 1 行残す。比較元（ローカルは HEAD、CI は push 前のコミット・PR のベース）より上がった・増えた項目に exception が無ければ失敗する
+- 規則と数え方の正本は `scripts/size-guard/measure.mjs`・`evaluate.mjs`。閾値を変えるときは DD で決める
 
 ## DD設定
 

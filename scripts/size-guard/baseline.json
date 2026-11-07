@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "files": {
+    "packages/collab/src/session.ts": {
+      "lines": 1046
+    },
+    "packages/grid/src/mount-controller.ts": {
+      "lines": 4567
+    },
+    "packages/render/src/base-layer.ts": {
+      "lines": 1107
+    },
+    "packages/server-hono/src/server.ts": {
+      "lines": 1935
+    }
+  },
+  "functions": {
+    "packages/formula/src/tokenizer.ts::tokenize": {
+      "complexity": 41
+    },
+    "packages/grid/src/mount-controller.ts::createGridController>addEventListener:pointerdown": {
+      "complexity": 31
+    },
+    "packages/grid/src/mount-controller.ts::createGridController>addEventListener:pointermove": {
+      "complexity": 38
+    },
+    "packages/grid/src/mount-controller.ts::createGridController>attachBackendRendering>interceptKeydown": {
+      "complexity": 62
+    }
+  }
+}

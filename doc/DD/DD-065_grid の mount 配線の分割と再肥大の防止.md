@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-08 | 2026-11-08 | 検討中 | 起票・Codex の計画レビュー反映済み。着手は DD-064 の完了後。論点1〜8 は Human Spec Gate 待ち |
+| 2026-11-08 | 2026-11-08 | 進行中 | 論点1〜8 を推奨案で確定（2026-11-08・ユーザー指示）。Phase 1 から実装中 |
 
 > アプローチ: 標準（挙動を変えない構造の変更。安全網は既存の回帰テストで、新しい振る舞いが無いため TDD・E2E 駆動の差分テンプレートは使わない）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない。公開 API も変えない）
@@ -10,7 +10,7 @@
 ```text
 Risk Class: A（キー入力・常駐 textarea・focus・選択の配線を動かし、1 つの DD で多くの状態の持ち主を変える。挙動・公開 API・protocol は変えない）
 Risk Triggers: focus/selection（キー入力の裁定と IME・backend の結線の移動）・状態の持ち主の変更（共有状態 62 個の置き場所）
-Human Spec Gate: required（論点1〜8）
+Human Spec Gate: passed＋delegated（2026-11-08・ユーザーが「コミットしてから、スタートしましょう」と指示。論点1〜8 を推奨案で確定）
 Codex: high（IME の状態機械・protocol・永続化のアルゴリズムは変えないため xhigh にしない）
 Manual Gate: T1（実 IME〔Microsoft IME〕で ime-manual-gate-ledger §2 の S1〜S5。正味 5〜10 分。クローズはブロックしない）
 External Review: なし
@@ -66,7 +66,7 @@ grid の mount 配線（`packages/grid/src/mount-controller.ts`）を機能ご�
 
 ## 決定事項
 
-未決（Human Spec Gate 待ち）。確定したら、論点表のどの案で確定したかをここに記す。
+論点1〜8 はすべて論点表の推奨案で確定（2026-11-08・ユーザー指示）。
 
 ## 受け入れ基準
 
@@ -90,12 +90,12 @@ grid の mount 配線（`packages/grid/src/mount-controller.ts`）を機能ご�
 
 ### Phase 1: 再肥大を止めるガード
 
-- [ ] `scripts/size-guard/`（新設）: `packages/*/src` のテスト以外について、ファイルの行数と関数の循環的複雑度を測り、論点5・6 の規則で判定する。匿名関数にも行番号に頼らない安定したキーを付ける（行がずれても同じ関数と分かること。例: 外側の関数名＋登録先のイベント名）
-- [ ] `scripts/size-guard/baseline.json`（新設）: 実施時の HEAD での違反（diagnosis §6 の 4 ファイル・4 関数）を記録する
-- [ ] `package.json`: `lint` にガードを足す（`lint:size`）。`.github/workflows/ci.yml`: 比較元のコミットを取れるようにする（checkout の履歴の深さなど）
-- [ ] ガードの単体テスト（fixture: 新しい違反・値の増加・減少・消えた項目・`baseline.json` の手での引き上げと項目の追加・例外〔DD 番号と理由〕あり／なし）
-- [ ] `AGENTS.md`: ガードの説明と、失敗したときの対応（切り出して空ける。baseline を上げるのは最後の手段で、DD 番号と理由が条件）
-- [ ] 🔬 機械検証: `npm run lint` → パス（baseline どおり）／ガードの単体テスト → パス
+- [x] `scripts/size-guard/`（新設）: `packages/*/src` のテスト以外について、ファイルの行数と関数の循環的複雑度を測り、論点5・6 の規則で判定する。匿名関数にも行番号に頼らない安定したキーを付ける（行がずれても同じ関数と分かること。例: 外側の関数名＋登録先のイベント名）
+- [x] `scripts/size-guard/baseline.json`（新設）: 実施時の HEAD での違反（diagnosis §6 の 4 ファイル・4 関数）を記録する
+- [x] `package.json`: `lint` にガードを足す（`lint:size`）。`.github/workflows/ci.yml`: 比較元のコミットを取れるようにする（checkout の履歴の深さなど）
+- [x] ガードの単体テスト（fixture: 新しい違反・値の増加・減少・消えた項目・`baseline.json` の手での引き上げと項目の追加・例外〔DD 番号と理由〕あり／なし）
+- [x] `AGENTS.md`: ガードの説明と、失敗したときの対応（切り出して空ける。baseline を上げるのは最後の手段で、DD 番号と理由が条件）
+- [x] 🔬 機械検証: `npm run lint` → パス（baseline どおり）／ガードの単体テスト → パス
 
 ### Phase 2: mount-controller の分割
 
@@ -144,3 +144,5 @@ T1（`doc/plan/ime-manual-gate-ledger.md` §1）。Phase 2 の後に、実 IME�
 - 採用: `baseline.json` の手での引き上げを検出できない → 論点5・Phase 1・受け入れ基準9 に比較元と例外の条件を足した
 - 採用: 共有状態の数え方が書き方しだいでごまかせる → 受け入れ基準4 を状態の持ち主の一覧で判定する形に変えた
 - 採用: flush を待っている最中の `destroy()` がどのテストにも守られていない → 守ること・受け入れ基準8・Phase 2 に破棄の契約とテストを足した
+- 着手（ユーザー指示「コミットしてから、スタートしましょう」）。論点1〜8 を推奨案で確定
+- Phase 1 完了: サイズのガード（`scripts/size-guard/`・`npm run lint:size`）。初期 baseline はファイル 4・関数 4（mount-controller.ts は DD-064 のレビュー対応後の 4,567 行）。ガードの単体テスト 20 件・`npm run lint` パス
