@@ -488,4 +488,75 @@ test.describe('DD-056 H12 読み取り専用の実行時切替・送り切り', 
       await alice.context.close();
     }
   });
+
+  // DD-065（Codex 計画レビュー P2）: mount 配線の分割の前に固定する。destroy() が判定タイマーを取り消し、待っている flush を
+  // stopped ですぐに解決すること（部品へ分けたときに破棄の結線が抜けると、タイムアウトまで待ったまま残る）。
+  test('⑫ flush を待っている最中に destroy() すると、結果がすぐに 1 回だけ返り、待ちのタイマーが残らない', async ({ browser }) => {
+    const alice = await openClient(browser, 'Alice');
+    try {
+      const page = alice.page;
+      await ih.simulateDrop(page);
+      await expect.poll(async () => (await ih.snapshot(page)).online).toBe(false);
+      await ih.selectCell(page, 1, 2);
+      await ih.plainTypeAndCommit(page, `destroy-${Date.now()}`);
+      expect(await pendingCount(page)).toBeGreaterThanOrEqual(1);
+      const observed = await page.evaluate(async () => {
+        type FlushResult = { status: string; pendingCount?: number };
+        const grid = (window as unknown as {
+          __gridInstance: { flush(o?: { timeoutMs?: number }): Promise<FlushResult>; destroy(): void };
+        }).__gridInstance;
+        const FLUSH_TIMEOUT_MS = 60_000;
+        const delays = new Map<number, number>();
+        const cleared = new Set<number>();
+        const originalSet = window.setTimeout;
+        const originalClear = window.clearTimeout;
+        window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+          const id = originalSet(handler, delay, ...args);
+          delays.set(id, delay ?? 0);
+          return id;
+        }) as typeof window.setTimeout;
+        window.clearTimeout = ((id?: number) => {
+          if (id !== undefined) {
+            cleared.add(id);
+          }
+          originalClear(id);
+        }) as typeof window.clearTimeout;
+        try {
+          let settled = 0;
+          const pending = grid.flush({ timeoutMs: FLUSH_TIMEOUT_MS }).then((result) => {
+            settled += 1;
+            return result;
+          });
+          await new Promise((resolve) => originalSet(resolve, 50));
+          const settledBeforeDestroy = settled;
+          const startedAt = performance.now();
+          grid.destroy();
+          const result = await pending;
+          const elapsedMs = performance.now() - startedAt;
+          await new Promise((resolve) => originalSet(resolve, 50));
+          const flushTimers = [...delays].filter(([, delay]) => delay === FLUSH_TIMEOUT_MS).map(([id]) => id);
+          return {
+            settledBeforeDestroy,
+            settled,
+            result,
+            elapsedMs,
+            flushTimerCount: flushTimers.length,
+            flushTimersCleared: flushTimers.every((id) => cleared.has(id)),
+          };
+        } finally {
+          window.setTimeout = originalSet;
+          window.clearTimeout = originalClear;
+        }
+      });
+      expect(observed.settledBeforeDestroy).toBe(0); // destroy の前は待っている（オフラインで未送信が残る）
+      expect(observed.result.status).toBe('stopped');
+      expect(observed.result.pendingCount).toBeGreaterThanOrEqual(1);
+      expect(observed.elapsedMs).toBeLessThan(1_000); // タイムアウト（60 秒）を待たない
+      expect(observed.settled).toBe(1);
+      expect(observed.flushTimerCount).toBe(1);
+      expect(observed.flushTimersCleared).toBe(true); // flush の待ちのタイマーが取り消されている
+    } finally {
+      await alice.context.close();
+    }
+  });
 });

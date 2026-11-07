@@ -125,3 +125,49 @@ DD-064 だけで +314 行、`interceptKeydown` の複雑度 51→62、直下の 
 | DD-064 | 241 | 1,650 | 972 | 476 |
 
 テストは SDK のソースの 0.9〜3.5 倍。分割で書きやすくなるのは、このうち配線の振る舞いを確かめる部分（今は E2E でしか書けない部分）。
+
+## 9. 区画ごとのテスト対応表（分割前・2026-11-08）
+
+分割前の E2E 全件: playground 289 件合格（4.6 分）。区画を守る spec を、その区画を切り出したときの回帰確認に使う。
+
+| 区画 | 守っている E2E（`apps/playground/e2e/*.spec.ts`） | 単体テスト（判定の純関数など） |
+|---|---|---|
+| ① キー入力の裁定 | readonly・readonly-columns・readonly-rows・cell-readonly-row-operations・column-types-select・date-column・undo-redo・undo-redo-collab・row-operations・merged-cells・range-selection | select-editor・date-editor・readonly-policy・undo-stack・row-operations・selection-controller |
+| ② 候補欄 | column-types-select・validate-cell・string-columns・readonly-switch-flush（⑧） | select-editor |
+| ③ 日付カレンダー | date-column・validate-cell・string-columns | date-editor |
+| ④ ポインター | resize・range-selection・column-types-link・header-click-cell-hover・merged-cells・column-types-format（自動幅） | resize-interaction・link-column・selection-controller |
+| ⑤ 読み取り専用 | readonly・readonly-columns・readonly-rows・cell-readonly-row-operations・readonly-switch-flush・react-facade-readonly | readonly-policy・flush-state |
+| ⑥ 起動と 2 モード | standalone・standalone-lifecycle・set-rows・undo-setdata-ordering・reload-bootstrap・multi-document・integration-scenario・cell-status・cell-status-collab・react-facade-lifecycle | standalone-session・session-sync・standalone-options |
+| ⑦ 編集の結線と命令 | clipboard・clipboard-standalone・paste-selection・undo-redo・undo-redo-collab・row-operations・row-rebase・validate-cell・wrap-cell-editing・authorize-operation・remote-change | clipboard-controller・range-ops・undo-stack・row-operations・commit-bridge |
+| ⑧ E2E 用の口 | すべての spec（観測に使う） | — |
+| ⑨ 描画 | borders・canvas-dpi・display-format・negative-number-format・row-backgrounds・text-display・frozen-panes・presence-frozen-panes・zz-*（性能） | render パッケージの描画テスト |
+| 命令 API | imperative-nav・react-facade-handle・row-rebase | — |
+| 購読と通知 | remote-change・presence-frozen-panes・react-facade | presence-list・remote-change |
+
+どれにも守られていなかった経路と、その扱い:
+
+- flush を待っている最中の `destroy()` → readonly-switch-flush に ⑫ を足した（今のコードで合格。`destroy()` から flush の解決を外すと 20 秒のタイムアウトで落ちることを確かめた）
+- 命令の保留キューの上限超え（`command-queue-overflow`）→ E2E では起こす口が無い（boot 前に 65 回の命令が要る）。命令 API を部品へ切り出すときに、コードはそのまま移し、同時に単体テストで固定する
+
+## 10. 状態の持ち主の一覧（分割前と、分割後の持ち主の予定）
+
+数え方は DD の受け入れ基準 4（値を書き換える `let` と、要素を足し引きするコンテナ）。いずれも今は `createGridController` 直下にあり、どの区画からも書き換えられる。分割後は持ち主の部品の中に閉じ込め、ほかの部品は持ち主の操作か読み取り用の関数を通す。
+
+| 分割後の持ち主（予定） | 状態 |
+|---|---|
+| 起動と 2 モード | `sync`・`standalone`・`collabSession`・`browserTransport`・`hasEverConnected`・`lastSessionEvent`・`resolvedDocumentId`・`intervalId`・`pendingStandaloneCalls`（配列） |
+| 設定の解釈 | `appearance`・`columnTypeRegistry`・`compiledFormats`・`compiledBackgrounds`・`compiledRowBackgrounds`・`compiledStatusColors`・`compiledBorders`・`compiledDisplay`・`compiledColumnGroups`・`rowBordersChecked`・`rowBackgroundsChecked` |
+| 結合 | `mergeColumnOrder`・`pendingMergedCells` |
+| 購読と通知 | `listeners`（Set）・`remoteChangeQueue`・`selfActiveCell`・`lastPresenceUsers`・`presenceRefreshScheduled` |
+| 描画 | `baseLayer`・`dpr`・`viewportWidth`・`viewportHeight`・`selection`・`firstDataDrawn`・`focusRequested`・`rafId` |
+| 命令 API | `pendingCommands` |
+| 読み取り専用 | `readOnly`・`readOnlyDeferred`・`deferredLockEditTarget`・`inDeferredLockCommit`・`editStateCheckTimer`・`flushWaiters`（Set）・`readOnlyRowsChecked` |
+| editor の結線 | `editor` |
+| 候補欄 | `selectDropdown` |
+| 日付カレンダー | `datePicker` |
+| ポインター | `resizeDrag`・`selectionDrag`・`linkCandidate`・`lastLinkFire`・`hoveredCell`・`hoveredStatus`・`searchSelectCandidate` |
+| 編集の結線と命令 | `pendingStandaloneUndoPatches` |
+| 組み立て | `destroyed`・`standaloneColumnSet` |
+| 無くす（持ち主の操作に置き換える） | `openSelectForActive`・`isSelectColumnIndex`・`isSearchableSelectColumnIndex`・`closeSelectDropdown`・`refreshSelectPlacement`・`openDateForActive`・`closeDatePicker`・`isDblclickDateColumnIndex`・`refreshDatePlacement` |
+
+合計 65（`let` 62・可変コンテナ 3）。
