@@ -36,7 +36,7 @@ import {
   singleCell,
   stepAcrossMerges,
 } from '@nanairo-sheet/selection';
-import type { CellRange, MergeIndex, MergeMoveDirection } from '@nanairo-sheet/selection';
+import type { CellRange, MergeMoveDirection } from '@nanairo-sheet/selection';
 import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
@@ -51,8 +51,7 @@ import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackg
 import { BorderConfigError, compileBorders, normalizeCanvasBorderColor, type CompiledBorders } from './border-rules';
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
-import { MergedCellsConfigError, describeMergeIssues, validateMergedCells } from './merged-cell-spec';
-import { createMergeRegistry } from './merged-cells';
+import { MergedCellsConfigError } from './merged-cell-spec';
 import { compileColumnGroups } from './column-groups';
 import type { CompiledColumnGroup } from './column-groups';
 import { shouldArmLinkCandidate } from './link-column';
@@ -139,6 +138,7 @@ import {
 import type { CellValidationSource } from './mount/constants';
 import { createDebugApi } from './mount/debug-api';
 import { createEvents, toGridEvent } from './mount/events';
+import { createMerges } from './mount/merges';
 
 
 interface ResolvedConfig {
@@ -267,9 +267,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledDisplay: CompiledColumnDisplay | undefined;
   // DD-064 K4: 2段の見出しのまとまり（列 index に解決済み・columnOrder 解決後に生成・fail-fast）。空なら 1 段。
   let compiledColumnGroups: readonly CompiledColumnGroup[] = [];
-  // DD-064: 結合の形の検査に使う列の並び（boot で確定）。未確定の間に呼ばれた setMergedCells は最後の 1 回だけ保留する。
-  let mergeColumnOrder: readonly string[] | undefined;
-  let pendingMergedCells: { readonly raw: unknown } | undefined;
   // 選択式ドロップダウンの制御は attachBackendRendering 内で backend/editor を閉じ込めた関数として定義し、
   // createGridController 直下の handler（dblclick・pointerdown・redraw）からは以下の ref 経由で呼ぶ。
   let openSelectForActive: (() => void) | undefined;
@@ -292,7 +289,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let selection: CellRange | null = null;
   // 矩形範囲選択の所有者（DD-020-1 案X）。activeCell の所有は editor-state-machine のまま・レンジのみここが持つ。
   // DD-064: 直前に描いた結合範囲で範囲を広げる（mergeRegistry は下で生成。呼ばれるのは配線後なので前方参照で足りる）。
-  const selectionCtrl = createSelectionController({ merges: () => mergeRegistry.index() });
+  const selectionCtrl = createSelectionController({ merges: () => merges.current() });
   // Undo/Redo スタックの所有者（DD-020-3）。確定単位（1 op）ごとに逆値を保持し補償 SetCells を生成する。
   const undoCtrl = createUndoController();
   // RC13（DD-052-4）: submitSetCells が捕捉した逆値パッチを、standalone の beforeCellCommit フックへ橋渡しする
@@ -328,46 +325,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // 診断ログ hook（opt-in・既定無出力）。GridEvent（consumer 契約）とは別系統の障害切り分け用。
   const diag = createDiagnosticSink(options.onDiagnostic);
-  // DD-064: 結合の指定と、描画の時に行へ張った結合（view-local）。張れない・壊れた理由は診断 warn（1 つの指定につき 1 回）。
-  const mergeRegistry = createMergeRegistry((code, message) => diag.emit('warn', code, message));
-  /** 直前の描画で張った結合（クリック・キー・コピー・描画はすべてこれで判定する＝画面と食い違わない）。 */
-  function currentMerges(): MergeIndex {
-    return mergeRegistry.index();
-  }
-  /** 張った結合が 1 つ以上あるか（無ければ結合の分岐は一切コストを持たない）。 */
-  function hasMergedCells(): boolean {
-    return mergeRegistry.index().size > 0;
-  }
-  /** 行・列 index が結合範囲のセルか（左上を含む）。 */
-  function isMergedCellIndex(rowIndex: number, colIndex: number): boolean {
-    return hasMergedCells() && currentMerges().at(rowIndex, colIndex) !== undefined;
-  }
-  /** RowId・ColumnId が結合範囲のセルか（SetCells の変更の判定用。今の行 Axis で index へ引く）。 */
-  function isMergedCellId(rowId: RowId, columnId: ColumnId): boolean {
-    if (!hasMergedCells() || sync === undefined) {
-      return false;
-    }
-    const row = sync.view.rowIndexOf(rowId);
-    const col = sync.view.colIndexOf(columnId);
-    return row >= 0 && col >= 0 && currentMerges().at(row, col) !== undefined;
-  }
-  /**
-   * 結合の指定を形の検査をして置き換える（setMergedCells・boot 前の保留の適用）。throw しない: 形の誤りの指定だけ捨てて
-   * 診断 warn（merged-cells-invalid）を出し、残りは張る。配列でなければ何も変えない。張るのは次の描画の時（contract §1.2）。
-   */
-  function applyMergedCellsCommand(raw: unknown, columnOrder: readonly string[]): void {
-    // 命令の引数は配列だけを受ける（Codex P2: undefined を mount オプションの「省略」と同じに扱うと、警告なしで全部外れる）。
-    const result = Array.isArray(raw) ? validateMergedCells(raw, columnOrder, frozenColCount) : { notArray: true, specs: [], issues: [] };
-    if (result.notArray) {
-      diag.emit('warn', 'merged-cells-invalid', 'setMergedCells: { rowId, columnId, rowSpan?, columnSpan? } の配列が必要（無視）');
-      return;
-    }
-    if (result.issues.length > 0) {
-      diag.emit('warn', 'merged-cells-invalid', `setMergedCells: 形の誤りの指定を捨てた（${describeMergeIssues(result.issues)}）`);
-    }
-    mergeRegistry.replace(result.specs);
-    sync?.view.markViewportDirty(); // 次の描画で張る（呼ぶ順によらず、その時の行の並びで張る）
-  }
+  // DD-064: 結合（view-local）は mount/merges.ts。張れない・壊れた理由は診断 warn（1 つの指定につき 1 回）。
+  const merges = createMerges({
+    diag,
+    backend: () => sync,
+    editor: () => editor,
+    frozenRowCount: () => frozenRowCount,
+    frozenColCount: () => frozenColCount,
+  });
+  const { current: currentMerges, any: hasMergedCells, isMergedCellIndex, isMergedCellId } = merges;
 
   // DD-033-1: 表示専用モード（readOnly）。両モード共通。boolean 単値ゆえ構成不整合が無く fail-fast なし。
   // TS 型（boolean|undefined）が正規経路を強制するが、JS 経路の非 boolean は `=== true` の厳密判定で編集可能側へ倒し、
@@ -488,15 +454,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * textarea のロックを取り直す。
    */
   function refreshMerges(): void {
-    if (resolveMerges()) {
+    if (merges.resolve()) {
       afterMergesChanged();
     }
-  }
-
-  /** DD-064: 結合を今の行 Axis に張り直すだけ（副作用なし）。張った結合が変わったら true。 */
-  function resolveMerges(): boolean {
-    const backend = sync;
-    return backend !== undefined && mergeRegistry.resolve(backend.view.rowAxis, frozenRowCount);
   }
 
   /** DD-064: 張った結合が変わった後の追従（wrap 列の自動行高・アクティブセルの左上への正規化・textarea のロック）。 */
@@ -512,25 +472,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       closeSelectDropdown?.();
       closeDatePicker?.();
     }
-    normalizeActiveIntoMerge();
+    merges.normalizeActiveCell();
     syncCellLock();
-  }
-
-  /**
-   * DD-064: アクティブセルが結合範囲の中（左上以外）なら左上へ移す（Navigation かつ変換中でないときだけ・I-3）。
-   * 常駐 textarea へフォーカスは移さない（ページの他の入力欄からフォーカスを奪わない）。移したら true。
-   */
-  function normalizeActiveIntoMerge(): boolean {
-    if (editor === undefined || !hasMergedCells() || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
-      return false;
-    }
-    const active = editor.session.getActiveCell();
-    const anchor = mergeAnchorOf(currentMerges(), active);
-    if (anchor.row === active.row && anchor.col === active.col) {
-      return false;
-    }
-    editor.pointerdownCell(anchor, { focus: false });
-    return true;
   }
 
   function redraw(): void {
@@ -1020,7 +963,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     // DD-064: 再ベースの前に結合を新しい行 Axis へ張り直す（古い索引のままだと、再ベース先の正規化が古い行 index で左上を
     // 選び、挿入された別の行へ寄せてしまう）。追従（正規化・ロック）は再ベースの後に行う。
-    const mergesChanged = resolveMerges();
+    const mergesChanged = merges.resolve();
     // rowAxis 再構築後に activeCell/選択レンジを RowId で新 index へ引き直す（表示 index ずれの是正）。
     applyRebaseState(rebase);
     if (mergesChanged) {
@@ -2076,21 +2019,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-064 K4: 2段の見出しのまとまり（形の誤りは DisplayConfigError → column-display-invalid）。
       compiledColumnGroups = compileColumnGroups(options.columnGroups, columnOrder, frozenColCount);
       // DD-064: mount オプションの結合（形の誤りは 1 件でも fail-fast → merged-cells-invalid）。行に張るのは最初の描画の時。
-      const mountMerges = validateMergedCells(options.mergedCells, columnOrder, frozenColCount);
-      if (mountMerges.notArray) {
-        throw new MergedCellsConfigError('mergedCells: { rowId, columnId, rowSpan?, columnSpan? } の配列が必要');
-      }
-      if (mountMerges.issues.length > 0) {
-        throw new MergedCellsConfigError(describeMergeIssues(mountMerges.issues));
-      }
-      mergeRegistry.replace(mountMerges.specs);
-      mergeColumnOrder = columnOrder;
-      // boot 前に呼ばれた setMergedCells（最後の 1 回）を、mount オプションの後に適用する（呼んだ側の指定が勝つ）。
-      if (pendingMergedCells !== undefined) {
-        const pending = pendingMergedCells;
-        pendingMergedCells = undefined;
-        applyMergedCellsCommand(pending.raw, columnOrder);
-      }
+      // boot 前に呼ばれた setMergedCells（最後の 1 回）は、この後に適用する（呼んだ側の指定が勝つ）。
+      merges.applyMountOption(options.mergedCells, columnOrder);
       return true;
     } catch (error) {
       // DD-027-1/2: columnTypes 不正 ／ DD-027-3: columnFormats 不正 は column-types-invalid へ、
@@ -3636,7 +3566,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         }
         // DD-064: 移動の結果（編集中の Enter・Tab・矢印での確定と移動を含む）が結合範囲の中なら左上へ寄せる。寄せた先の
         // onChange（入れ子）が以下を済ませるので、ここでは何もしない。
-        if (normalizeActiveIntoMerge()) {
+        if (merges.normalizeActiveCell()) {
           return;
         }
         syncCellLock(); // DD-035 R4 / DD-036 C3: activeCell の列・行に応じて textarea の readOnly 属性を同期（非 composing 時のみ）
@@ -4177,12 +4107,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (destroyed) {
         return;
       }
-      const raw: unknown = mergedCells;
-      if (mergeColumnOrder === undefined) {
-        pendingMergedCells = { raw };
-        return;
-      }
-      applyMergedCellsCommand(raw, mergeColumnOrder);
+      merges.setFromCommand(mergedCells);
     },
     insertRows(options: { readonly afterRowId: string | null; readonly count?: number }) {
       performInsertRows(options.afterRowId, options.count ?? 1);
