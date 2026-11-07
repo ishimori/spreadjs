@@ -352,7 +352,7 @@ MVPは「業務で使える最小範囲」であり、単なるデモではな�
 | ADR-016 | Proposed | 1文書1Coordinator | 全順序を単純化し、分散競合を回避 | Phase 1開始前 |
 | ADR-017 | Proposed | Custom Elementを標準UI境界にする | React以外からも組込可能 | Phase 2開始前 |
 | ADR-018 | Open | 並べ替え・フィルターの共有／個人状態 | 共同編集UXに直接影響 | Phase 3開始前 |
-| ADR-019 | Open | セル結合の初期制約 | 選択・貼付・共同編集の複雑性 | Phase 4開始前 |
+| ADR-019 | Open | セル結合の初期制約（**表示のための結合〔view-local・consumer 指定・読むだけ〕は DD-064 で先行提供**。文書の結合〔MergeCells〕の初期制約は未決） | 選択・貼付・共同編集の複雑性 | Phase 4開始前 |
 | ADR-020 | Accepted | 大量Operationのinline／参照方式（Stage 2=inline＋セル数上限100,000・参照方式は不採用。`doc/adr/0020-*.md`・DD-020） | 貼り付けとWebSocket上限 | 確定済み（2026-07-17・DD-020） |
 | ADR-021 | Open | 初期アクセシビリティ範囲 | Canvas固有の制約 | Phase 1開始前 |
 | ADR-022 | Proposed | コアはゼロランタイム依存を原則とする | 長期保守と制御権 | Phase 0終了時 |
@@ -2047,7 +2047,7 @@ No-Go／再設計：
 | D-14 | Filter共有性 | 個人表示を第一候補 | Phase 3開始前 |
 | D-15 | Sort共有性 | 明示的共有Operation候補 | Phase 3開始前 |
 | D-16 | 行高・列幅共有性 | 文書共有を第一候補 | Phase 3開始前 |
-| D-17 | Merge削除規則 | 破壊時自動解除候補 | Phase 4開始前 |
+| D-17 | Merge削除規則 | 破壊時自動解除候補（表示のための結合〔DD-064〕は、張った範囲の行が欠けた・間に行が入ったら捨てる＝解除で先行） | Phase 4開始前 |
 | D-18 | アクセシビリティ範囲 | Keyboard＋基本ARIA | Phase 1開始前 |
 | D-19 | Operation保持期間 | 監査要件確認後 | 本番設計前 |
 | D-20 | 文書sharding | single owner＋sticky | スケール試験前 |

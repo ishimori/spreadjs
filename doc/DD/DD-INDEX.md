@@ -6,7 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-064 | セルの結合（consumer 駆動・計画策定の入力シート） | 検討中 | consumer 駆動（hiroshima-keikaku DD-001-15）。要件正本は hiroshima-keikaku `doc/DD/DD-001-15/sdk-requirements.md` の K1〜K4。範囲（論点1〜6）は Human Spec Gate 待ち |
+| DD-064 | セルの結合（consumer 駆動・計画策定の入力シート） | 進行中 | consumer 駆動（hiroshima-keikaku DD-001-15）。要件正本は hiroshima-keikaku `doc/DD/DD-001-15/sdk-requirements.md` の K1〜K4。論点1〜12 を推奨案で確定（2026-11-08・ユーザー指示）。実装中 |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
