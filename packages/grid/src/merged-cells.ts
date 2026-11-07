@@ -150,6 +150,9 @@ export function createMergeRegistry(warn: MergeDiagnosticSink): MergeRegistry {
         }
         const { spec } = entry;
         let top: number;
+        // まだ張っていない指定の、今の並びで範囲に入る行（固定行の境界・重なりの判定を通って張る時にだけ覚える。
+        // Codex P2: 判定の前に覚えると、一度も張っていない結合まで後の並び替えで「壊れた」として捨ててしまう）。
+        let fresh: RowId[] | null = null;
         if (entry.boundIds === null) {
           const anchor = rowAxis.getIndex(createRowId(spec.rowId));
           if (anchor < 0 || anchor + spec.rowSpan > rowCount) {
@@ -163,11 +166,10 @@ export function createMergeRegistry(warn: MergeDiagnosticSink): MergeRegistry {
             );
             continue;
           }
-          const ids: RowId[] = [];
+          fresh = [];
           for (let k = 0; k < spec.rowSpan; k += 1) {
-            ids.push(rowAxis.getId(anchor + k));
+            fresh.push(rowAxis.getId(anchor + k));
           }
-          entry.boundIds = ids;
           top = anchor;
         } else {
           top = contiguousTop(rowAxis, entry.boundIds);
@@ -200,6 +202,9 @@ export function createMergeRegistry(warn: MergeDiagnosticSink): MergeRegistry {
         if (overlaps(range)) {
           warnOnce(entry, 'overlap', 'merged-cell-conflict', `mergedCells: 先の指定の結合と重なるため描かない（${label(spec)}）`);
           continue;
+        }
+        if (fresh !== null) {
+          entry.boundIds = fresh; // 張る時に範囲の行 ID を覚える（以後はこの行で持つ・固定 ID）
         }
         for (let row = range.rowStart; row < range.rowEnd; row += 1) {
           const list = occupied.get(row);

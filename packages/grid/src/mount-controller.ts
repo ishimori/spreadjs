@@ -367,7 +367,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * 診断 warn（merged-cells-invalid）を出し、残りは張る。配列でなければ何も変えない。張るのは次の描画の時（contract §1.2）。
    */
   function applyMergedCellsCommand(raw: unknown, columnOrder: readonly string[]): void {
-    const result = validateMergedCells(raw, columnOrder, frozenColCount);
+    // 命令の引数は配列だけを受ける（Codex P2: undefined を mount オプションの「省略」と同じに扱うと、警告なしで全部外れる）。
+    const result = Array.isArray(raw) ? validateMergedCells(raw, columnOrder, frozenColCount) : { notArray: true, specs: [], issues: [] };
     if (result.notArray) {
       diag.emit('warn', 'merged-cells-invalid', 'setMergedCells: { rowId, columnId, rowSpan?, columnSpan? } の配列が必要（無視）');
       return;
@@ -598,6 +599,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (wrapEnabled && sync !== undefined) {
       sync.view.recomputeAllAutoRowHeights();
       syncSpacer();
+    }
+    // Codex P2: 開いている候補欄・カレンダーのセルが結合範囲になったら閉じる（開いたままだと確定で読むだけのセルへ書ける）。
+    // どちらもアクティブセル（編集中は編集セル）に開くので、アクティブセルで判定する。確定の時にも対象を確かめる（二重の防御）。
+    const active = editor?.session.getActiveCell();
+    if (active !== undefined && isMergedCellIndex(active.row, active.col)) {
+      closeSelectDropdown?.();
+      closeDatePicker?.();
     }
     normalizeActiveIntoMerge();
     syncCellLock();
@@ -1357,8 +1365,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
       isReadOnlyColumnIndex(active.col) ||
       isReadOnlyRowIndex(active.row) ||
       isReadOnlyCellIndex(active.row, active.col) ||
-      isMergedCellIndex(active.row, active.col)
+      isActiveCellMergedForNewInput()
     );
+  }
+  /**
+   * DD-064: アクティブセルが結合範囲にあって、新しい入力を止める状態か（Navigation かつ変換中でないときだけ true）。
+   * 結合は実行中に足せる（setMergedCells）ので、足す前に始まった編集・変換（IME）は終わるまで止めない（Codex P1: 変換中に
+   * 結合を足すと、論理ロックが compositionend・最終 input まで捨て、変換が終わらなくなる）。終わって Navigation に戻ると
+   * onChange が左上へ移し、ここが true になってロックされる。
+   */
+  function isActiveCellMergedForNewInput(): boolean {
+    if (editor === undefined || !hasMergedCells() || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
+      return false;
+    }
+    const active = editor.session.getActiveCell();
+    return isMergedCellIndex(active.row, active.col);
   }
   /**
    * 読み取り専用のアクティブセルで編集 UI（候補欄・カレンダー）を止めたときの診断（DD-064: 結合範囲なら専用の code）。
@@ -3282,6 +3303,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
         cancelSelect();
         return;
       }
+      // DD-064（Codex P2）: 開いている間に対象セルが結合範囲になったら確定しない（結合範囲は読むだけ）。候補欄は閉じ、
+      // 編集中の値はそのまま残す（readOnly と同じ扱い）。
+      if (isMergedCellId(selectOpenTarget.rowId, selectOpenTarget.columnId)) {
+        diag.emit('info', 'merged-cell-blocked', 'mergedCells: 結合範囲になったセルへの候補の確定を抑止');
+        cancelSelect();
+        return;
+      }
       const target = selectOpenTarget; // Escape 投入より前に確保する（以降の副作用で null 化されても安全）
       // DD-037: suggest モード（編集中の候補リスト）から候補をクリックで確定するときは、先に編集セッションを
       // 取り消す。そうしないと編集中の draft が後から commit されて候補の確定を上書きしてしまう。
@@ -3415,6 +3443,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // DD-056 H12: 表示専用（変換の終わり待ちを含む）では確定しない（confirmSelect と同じ。開いた後に切り替わった場合の防御）。
       if (readOnly) {
         diag.emit('info', 'readonly-blocked', 'readOnly: 日付の確定を抑止');
+        cancelDate();
+        return;
+      }
+      // DD-064（Codex P2）: 開いている間に対象セルが結合範囲になったら確定しない（confirmSelect と同じ）。
+      if (isMergedCellId(dateOpenTarget.rowId, dateOpenTarget.columnId)) {
+        diag.emit('info', 'merged-cell-blocked', 'mergedCells: 結合範囲になったセルへの日付の確定を抑止');
         cancelDate();
         return;
       }

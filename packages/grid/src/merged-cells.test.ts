@@ -155,6 +155,29 @@ describe('createMergeRegistry（描画の時の解決）', () => {
     expect(diagnostics.map((d) => d.code)).toEqual(['merged-cell-conflict', 'merged-cell-conflict']);
   });
 
+  it('固定行の境界・重なりで張らなかった結合は行 ID を覚えず、条件が解ければ今の並びで張る（Codex P2）', () => {
+    const { registry, diagnostics } = setup();
+    registry.replace(specsOf([{ rowId: 'r0', columnId: 'no', rowSpan: 2 }]));
+    registry.resolve(axisOf(['r0', 'r1', 'r2']), 1); // 固定 1 行の境界をまたぐ → 張らない
+    expect(registry.index().size).toBe(0);
+    // 上に行が入って r0 が固定行の下へ動き、r0 の次が別の行になった → 古い [r0, r1] に縛られず、今の並びで張る。
+    expect(registry.resolve(axisOf(['top', 'r0', 'middle', 'r1']), 1)).toBe(true);
+    expect(registry.index().all()).toEqual([{ rowStart: 1, rowEnd: 3, colStart: 0, colEnd: 1 }]);
+    expect(diagnostics.map((d) => d.code)).toEqual(['merged-cell-conflict']);
+
+    // 重なりで描かなかった結合も、先の結合が壊れて捨てられたら今の並びで張る。
+    const second = setup();
+    second.registry.replace(specsOf([
+      { rowId: 'r0', columnId: 'no', rowSpan: 3 },
+      { rowId: 'r1', columnId: 'no', rowSpan: 2 },
+    ]));
+    second.registry.resolve(axisOf(['r0', 'r1', 'r2', 'r3', 'r4']), 0);
+    expect(second.registry.index().all()).toEqual([{ rowStart: 0, rowEnd: 3, colStart: 0, colEnd: 1 }]);
+    second.registry.resolve(axisOf(['r0', 'r1', 'r3', 'r4']), 0); // r2 が消えて先の結合は壊れる
+    expect(second.registry.index().all()).toEqual([{ rowStart: 1, rowEnd: 3, colStart: 0, colEnd: 1 }]);
+    expect(second.diagnostics.map((d) => d.code)).toEqual(['merged-cell-conflict', 'merged-cell-broken']);
+  });
+
   it('同じ指定を渡し直しても、張れない理由の warn は出し直さない', () => {
     const { registry, diagnostics } = setup();
     const specs = specsOf([{ rowId: 'missing', columnId: 'no', rowSpan: 2 }]);

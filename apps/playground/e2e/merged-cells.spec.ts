@@ -47,6 +47,7 @@ interface MergeWindow {
     mergedRanges(): Range4[];
     selectionRange(): Range4 | null;
     headerHeight(): number;
+    selectOpen(): boolean;
   };
 }
 
@@ -303,10 +304,68 @@ test('AC5: 形の誤りは mount で error、setMergedCells の誤り・重な�
   expect(codes).toContain('merged-cell-conflict');
   expect(codes).toContain('merged-cell-unresolved');
 
+  // 命令に配列でない値（undefined）を渡しても、警告して今の結合を保つ（Codex P2: mount の「省略」と区別する）。
+  const beforeUndefined = (await diagnosticCodes(page)).filter((c) => c === 'merged-cells-invalid').length;
+  await setMerged(page, undefined);
+  expect(await mergedRanges(page)).toEqual([{ rowStart: 1, rowEnd: 4, colStart: 1, colEnd: 2 }]);
+  expect((await diagnosticCodes(page)).filter((c) => c === 'merged-cells-invalid').length).toBe(beforeUndefined + 1);
+
   // 結合の行を入れ直しで消す → 壊れたとして捨てる。
   await reinject(page, rowsOf(20, SEED_VALUES, 'x'));
   expect(await mergedRanges(page)).toEqual([]);
   expect(await diagnosticCodes(page)).toContain('merged-cell-broken');
+});
+
+test('Codex P1: 変換中のセルを含む結合を足しても、変換を終えて確定できる（新しい入力だけを止める）', async ({ page }) => {
+  await open(page, 'frozenrows=0&frozencols=0');
+  await reinject(page, rowsOf(20, SEED_VALUES));
+  await clickCell(page, 5, 1);
+  await sa.composeOpen(page, 'あ');
+  await expect.poll(async () => sa.isComposing(page)).toBe(true);
+  await setMerged(page, [{ rowId: 'r4', columnId: 'col-b', rowSpan: 2 }]); // 変換中のセル（行 5）を含む
+  expect(await mergedRanges(page)).toEqual([{ rowStart: 4, rowEnd: 6, colStart: 1, colEnd: 2 }]);
+  // 変換を終える（compositionend → 最終 input）。論理ロックが捨てると変換中のまま残る。
+  await page.evaluate(() => {
+    const ta = document.querySelector('textarea.int-cell-editor');
+    if (!(ta instanceof HTMLTextAreaElement)) {
+      throw new Error('int-cell-editor が見つからない');
+    }
+    ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'あ', bubbles: true }));
+    ta.value = 'あ';
+    ta.dispatchEvent(new InputEvent('input', { inputType: 'insertCompositionText', data: 'あ', isComposing: false, bubbles: true }));
+    ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', isComposing: false, bubbles: true }));
+  });
+  await expect.poll(async () => sa.isComposing(page)).toBe(false);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => sa.displayCell(page, 'r5', 'col-b')).toBe('あ');
+  // 確定後は新しい入力を止める（結合の中へ戻ったら左上・印字キーで編集が始まらない）。
+  await clickCell(page, 5, 1);
+  await expectActive(page, 4, 1);
+  await page.keyboard.type('x');
+  expect(await sa.draft(page)).toBe('');
+});
+
+test('Codex P2: 開いている候補欄のセルが結合範囲になったら閉じ、結合セルへ書かない', async ({ page }) => {
+  await open(page, `frozenrows=0&frozencols=0&select=${encodeURIComponent('col-b:A|B|C')}`);
+  await reinject(page, rowsOf(20, SEED_VALUES));
+  await clickCell(page, 5, 1);
+  await page.keyboard.press('F2');
+  await expect.poll(async () => page.evaluate(() => (window as unknown as MergeWindow).__integrationTestApi?.selectOpen() ?? false)).toBe(true);
+  const commitsBefore = await page.evaluate(
+    () => ((window as unknown as MergeWindow).__standalone?.events ?? []).filter((e) => e.type === 'cell-commit').length,
+  );
+  await setMerged(page, [{ rowId: 'r4', columnId: 'col-b', rowSpan: 2 }]);
+  await expect.poll(async () => page.evaluate(() => (window as unknown as MergeWindow).__integrationTestApi?.selectOpen() ?? false)).toBe(false);
+  await expectActive(page, 4, 1);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  expect(await sa.displayCell(page, 'r5', 'col-b')).toBe('');
+  expect(await sa.displayCell(page, 'r4', 'col-b')).toBe('下');
+  expect(
+    await page.evaluate(
+      () => ((window as unknown as MergeWindow).__standalone?.events ?? []).filter((e) => e.type === 'cell-commit').length,
+    ),
+  ).toBe(commitsBefore);
 });
 
 test('AC6: 固定列の中の結合を縦・横に動かしても崩れず、pane の外（スクロール側・見出し）へ描き漏れない', async ({ page }) => {

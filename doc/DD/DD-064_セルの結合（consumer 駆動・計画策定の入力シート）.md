@@ -84,8 +84,8 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 - [x] `packages/grid`: `mergedCells`・`setMergedCells`・`columnGroups`（検証・診断・エラーコード）、結合の解決（描画の時・行 ID で保持・壊れたら捨てる）、選択・移動・クリック・ホバーの正規化、入口の抑止、貼り付け・消去・cut のスキップ、コピー、自動の行高からの除外、見出しの高さ・クリック・列幅の変更
 - [x] `packages/react`: `mergedCells`（値の変化で `setMergedCells`）・`columnGroups`（識別系）の写像
 - [x] playground（`standalone.html` の URL 指定）と E2E（結合・2段の見出し）
-- [ ] 🔬 機械検証: 対象の unit・E2E → 全パス
-- [ ] Codex レビュー（high）を依頼し、指摘を仕分けて直す（ユーザー指示）
+- [x] 🔬 機械検証: 対象の unit・E2E → 全パス（unit 1,585 件・E2E 全件 287 件・showcase 5 件）
+- [x] Codex レビュー（high）を依頼し、指摘を仕分けて直す（ユーザー指示）→ 4 件すべて採用して修正（ログ 2026-11-08）
 
 ### Phase 3: 配布
 - [ ] 配布の前の検証（typecheck・typecheck:consumer-strict・lint・test・build）を1回通し、alpha を作って consumer へ渡す
@@ -118,3 +118,16 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 - 機械検証: unit 151 ファイル・1,585 件 green（`--testTimeout=40000`・初回 listen の環境制約）。typecheck・consumer-strict・lint（boundary 含む）green。facade の公開 .d.ts スナップショットを更新（追加のみ。`GridErrorCode` に `merged-cells-invalid`）。E2E `merged-cells.spec.ts` 8 件 green。証跡 `test-results/dd-evidence/DD-064/`（ac1・ac6・ac9 の画面）
 - E2E 全件の1回目は、実行中に mount-controller を直したため Vite の再読み込みで3件が「実行コンテキストが消えた」で落ちた（コードの不具合ではない）→ 編集を止めて流し直し
 - 観察（別件・未調査）: アクティブセルが行0のときに scrollTop を代入して行0を隠すと、スクロールが0へ戻る（アクティブセルを行10へ移すと戻らない）。結合の有無によらず起きる既存の挙動。AC6 の E2E はアクティブセルを固定列の行10へ置いて避けた
+- E2E 全件を流し直して 287 件 green（3.9 分・性能の spec の frameP95 も変わらず 16.7ms 前後）。showcase E2E 5 件 green。実装をコミット（85018dc。README・CHANGELOG・機能カタログは版上げと一緒に配布のコミットへ回した）
+- Codex レビュー（high）を 85018dc に依頼（依頼書 `DD-064/codex-review-request.md`。評価基準は選択・移動の正規化・解決のタイミング・読むだけの抜け・描画の漏れ・既存挙動の非破壊）
+- Codex の結果（`DD-064/codex-review-result.md`・P1×1・P2×3）。到達性×実害で仕分け、**4 件とも採用**（どれも契約との食い違いか、変換・候補欄の実害があり、直すのも小さい）:
+
+  | # | 指摘 | 判断 | 対応 |
+  |---|---|---|---|
+  | P1 | 変換中のセルを含む結合を `setMergedCells` で足すと、論理ロック（`isInputLocked`）が compositionend・最終 input まで捨て、変換が終わらなくなる | 採用（操作不能・IME） | 結合の入口抑止を「新しい入力」だけにした（`isActiveCellMergedForNewInput`＝Navigation かつ変換中でない間）。進行中の編集・変換は終わらせて確定を通し、Navigation に戻ったら左上へ移してロック |
+  | P2 | 候補欄を開いた後にそのセルを結合すると、候補欄が残り、確定で結合セルへ書ける（カレンダーも同じ） | 採用（K3 が破れる） | 結合が変わったときアクティブセルが結合範囲なら候補欄・カレンダーを閉じる。確定（`confirmSelect`・`confirmDate`）でも対象が結合範囲なら断る（`merged-cell-blocked`） |
+  | P2 | 固定行の境界・重なりで張らなかった結合の行 ID を先に覚えるため、後の並び替えで一度も張っていない結合が「壊れた」として捨てられる | 採用（契約 §1.2 と食い違い） | 行 ID を覚えるのを、判定を通って張る時へ移した |
+  | P2 | `setMergedCells(undefined)` が mount の「省略」と同じ分岐を通り、警告なしで全部外れる | 採用（契約 §1.1 と食い違い） | 命令は配列だけを受け、配列でなければ warn して今の結合を保つ |
+
+  回帰テスト: E2E に「変換中に結合を足しても確定できる」「開いている候補欄が閉じて書かない」、AC5 に `undefined`、unit に「張らなかった結合は今の並びで張る」を足した。**4 件とも、修正を外す（stash）と落ち、戻すと通る**ことを確かめた。契約 §1.1・§1.2・§2 に追記
+- 別件（未対応・記録のみ）: P1 と同じ「論理ロックが進行中の変換の終わりのイベントを捨てる」形は、DD-052-3 の行データのセル単位 readOnly を変換中に `setRows` で付けた場合や、変換中に行の構造変更でアクティブセルの index が読み取り専用の行を指した場合にも起こりうる（どちらも結合とは無関係・まれ）。要望・不具合の報告が出たら別 DD で、論理ロックを「新しい入力だけ」に揃える
