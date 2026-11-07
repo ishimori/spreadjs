@@ -7,7 +7,7 @@
 // （再mountで leak しない・AC2）④E2E 用 introspection は debugRegistry 経由（test-support）で露出する。
 
 import { SETCELLS_MAX_CELLS, cloneCellScalar, displayRowOrder, getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
-import type { DeleteRowsOperation, InsertRowsOperation, SetCellsChange, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
+import type { DeleteRowsOperation, InsertRowsOperation, SetCellsOperation, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
 import type { ClientSession, Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
@@ -80,20 +80,11 @@ import type { ClipboardDocumentPort, PasteRect } from './clipboard-controller';
 import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from './resize-interaction';
 import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
-import {
-  partitionReadOnlyCellChanges,
-  partitionReadOnlyColumnChanges,
-  partitionReadOnlyRowChanges,
-  shouldSuppressReadonlyKey,
-  touchesReadOnlyCell,
-  touchesReadOnlyColumn,
-  touchesReadOnlyRow,
-} from './readonly-policy';
+import { shouldSuppressReadonlyKey, touchesReadOnlyCell, touchesReadOnlyColumn, touchesReadOnlyRow } from './readonly-policy';
 import { decideRowStructureKey, rebaseRowIndex, resolveDeleteTargets } from './row-operations';
 import { createUndoController, decideUndoRedoKey } from './undo-stack';
 import type { UndoPatch } from './undo-stack';
 import { GridBootError, toCompensationConflictCode } from './error-codes';
-import { decideFlush, resolveFlushTimeout, timeoutResult } from './flush-state';
 import type { GridConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
@@ -138,23 +129,14 @@ import {
 import type { CellValidationSource } from './mount/constants';
 import { createDebugApi } from './mount/debug-api';
 import { createEvents, toGridEvent } from './mount/events';
+import { createCellLock } from './mount/cell-lock';
 import { createMerges } from './mount/merges';
+import { createReadOnlySwitch } from './mount/readonly-switch';
 
 
 interface ResolvedConfig {
   documentId: string;
   columnOrder: string[];
-}
-
-/** GridInstance.flush の待ち合わせ 1 件（DD-056 H12）。 */
-interface FlushWaiter {
-  readonly resolve: (result: GridFlushResult) => void;
-  timer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * 呼んだ時点の編集（ime-editing-session の editingTarget の参照）。確定・取消・別セルへの移動で編集が入れ替われば null にする
-   * （後から始まった別の編集には触れない・Codex 実装レビュー P2）。null なら確定を待つ編集はない。
-   */
-  editTarget: object | null;
 }
 
 /** DD-064: キー → 結合を 1 セルとして動く方向（状態機械の keyToDirection と同じ対応。Shift＋矢印は範囲の拡張なので対象外）。 */
@@ -335,32 +317,49 @@ export function createGridController(target: GridMountTarget, options: GridMount
   });
   const { current: currentMerges, any: hasMergedCells, isMergedCellIndex, isMergedCellId } = merges;
 
-  // DD-033-1: 表示専用モード（readOnly）。両モード共通。boolean 単値ゆえ構成不整合が無く fail-fast なし。
-  // TS 型（boolean|undefined）が正規経路を強制するが、JS 経路の非 boolean は `=== true` の厳密判定で編集可能側へ倒し、
-  // undefined 以外の非 boolean は mount 時に診断 warn（readonly-invalid・公開 error code へは追加しない・決定事項）。
-  // DD-056 H12: mount 時の値は初期値で、実行中は GridInstance.setReadOnly で切り替える（開き直さない）。入口・送信の関所は
-  // 呼ばれた時点の値を読む。
-  const rawReadOnly: unknown = options.readOnly;
-  let readOnly = rawReadOnly === true;
-  // DD-056 H12: IME 変換中に setReadOnly(true) を受けたとき、変換が終わるまで textarea の読み取り専用化（と編集中セルの確定）を
-  // 待つ印。待つ間も readOnly=true で文書を変える他の入口は止め、状態機械が出す編集中セルの確定（editorSubmit 経由）だけを
-  // 送信の関所で通す（contract.md §4.3）。
-  let readOnlyDeferred = false;
-  // DD-056 H12（Codex 実装レビュー P1）: 終わり待ちの間に送信の関所を通してよいのは「切り替えを頼まれた時点の編集」の確定 1 回だけ。
-  // 編集の同一性は ime-editing-session の editingTarget オブジェクトの参照（BeginEdit ごとに作り直される）で見分ける。
-  let deferredLockEditTarget: object | null = null;
-  // DD-056 H12: 上の許可を消費して submit している最中か（submitSetCells・submitToBackend の関所が見る）。
-  let inDeferredLockCommit = false;
-  // DD-056 H12: flush の待ち合わせ（呼び出しごとに 1 件）と、状態の変化を受けた判定の予約（macrotask・coalesce）。
-  const flushWaiters = new Set<FlushWaiter>();
-  let editStateCheckTimer: ReturnType<typeof setTimeout> | undefined;
-  if (rawReadOnly !== undefined && typeof rawReadOnly !== 'boolean') {
-    diag.emit('warn', 'readonly-invalid', `readOnly は boolean が必要（受領: ${typeof rawReadOnly}）→ 編集可能として扱う`);
-  }
-  if (readOnly) {
-    // mount 時に1件（E2E/障害切り分けの確認点・決定事項）。抑止発動ごとの readonly-blocked とは別。
-    diag.emit('info', 'readonly-mode', '表示専用モード（readOnly=true）でマウント: 文書変更を抑止し閲覧系のみ許可');
-  }
+  // DD-033-1・DD-056 H12: 読み取り専用の切り替え（setReadOnly・flush・変換の終わり待ち）は mount/readonly-switch.ts。
+  // 生成時に mount オプションの readOnly を検査して診断を出す（readonly-invalid・readonly-mode）。
+  const readonlySwitch = createReadOnlySwitch({
+    diag,
+    initialReadOnly: options.readOnly,
+    isDestroyed: () => destroyed,
+    backend: () => sync,
+    editor: () => editor,
+    closePopups: () => {
+      closeSelectDropdown?.();
+      closeDatePicker?.();
+    },
+    syncCellLock: () => cellLock.syncCellLock(),
+  });
+  const { isDeferredEditorCommit, isDeferredLockIdle, scheduleEditStateCheck } = readonlySwitch;
+  // 読み取り専用の判定（列・行・セル・結合範囲）と、常駐 textarea のロックは mount/cell-lock.ts。
+  const cellLock = createCellLock({
+    diag,
+    isStandalone,
+    readOnlyRows: options.readOnlyRows,
+    merges,
+    backend: () => sync,
+    standalone: () => standalone,
+    editor: () => editor,
+    registry: () => columnTypeRegistry,
+  });
+  const {
+    hasReadOnlyColumns,
+    isReadOnlyColumnId,
+    isReadOnlyColumnIndex,
+    hasReadOnlyRows,
+    isReadOnlyRowId,
+    isReadOnlyRowIndex,
+    isReadOnlyCellId,
+    isReadOnlyCellIndex,
+    hasReadOnlyCellRows,
+    hasReadOnlyCells,
+    isActiveCellReadOnly,
+    readOnlyEntryBlocked,
+    validateReadOnlyRowsOnce,
+    syncCellLock,
+    filterReadOnlyCells,
+  } = cellLock;
 
   // DD-036 C1: 固定行数/固定列数（mount オプション・既定 1＝DD-036 以前のハードコード値と完全一致）。view-local。
   // 受理形は 0 以上の有限整数。非整数・負・NaN・非 number は診断 warn（frozen-count-invalid）を出して既定 1 へ倒す
@@ -680,209 +679,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
     diag.emit('info', 'set-active-cell', `setActiveCell: rowId=${rowId} columnId=${columnId} → (${target.row},${target.col})`);
   }
 
-  // ---- DD-056 H12: 読み取り専用の実行時切替（setReadOnly）・送り切り（flush）・pendingCount（contract.md §4）----
-
-  /** 変換の終わり待ちの間に、切り替えを頼まれた時点の編集を確定している最中か（送信の関所で通す判定・1 回で消費済み）。 */
-  function isDeferredEditorCommit(): boolean {
-    return readOnlyDeferred && inDeferredLockCommit;
-  }
-
-  /**
-   * 進行中の編集の同一性（ime-editing-session の editingTarget の参照。BeginEdit ごとに作り直され、確定・取消・移動で null に戻る）。
-   * 編集していなければ null。flush の待ち合わせと変換の終わり待ちの許可が「呼んだ時点の編集」を見分けるのに使う。
-   */
-  function currentEdit(): object | null {
-    return editor?.session.getEditingTarget() ?? null;
-  }
-
-  /** IME 変換中か（textarea に触れてはいけない間・I-3）。 */
-  function isComposingNow(): boolean {
-    return editor !== undefined && (editor.session.isComposing() || editor.session.getPhase() === 'Composing');
-  }
-
-  /**
-   * 変換の終わり待ちの間に、切り替えを頼まれた時点の編集が終わって Navigation へ戻ったか（Codex 実装レビュー P1）。true の間は
-   * 新しい編集を始めさせない（editor の論理ロック＝isInputLocked。textarea の readOnly 属性は次の判定で付く）。
-   */
-  function isDeferredLockIdle(): boolean {
-    return readOnlyDeferred && editor !== undefined && !isComposingNow() && editor.session.getPhase() === 'Navigation';
-  }
-
-  /**
-   * 編集中のセルを「確定して移動しない」で確定し、候補欄を閉じる（実際の blur と同じ順序＝状態機械の確定 → 候補欄・contract.md §4.2）。
-   * 変換確定の直後（EditingAwaitFinalInput）も確定する。変換中は何もせず false。確定した・確定するものが無ければ true。
-   * IME イベントとは別のタスク（consumer の API 呼び出し・macrotask の判定）から呼ぶこと。
-   */
-  function commitInProgressEdit(): boolean {
-    // DD-056（Codex 実装レビュー P1）: 接続が終端した後は確定しない（ClientSession.submitLocalOperation が throw する＝flush の reject や
-    // macrotask の未捕捉例外になる）。編集はそのまま残し、確定できなかったとして扱う。
-    if (sync?.session.isStopped === true) {
-      return false;
-    }
-    if (editor !== undefined) {
-      try {
-        if (editor.commitEdit() === 'composing') {
-          return false;
-        }
-      } catch (error) {
-        diag.emit('error', 'commit-edit-failed', `編集中のセルの確定に失敗しました: ${errorMessage(error)}`);
-        return false;
-      }
-    }
-    closeSelectDropdown?.();
-    closeDatePicker?.();
-    return true;
-  }
-
-  /** 編集中のセルを確定してから、textarea まで含めて表示専用へ切り替える（変換中でないときに呼ぶ）。 */
-  function applyReadOnlyLock(): void {
-    // 先に確定する: 直接の呼び出しでは readOnly=false のまま通常経路で、変換の終わり待ちからは関所の許可つき（editorSubmit 経由）で送る。
-    commitInProgressEdit();
-    closeSelectDropdown?.(); // 接続の終端で確定しなかったときも候補欄は閉じる（閉じていれば何もしない）
-    closeDatePicker?.();
-    readOnlyDeferred = false;
-    deferredLockEditTarget = null;
-    readOnly = true;
-    editor?.setReadOnly(true);
-    syncCellLock();
-    sync?.view.markViewportDirty();
-    diag.emit('info', 'readonly-mode', 'setReadOnly(true): 表示専用へ切り替え（開き直さない・未送信の操作は保持して送る）');
-  }
-
-  /** setReadOnly の実体（DD-056 H12・contract.md §4.3）。 */
-  function setReadOnlyImpl(next: boolean): void {
-    if (destroyed) {
-      return;
-    }
-    if (next) {
-      if (readOnly && !readOnlyDeferred) {
-        return; // 既に表示専用
-      }
-      if (isComposingNow()) {
-        if (!readOnlyDeferred) {
-          // 文書を変える他の入口はすぐ止め、textarea は変換が終わってから（I-3）。変換の終わりは editor の変化で判定し直す。
-          readOnly = true;
-          readOnlyDeferred = true;
-          // 送信の関所で通すのは、いま変換中の編集の確定 1 回だけ（Codex 実装レビュー P1）。
-          deferredLockEditTarget = currentEdit();
-          // 候補欄（選択式の候補リスト・日付）は今閉じる（textarea には触れない）。開いたままだと、変換の後の候補クリックが
-          // 編集中の値を取り消してから読み取り専用で断られ、入力が失われる（Codex 実装レビュー P1）。
-          closeSelectDropdown?.();
-          closeDatePicker?.();
-          sync?.view.markViewportDirty();
-          diag.emit('info', 'readonly-deferred', 'setReadOnly(true): IME 変換中のため、変換が終わってから編集中のセルを確定して textarea を読み取り専用にする');
-        }
-        return;
-      }
-      applyReadOnlyLock();
-      scheduleEditStateCheck(); // 確定した編集で flush の待ち合わせが解けうる
-      return;
-    }
-    if (!readOnly) {
-      return;
-    }
-    readOnly = false;
-    readOnlyDeferred = false; // 変換の終わり待ちの切り替えは取り消す
-    deferredLockEditTarget = null;
-    editor?.setReadOnly(false);
-    syncCellLock();
-    sync?.view.markViewportDirty();
-    diag.emit('info', 'readonly-mode', 'setReadOnly(false): 編集可能へ切り替え');
-  }
-
-  /** 変換の終わり待ちの切り替えを、変換が終わっていれば完了させる（macrotask の判定から呼ぶ）。 */
-  function evaluateDeferredReadOnly(): void {
-    if (!readOnlyDeferred || destroyed || isComposingNow()) {
-      return;
-    }
-    applyReadOnlyLock();
-  }
-
-  /** flush の待ち合わせ 1 件を解決する（二重解決しない）。 */
-  function settleFlushWaiter(waiter: FlushWaiter, result: GridFlushResult): void {
-    if (!flushWaiters.delete(waiter)) {
-      return;
-    }
-    if (waiter.timer !== undefined) {
-      clearTimeout(waiter.timer);
-    }
-    waiter.resolve(result);
-  }
-
-  /** waiter が呼んだ時点の編集がまだ続いているか（確定・取消・移動で終わっていれば、後から始まった別の編集は待たない）。 */
-  function isWaiterEditPending(waiter: FlushWaiter): boolean {
-    return waiter.editTarget !== null && waiter.editTarget === currentEdit();
-  }
-
-  /**
-   * flush の待ち合わせを判定する。接続の終端を先に見る（終端後は確定しない・Codex 実装レビュー P1）。呼んだ時点の編集が続いていれば
-   * 確定を試み（変換中なら待つ）、終わっていれば後から始まった別の編集には触れない（Codex 実装レビュー P2）。
-   */
-  function evaluateFlushWaiters(): void {
-    if (flushWaiters.size === 0) {
-      return;
-    }
-    const stopped = sync?.session.isStopped === true;
-    for (const waiter of flushWaiters) {
-      if (!isWaiterEditPending(waiter)) {
-        waiter.editTarget = null;
-      }
-    }
-    if (!destroyed && !stopped && [...flushWaiters].some((waiter) => waiter.editTarget !== null) && commitInProgressEdit()) {
-      for (const waiter of flushWaiters) {
-        waiter.editTarget = null;
-      }
-    }
-    const pendingCount = sync?.session.pendingCount ?? 0;
-    for (const waiter of [...flushWaiters]) {
-      const result = decideFlush({ destroyed, stopped, pendingCount, editPending: waiter.editTarget !== null });
-      if (result !== undefined) {
-        settleFlushWaiter(waiter, result);
-      }
-    }
-  }
-
-  /**
-   * 状態の変化（pending・接続・編集）を受けた判定を macrotask へ予約する（coalesce）。ClientSession のメッセージ処理中・editor の
-   * イベント処理中に確定を走らせない（再入しない）。同じタスクで続く IME イベント（最終 input 等）を先に処理させる（contract.md §4.2）。
-   * 待つものが無ければ何もしない（通常の編集・受信にコストを足さない）。
-   */
-  function scheduleEditStateCheck(): void {
-    if (editStateCheckTimer !== undefined || destroyed || (!readOnlyDeferred && flushWaiters.size === 0)) {
-      return;
-    }
-    editStateCheckTimer = setTimeout(() => {
-      editStateCheckTimer = undefined;
-      if (destroyed) {
-        return;
-      }
-      evaluateDeferredReadOnly();
-      evaluateFlushWaiters();
-    }, 0);
-  }
-
-  /** flush の実体（DD-056 H12・contract.md §4.4）。 */
-  function flushImpl(options: GridFlushOptions | undefined): Promise<GridFlushResult> {
-    if (destroyed) {
-      return Promise.resolve({ status: 'stopped', pendingCount: 0 });
-    }
-    const timeoutMs = resolveFlushTimeout(options?.timeoutMs);
-    return new Promise<GridFlushResult>((resolve) => {
-      const waiter: FlushWaiter = { resolve, timer: undefined, editTarget: currentEdit() };
-      flushWaiters.add(waiter);
-      waiter.timer = setTimeout(() => {
-        settleFlushWaiter(
-          waiter,
-          timeoutResult({ pendingCount: sync?.session.pendingCount ?? 0, editPending: isWaiterEditPending(waiter) }),
-        );
-      }, timeoutMs);
-      // 呼び出し時に 1 回判定する（consumer の API 呼び出し＝IME イベントとは別のタスクなので、ここで確定してよい）。
-      evaluateDeferredReadOnly();
-      evaluateFlushWaiters();
-      scheduleEditStateCheck(); // 待ちが残れば、以後は状態の変化で判定し直す
-    });
-  }
-
   function provisionCanvas(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
     const backing = backingSize({ width: viewportWidth, height: viewportHeight }, dpr);
     // DD-058: 表示サイズも実画素の整数にそろえ、bitmap を 1:1 で合成する。
@@ -1140,127 +936,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
     emit(cellHoverEvent(next.rowId, next.columnId, next.rect));
   }
 
-  // ---- DD-035 R4: 列単位 readOnly（readOnlyColumns）の判定（入口・chokepoint・textarea ロックで共有）----
-  /** readOnlyColumns が 1 つでもあるか（無ければ以下の判定は全て即 false＝現行経路のコスト増ゼロ）。 */
-  function hasReadOnlyColumns(): boolean {
-    return columnTypeRegistry?.hasAnyReadOnlyColumn() === true;
-  }
-  /** ColumnId 文字列が readOnly 列か（SetCells フィルタ・chokepoint 用）。 */
-  function isReadOnlyColumnId(columnId: string): boolean {
-    return columnTypeRegistry?.isReadOnlyColumn(columnId) === true;
-  }
-  /** 列 index が readOnly 列か（dblclick・キー裁定・インジケーター用）。registry 未生成/列消失は false。 */
-  function isReadOnlyColumnIndex(colIndex: number): boolean {
-    if (!hasReadOnlyColumns() || sync === undefined) {
-      return false;
-    }
-    const colId = sync.view.columnIdAt(colIndex);
-    return colId !== undefined && isReadOnlyColumnId(String(colId));
-  }
-  // ---- DD-036 C3: 行単位 readOnly（readOnlyRows）の判定（列版と同型・mount 固定・未知 rowId は warn のみ）----
-  // 列（columnOrder で mount 時に全 ID が既知）と違い行 ID は初期データ到着前に検証できないため registry へは
-  // 載せず、ここで Set を持つ（重複は集合として吸収＝fail-fast しない・契約 §3）。
-  const readOnlyRowSet = new Set<string>((options.readOnlyRows ?? []).map((r) => String(r)));
-  /** readOnlyRows が 1 つでもあるか（無ければ以下の判定は全て即 false＝現行経路のコスト増ゼロ）。 */
-  function hasReadOnlyRows(): boolean {
-    return readOnlyRowSet.size > 0;
-  }
-  /** RowId 文字列が readOnly 行か（SetCells フィルタ・chokepoint 用）。 */
-  function isReadOnlyRowId(rowId: string): boolean {
-    return readOnlyRowSet.has(rowId);
-  }
-  /** 行 index が readOnly 行か（dblclick・キー裁定・インジケーター用）。行消失は false。 */
-  function isReadOnlyRowIndex(rowIndex: number): boolean {
-    if (!hasReadOnlyRows() || sync === undefined) {
-      return false;
-    }
-    const rowId = sync.view.rowIdAt(rowIndex);
-    return rowId !== undefined && isReadOnlyRowId(String(rowId));
-  }
-  // ---- RC3（DD-052-3）: セル単位 readOnly（GridStandaloneRow.readOnlyColumns）の判定。standalone モード専用 ----
-  /** RowId/ColumnId 文字列が行データ指定の readOnly セルか（SetCells フィルタ・chokepoint 用）。 */
-  function isReadOnlyCellId(rowId: string, columnId: string): boolean {
-    return isStandalone && standalone !== undefined && standalone.isCellReadOnly(rowId, columnId);
-  }
-  /** 行・列 index が行データ指定の readOnly セルか（textarea ロック用）。共同編集モードは常に false。 */
-  function isReadOnlyCellIndex(rowIndex: number, colIndex: number): boolean {
-    if (!isStandalone || sync === undefined) {
-      return false;
-    }
-    const rowId = sync.view.rowIdAt(rowIndex);
-    const colId = sync.view.columnIdAt(colIndex);
-    return rowId !== undefined && colId !== undefined && isReadOnlyCellId(String(rowId), String(colId));
-  }
-  /** RC3 のセル単位 readOnly が 1 件でも現在の行データに指定されているか（standalone 専用・共同編集は常に false）。 */
-  function hasReadOnlyCellRows(): boolean {
-    return isStandalone && standalone?.hasAnyCellReadOnly() === true;
-  }
-  /** readOnly 列/行/セルが 1 つでも指定されているか（未指定なら以下の分岐は一切コストを持たない）。 */
-  function hasReadOnlyCells(): boolean {
-    return hasReadOnlyColumns() || hasReadOnlyRows() || hasReadOnlyCellRows();
-  }
-  /**
-   * アクティブセルが readOnly 列・readOnly 行・行データ指定の readOnly セルのいずれかにあるか
-   * （textarea のロック・入口抑止の共通条件）。DD-035 R4（列）・DD-036 C3（行）・RC3（セル）の和。
-   * DD-064: 結合範囲のセルも読むだけ（K3）なので含める（送信直前の保証層 touchesReadOnly* には含めない・contract §2）。
-   */
-  function isActiveCellReadOnly(): boolean {
-    if (editor === undefined) {
-      return false;
-    }
-    const active = editor.session.getActiveCell();
-    return (
-      isReadOnlyColumnIndex(active.col) ||
-      isReadOnlyRowIndex(active.row) ||
-      isReadOnlyCellIndex(active.row, active.col) ||
-      isActiveCellMergedForNewInput()
-    );
-  }
-  /**
-   * DD-064: アクティブセルが結合範囲にあって、新しい入力を止める状態か（Navigation かつ変換中でないときだけ true）。
-   * 結合は実行中に足せる（setMergedCells）ので、足す前に始まった編集・変換（IME）は終わるまで止めない（Codex P1: 変換中に
-   * 結合を足すと、論理ロックが compositionend・最終 input まで捨て、変換が終わらなくなる）。終わって Navigation に戻ると
-   * onChange が左上へ移し、ここが true になってロックされる。
-   */
-  function isActiveCellMergedForNewInput(): boolean {
-    if (editor === undefined || !hasMergedCells() || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
-      return false;
-    }
-    const active = editor.session.getActiveCell();
-    return isMergedCellIndex(active.row, active.col);
-  }
-  /**
-   * 読み取り専用のアクティブセルで編集 UI（候補欄・カレンダー）を止めたときの診断（DD-064: 結合範囲なら専用の code）。
-   * diag.emit へ展開して渡す引数（level・code・message）。
-   */
-  function readOnlyEntryBlocked(what: string): ['info', string, string] {
-    const active = editor?.session.getActiveCell();
-    if (active !== undefined && isMergedCellIndex(active.row, active.col)) {
-      return ['info', 'merged-cell-blocked', `mergedCells: 結合範囲で${what}を抑止`];
-    }
-    return ['info', 'readonly-column-blocked', `readOnlyColumns/readOnlyRows: ${what}を抑止`];
-  }
-  /**
-   * 未知 rowId の診断 warn（DD-036 C3・契約 §3）。行 ID は mount 時点では検証できないため、**初回描画の直後に 1 回だけ**
-   * 現在の行 Axis と突き合わせる（それ以降の行削除・tombstone では警告しない＝実行時に警告を出し続けない）。
-   * 未知でも mount は成功する（列の fail-fast とは扱いを分ける）。
-   */
-  let readOnlyRowsChecked = false;
-  function validateReadOnlyRowsOnce(): void {
-    const backend = sync;
-    if (readOnlyRowsChecked || !hasReadOnlyRows() || backend === undefined) {
-      return;
-    }
-    readOnlyRowsChecked = true;
-    const unknown = [...readOnlyRowSet].filter((rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0);
-    if (unknown.length > 0) {
-      diag.emit(
-        'warn',
-        'readonly-row-unknown',
-        `readOnlyRows: 未知の行 ${unknown.join(', ')}（初回描画時点の文書に存在しない）→ 該当 RowId が現れれば読み取り専用になる`,
-      );
-    }
-  }
   // DD-045: 行 ID は初期データ到着前に検証できないため、初回描画後に一度だけ未知 RowId を診断する。
   const rowBackgroundRowSet = new Set<string>(Object.keys(options.rowBackgrounds ?? {}));
   let rowBackgroundsChecked = false;
@@ -1279,73 +954,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
       );
     }
   }
-  /**
-   * アクティブセルのロックを常駐 textarea へ同期する（activeCell 移動のたびに呼ぶ・同値なら無操作）。
-   * DD-052-3（Codex P1）: `hasReadOnlyCells()` では早期 return しない。readOnly 指定を setData/setRows で
-   * 全解除した直後は false になるが、その回でロック解除の `setInputLock(false)` を呼ばないと textarea が
-   * readOnly のまま固着する。`setInputLock` 自体が同値なら無操作なので毎回呼んでも無コスト。
-   */
-  function syncCellLock(): void {
-    if (editor !== undefined) {
-      editor.setInputLock(isActiveCellReadOnly());
-    }
-  }
-  /**
-   * 範囲操作（貼り付け・範囲クリア・cut）の SetCells から readOnly 列への変更を除く（論点4: スキップして他列へ適用）。
-   * 全件スキップなら null（呼び出し側は no-op）。上限/はみ出し検査は矩形全体で先に済んでいる（事後フィルタ）。
-   */
-  function filterReadOnlyCells(op: SetCellsOperation, label: string): SetCellsOperation | null {
-    if (!hasReadOnlyCells() && !hasMergedCells()) {
-      return op;
-    }
-    let changes: readonly SetCellsChange[] = op.changes;
-    // DD-064: 結合範囲のセルは読むだけ（K3）。貼り付け・範囲の消去・cut は範囲のセルだけ飛ばす（readOnly 列・行と同じ）。
-    if (hasMergedCells()) {
-      const kept = changes.filter((change) => !isMergedCellId(change.rowId, change.columnId));
-      const skipped = changes.length - kept.length;
-      if (skipped > 0) {
-        diag.emit('info', 'merged-cell-skipped', `${label}: 結合範囲のセル ${skipped} 件をスキップ（残り ${kept.length} 件）`);
-      }
-      changes = kept;
-    }
-    if (hasReadOnlyColumns()) {
-      const partition = partitionReadOnlyColumnChanges(changes, isReadOnlyColumnId);
-      if (partition.skipped > 0) {
-        diag.emit(
-          'info',
-          'readonly-column-skipped',
-          `${label}: readOnly 列のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
-        );
-      }
-      changes = partition.kept;
-    }
-    // DD-036 C3: 行版を続けて適用する（和＝列 or 行のどちらかに該当するセルがスキップされる）。
-    if (hasReadOnlyRows()) {
-      const partition = partitionReadOnlyRowChanges(changes, isReadOnlyRowId);
-      if (partition.skipped > 0) {
-        diag.emit(
-          'info',
-          'readonly-row-skipped',
-          `${label}: readOnly 行のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
-        );
-      }
-      changes = partition.kept;
-    }
-    // RC3（DD-052-3）: 行データ指定のセル単位 readOnly を続けて適用する（和・standalone 専用）。
-    if (hasReadOnlyCellRows()) {
-      const partition = partitionReadOnlyCellChanges(changes, isReadOnlyCellId);
-      if (partition.skipped > 0) {
-        diag.emit(
-          'info',
-          'readonly-cell-skipped',
-          `${label}: readOnly セル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
-        );
-      }
-      changes = partition.kept;
-    }
-    return changes.length === 0 ? null : { ...op, changes: [...changes] };
-  }
-
   /**
    * pointerdown 時点の状態でリンク候補を武装（arm）できるか判定して候補を組む（純関数 shouldArmLinkCandidate に委譲）。
    * **pointerdownCell を呼ぶ前の位相**で評価する（編集中クリックは従来経路＝発火なし・AC8）。値/行ID/列IDは
@@ -1886,7 +1494,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (hit.area === 'cell') {
         // DD-033-1: readOnly はセル編集（doubleClickCell）・選択式ドロップダウンを開かない（入口抑止）。
         // 列境界 dblclick の auto-fit（上の分岐）は閲覧系ゆえ維持する（要確認4・view-local layout）。
-        if (readOnly) {
+        if (readonlySwitch.isReadOnly()) {
           diag.emit('info', 'readonly-blocked', 'readOnly: ダブルクリック編集を抑止（閲覧専用）');
           return;
         }
@@ -2257,7 +1865,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // DD-033-1（統合レビュー P2-2）: readOnly は undo 捕捉より前に破棄する。submitToBackend（絶対防衛線）だけだと
     // op は破棄されるのに undo エントリが積まれ canUndo=false（AC2）が破れる（standalone は submit 結果を見ず記録するため）。
     // DD-056 H12: 変換の終わり待ち（readOnlyDeferred）の間に状態機械が出す編集中セルの確定（editorSubmit 経由）だけは通す。
-    if (readOnly && !isDeferredEditorCommit()) {
+    if (readonlySwitch.isReadOnly() && !isDeferredEditorCommit()) {
       diag.emit('warn', 'readonly-blocked', 'readOnly: submitSetCells で SetCells を破棄（undo 記録前）');
       return;
     }
@@ -2306,7 +1914,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 文書 Operation 送信ゼロを構造的に保証する（共同編集の受信専用化・AC5）。入口ガード（perform*・interceptKeydown）で
     // 通常はここへ到達しないため diag は warn（到達自体が想定外＝障害切り分けの手掛かり）。
     // DD-056 H12: 変換の終わり待ちの間の編集中セルの確定（editorSubmit 経由）だけは通す（submitSetCells と同じ判定）。
-    if (readOnly && !isDeferredEditorCommit()) {
+    if (readonlySwitch.isReadOnly() && !isDeferredEditorCommit()) {
       diag.emit('warn', 'readonly-blocked', 'readOnly: submitToBackend で SetCells を破棄（絶対防衛線・送信ゼロ）');
       return;
     }
@@ -2414,7 +2022,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
    */
   function performInsertRows(afterRowId: string | null, count: number): void {
     // DD-033-1: readOnly は行挿入を抑止（公開 API・ショートカット共有＝1箇所で両方止まる・入口＝chokepoint 兼用）。
-    if (readOnly) {
+    if (readonlySwitch.isReadOnly()) {
       diag.emit('info', 'readonly-blocked', 'readOnly: insertRows を抑止（文書無変更）');
       return;
     }
@@ -2463,7 +2071,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
    */
   function performDeleteRows(requested: readonly string[]): void {
     // DD-033-1: readOnly は行削除を抑止（公開 API・ショートカット共有＝入口＝chokepoint 兼用）。
-    if (readOnly) {
+    if (readonlySwitch.isReadOnly()) {
       diag.emit('info', 'readonly-blocked', 'readOnly: deleteRows を抑止（文書無変更）');
       return;
     }
@@ -2737,7 +2345,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * （arrow 式: 上の backend undefined ガード後の narrowing を閉包へ効かせる＝hoist される function 宣言にしない）
      */
     const performRangeClear = (): void => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: 範囲クリアを抑止（文書無変更）');
         return;
       }
@@ -2790,7 +2398,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * （copy もしない＝クリップボード不変）通知する。クリア対象が全空でも copy は成立させる（TSV を返す）。
      */
     const performCut = (): string | null => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         // cut は copy＋クリア＝文書変更系ゆえ全抑止（clipboard も変更しない・null=ブラウザ既定は readOnly textarea で no-op）。
         diag.emit('info', 'readonly-blocked', 'readOnly: cut を抑止（文書無変更・クリップボード不変）');
         return null;
@@ -2864,7 +2472,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
      * 成功時は貼付範囲を選択レンジにする（selectPastedRect・DD-038）。
      */
     const performPaste = (text: string): boolean => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         // 消費（true=preventDefault）して readOnly textarea への流し込みも止める（文書無変更）。
         diag.emit('info', 'readonly-blocked', 'readOnly: paste を抑止（文書無変更）');
         return true;
@@ -2954,7 +2562,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     /** Ctrl/Cmd+Z: 直前の確定操作を補償 SetCells で戻す（空/pending/in-flight/stopped は no-op）。 */
     const performUndo = (): void => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: Undo を抑止（文書無変更）');
         return;
       }
@@ -2969,7 +2577,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
     /** Ctrl+Y / Ctrl+Shift+Z: Undo の逆（元値の再適用）。 */
     const performRedo = (): void => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: Redo を抑止（文書無変更）');
         return;
       }
@@ -3007,21 +2615,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         }
       }
       // DD-056 H12: 変換の終わり待ちの間は「切り替えを頼まれた時点の編集」の確定だけを送信の関所で通す（1 回で消費する）。
-      // 確定中の editingTarget は ime-editing-session が submit の後に外すため、ここで参照を比べられる。
-      const allowDuringDeferredLock =
-        readOnlyDeferred &&
-        deferredLockEditTarget !== null &&
-        editor !== undefined &&
-        editor.session.getEditingTarget() === deferredLockEditTarget;
-      if (allowDuringDeferredLock) {
-        deferredLockEditTarget = null;
-      }
-      inDeferredLockCommit = allowDuringDeferredLock;
-      try {
-        return submitSetCells(op, 'edit');
-      } finally {
-        inDeferredLockCommit = false;
-      }
+      return readonlySwitch.runEditorCommit(() => submitSetCells(op, 'edit'));
     };
 
     // 候補 UI の対象セル判定（アクティブセルの前段裁定・dblclick 分岐・▼ 表示で共有）。
@@ -3069,7 +2663,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     let suggestFilterKey: string | null = null;
 
     const openSelect = (initialCharacter?: string): void => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         // 選択式列のドロップダウンは開かない（要確認2・文書変更経路の入口）。
         diag.emit('info', 'readonly-blocked', 'readOnly: 選択式ドロップダウンを抑止');
         return;
@@ -3133,7 +2727,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       // DD-056 H12（Codex 実装レビュー P1）: 表示専用（変換の終わり待ちを含む）では候補の確定を、下の編集の取り消しより前に断る
       // （取り消してから送信の関所で断ると、編集中の値も候補も残らない）。候補欄は閉じ、編集中の値はそのまま残す。
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: 選択式の候補の確定を抑止（編集中の値はそのまま）');
         cancelSelect();
         return;
@@ -3221,7 +2815,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     let dateOpenTarget: { readonly rowId: RowId; readonly columnId: ColumnId; readonly beforeRevision: number } | null = null;
 
     const openDate = (): void => {
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: 日付カレンダーを抑止');
         return;
       }
@@ -3276,7 +2870,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       // DD-056 H12: 表示専用（変換の終わり待ちを含む）では確定しない（confirmSelect と同じ。開いた後に切り替わった場合の防御）。
-      if (readOnly) {
+      if (readonlySwitch.isReadOnly()) {
         diag.emit('info', 'readonly-blocked', 'readOnly: 日付の確定を抑止');
         cancelDate();
         return;
@@ -3340,7 +2934,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // 📅 インジケーター: アクティブセルが日付列 & Navigation & 非 composition & 開ける状態（readOnly/列 readOnly でない）。
       const active = editor.session.getActiveCell();
       const showIndicator =
-        !readOnly &&
+        !readonlySwitch.isReadOnly() &&
         isDateCellIndex(active.col) &&
         !isActiveCellReadOnly() && // DD-035 R4 / DD-036 C3: readOnly 列・行では開けないため affordance も出さない
         !editor.session.isComposing() &&
@@ -3394,7 +2988,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const active = editor.session.getActiveCell();
       const eligible =
         editor.session.getPhase() !== 'Navigation' && // 編集中だけ（Navigation の候補は picker が担当）
-        !readOnly &&
+        !readonlySwitch.isReadOnly() &&
         isSelectCellIndex(active.col) &&
         allowsFreeTextIndex(active.col) && // 厳格モードは picker が開くため suggest は出さない
         !isActiveCellReadOnly();
@@ -3515,7 +3109,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       document: docPort,
       submit: editorSubmit,
       // DD-033-1: 表示専用モードは常駐 textarea へ readOnly 属性＋編集 DOM イベントの dispatch 抑止（分岐追加のみ）。
-      readOnly,
+      readOnly: readonlySwitch.isReadOnly(),
       // DD-035 R4: アクティブセルが readOnly 列にある間、編集 DOM イベントの dispatch を論理遮断する（物理遮断＝readOnly 属性は
       // onChange の syncColumnLock が同期）。DD-035 R6（Codex P1）: 命令 API が初回描画前で保留中の間も入力を遮断する
       // （保留の適用先が確定する前の打鍵を旧セルへ確定させない）。readOnlyColumns 未指定かつ保留なしなら常に false。
@@ -3523,7 +3117,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // （textarea の readOnly 属性は次の判定で付く。それまでの論理遮断）。
       isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly() || isDeferredLockIdle(),
       // DD-056 H12（Codex 実装レビュー P2）: 変換の終わり待ちの間は textarea の既定の cut も止める（readOnly 属性をまだ付けられないため）。
-      isNativeEditBlocked: () => readOnlyDeferred,
+      isNativeEditBlocked: () => readonlySwitch.isDeferred(),
       // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
       isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
       // RC12（DD-052-2）: 文字列として保つ列は編集確定時の型変換をスキップする。
@@ -3593,7 +3187,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // DD-033-1: readOnly の入口抑止（最優先）。編集開始/セルクリアを起こすキー（F2/Delete/Backspace）を消費する。
         // 閲覧系（矢印・Shift+矢印・Ctrl+C・Escape・PageUp/Down）と composition/非 Navigation は素通し（純関数裁定・AC7）。
         if (
-          readOnly &&
+          readonlySwitch.isReadOnly() &&
           shouldSuppressReadonlyKey({
             key: input.key,
             ctrlKey: input.ctrlKey,
@@ -3658,7 +3252,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
             sessionComposing: current.session.isComposing(),
             phase: current.session.getPhase(),
             isOpen: datePicker.isOpen(),
-            isDateCell: openOn !== undefined && !readOnly && !isActiveCellReadOnly(),
+            isDateCell: openOn !== undefined && !readonlySwitch.isReadOnly() && !isActiveCellReadOnly(),
             openOn: openOn ?? 'dblclick',
           });
           switch (decision) {
@@ -4134,13 +3728,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (typeof raw !== 'boolean') {
         diag.emit('warn', 'readonly-invalid', `setReadOnly は boolean が必要（受領: ${typeof raw}）→ 編集可能として扱う`);
       }
-      setReadOnlyImpl(raw === true);
+      readonlySwitch.setReadOnly(raw === true);
     },
     pendingCount(): number {
       return destroyed ? 0 : (sync?.session.pendingCount ?? 0); // DD-056 H12（単独モード・boot 前は 0）
     },
     flush(flushOptions?: GridFlushOptions): Promise<GridFlushResult> {
-      return flushImpl(flushOptions); // DD-056 H12
+      return readonlySwitch.flush(flushOptions); // DD-056 H12
     },
     destroy() {
       if (destroyed) {
@@ -4148,20 +3742,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       destroyed = true;
       // DD-056 H12: 判定の予約を取り消し、待っている flush を解決する（送り切っていれば flushed・残っていれば stopped）。
-      if (editStateCheckTimer !== undefined) {
-        clearTimeout(editStateCheckTimer);
-        editStateCheckTimer = undefined;
-      }
-      const pendingAtDestroy = sync?.session.pendingCount ?? 0;
-      for (const waiter of [...flushWaiters]) {
-        settleFlushWaiter(
-          waiter,
-          decideFlush({ destroyed: true, stopped: false, pendingCount: pendingAtDestroy, editPending: waiter.editTarget !== null }) ?? {
-            status: 'stopped',
-            pendingCount: pendingAtDestroy,
-          },
-        );
-      }
+      readonlySwitch.dispose();
       pendingCommands = []; // DD-035 R6: 保留中の命令は破棄（rAF ループ停止後に走らせない）
       events.discardQueuedRemoteChanges(); // DD-049 H4: 未配布の remote-change は破棄（listener も下で解除する）
       diag.emit('info', 'destroy', 'grid を破棄しリソースを解放');
@@ -4193,7 +3774,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       editor: () => editor,
       lastSessionEventType: () => lastSessionEvent?.type ?? '',
       isFirstDataDrawn: () => firstDataDrawn,
-      isReadOnly: () => readOnly,
+      isReadOnly: () => readonlySwitch.isReadOnly(),
       currentTransform,
       display: () => compiledDisplay,
       merges: currentMerges,
