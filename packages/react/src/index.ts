@@ -32,6 +32,7 @@ import {
   type GridRowBorders,
   type GridBorder,
   type GridColumnBorders,
+  type GridColumnGroup,
   type GridColumnType,
   type GridCommonMountOptions,
   type GridConnectionState,
@@ -41,6 +42,7 @@ import {
   type GridFlushOptions,
   type GridFlushResult,
   type GridInstance,
+  type GridMergedCell,
   type GridMountOptions,
   type GridPresenceUser,
   type GridRemoteChange,
@@ -111,6 +113,14 @@ export interface NanairoSheetViewCommonProps {
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
   /** 全データ行の下端へ共通罫線。個別指定優先・行増減へ追従。mount時固定。 */
   readonly defaultRowBorder?: GridBorder;
+  /**
+   * セルの結合（grid mergedCells・DD-064）。**値（参照）が変わっても開き直さない**: 同じ grid の `setMergedCells` を呼ぶ
+   * （`readOnly` と同じ。スクロール位置・選択・Undo を保つ）。行の入れ直し（ref.setData）と同じ commit で変えれば、
+   * 次の描画で新しい行に張られる（呼ぶ順によらない）。毎 render 新しい配列を渡すと毎回張り直すので、行と一緒に memo 化する。
+   */
+  readonly mergedCells?: readonly GridMergedCell[];
+  /** 2段の見出し（grid columnGroups・DD-064）。mount 固定の表示設定（値が変われば開き直す・columnCaptions と同じ）。 */
+  readonly columnGroups?: readonly GridColumnGroup[];
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -231,7 +241,8 @@ type ExcludedGridInstanceKeys =
   | 'documentId' // 識別用の読み取り専用値。ref handle は命令 API のみを出す契約（契約 §3）で対象外
   | 'subscribe' // React は onEvent/onXxx props で個別配信する別経路（契約 §2）。ref handle には出さない
   | 'destroy' // lifecycle は effect cleanup が管理する（契約冒頭）。consumer に直接 destroy させない
-  | 'setReadOnly'; // readOnly prop の変化で呼ぶ（DD-056）。handle からも切り替えられると prop と食い違うため出さない
+  | 'setReadOnly' // readOnly prop の変化で呼ぶ（DD-056）。handle からも切り替えられると prop と食い違うため出さない
+  | 'setMergedCells'; // mergedCells prop の変化で呼ぶ（DD-064）。setReadOnly と同じ理由で handle に出さない
 /** GridInstance のメンバーのうち、React handle に無いもの（除外リスト適用後・空集合であるべき）。 */
 type MissingHandleKeys = Exclude<keyof GridInstance, ExcludedGridInstanceKeys | keyof NanairoSheetViewHandle>;
 
@@ -327,6 +338,8 @@ function mountKeyOf(props: NanairoSheetViewProps): string {
     rowBorders: props.rowBorders === undefined ? null : canonicalJson(props.rowBorders, true),
     columnBorders: props.columnBorders === undefined ? null : canonicalJson(props.columnBorders, true),
     defaultRowBorder: props.defaultRowBorder === undefined ? null : canonicalJson(props.defaultRowBorder, true),
+    // DD-064: 2段の見出しは mount 固定（columnCaptions と同じく値で直列化）。mergedCells は識別系に入れない（setMergedCells で写す）。
+    columnGroups: props.columnGroups === undefined ? null : canonicalJson(props.columnGroups),
     // DD-063: validateCell は関数の同一性ではなく有無だけで開き直す（関数の差し替えは最新 ref で呼ぶ）。
     validateCell: props.validateCell !== undefined,
   });
@@ -403,6 +416,9 @@ function toMountOptions(
     rowBorders: props.rowBorders,
     columnBorders: props.columnBorders,
     defaultRowBorder: props.defaultRowBorder,
+    // DD-064: mergedCells は mount 時の値を初期値として渡す（以後の変化は setMergedCells）。columnGroups は mount 固定。
+    mergedCells: props.mergedCells,
+    columnGroups: props.columnGroups,
     onEvent,
     onDiagnostic,
     validateCell,
@@ -449,6 +465,8 @@ function NanairoSheetViewImpl(
   const diagnosticRef = useRef<GridDiagnosticHook | undefined>(props.onDiagnostic);
   /** 現在の instance が持っている readOnly（mount 時の値か、直近に setReadOnly で写した値・DD-056 H12）。 */
   const appliedReadOnlyRef = useRef<boolean>(false);
+  /** 現在の instance が持っている mergedCells（mount 時の値か、直近に setMergedCells で写した値・DD-064）。参照で比べる。 */
+  const appliedMergedCellsRef = useRef<readonly GridMergedCell[] | undefined>(undefined);
 
   // 最新の callback / props / diagnostic を **commit 後**に ref へ反映する（差し替えで remount しない・契約 §4 分類3）。
   // render 中ではなく useLayoutEffect で更新する: Concurrent React（startTransition/Suspense）で **未 commit の
@@ -621,6 +639,7 @@ function NanairoSheetViewImpl(
     const instance = mount({ container }, toMountOptions(propsRef.current, onEvent, onDiagnostic, validateCell));
     instanceRef.current = instance;
     appliedReadOnlyRef.current = propsRef.current.readOnly === true; // DD-056 H12: この mount が持つ readOnly
+    appliedMergedCellsRef.current = propsRef.current.mergedCells; // DD-064: この mount が持つ mergedCells
     // 接続状態キャッシュを instance の実値で初期化する（remount で旧状態を引き継がず、
     // 初回 connection 前の pending も現 instance の状態で通知する・Codex P2）。
     lastConnStateRef.current = instance.connectionState();
@@ -646,6 +665,18 @@ function NanairoSheetViewImpl(
     appliedReadOnlyRef.current = readOnlyProp;
     instance.setReadOnly(readOnlyProp);
   }, [readOnlyProp]);
+
+  // DD-064: mergedCells の変化も開き直さずに同じ instance の setMergedCells へ写す（readOnly と同じ形）。参照で比べ、instance が
+  // 持っている値（mount 時の値・直近に写した値）と違うときだけ呼ぶ。未指定へ戻したら [] で全部外す。
+  const mergedCellsProp = props.mergedCells;
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (instance === null || appliedMergedCellsRef.current === mergedCellsProp) {
+      return;
+    }
+    appliedMergedCellsRef.current = mergedCellsProp;
+    instance.setMergedCells(mergedCellsProp ?? []);
+  }, [mergedCellsProp]);
 
   // 初期値系（initialData/initialColumnWidths/initialRowHeights）の変更は無視＋診断 warn（契約 §4 分類2）。
   // **参照比較**で判定する（毎 render の直列化なし・Codex P1）。mountKey 変更に伴う remount では mount effect が

@@ -3,3 +3,14 @@
 
 export { rangeFromAnchorFocus, rangeContains, singleCell } from './selection';
 export type { CellRange, CellPos } from './selection';
+// DD-064: 結合範囲の索引と、結合を 1 つのセルとして扱う選択・移動。
+export {
+  EMPTY_MERGE_INDEX,
+  createMergeIndex,
+  expandRangeToMerges,
+  isSingleMergeRange,
+  mergeAnchorOf,
+  moveAcrossMerges,
+  stepAcrossMerges,
+} from './merges';
+export type { MergeBounds, MergeIndex, MergeMoveDirection } from './merges';

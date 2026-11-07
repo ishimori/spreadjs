@@ -125,8 +125,11 @@ export interface IntegrationEditor {
    * 同値なら DOM を書かない（毎フレーム呼んでも無コスト）。
    */
   setInputLock(locked: boolean): void;
-  /** scroller の pointerdown（main が hitTest 済み。null=ヘッダー/範囲外）。 */
-  pointerdownCell(cell: CellPosition | null): void;
+  /**
+   * scroller の pointerdown（main が hitTest 済み。null=ヘッダー/範囲外）。`focus: false` は常駐 textarea へフォーカスを
+   * 移さない（DD-064: 結合の左上への自動の正規化で、ページの他の入力欄からフォーカスを奪わない）。既定は従来どおり移す。
+   */
+  pointerdownCell(cell: CellPosition | null, options?: { readonly focus?: boolean }): void;
   /** scroller の dblclick（既存値編集開始）。 */
   doubleClickCell(cell: CellPosition): void;
   /**
@@ -502,9 +505,9 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
 
   return {
     session,
-    pointerdownCell: (cell) => {
+    pointerdownCell: (cell, options) => {
       dispatch(cell === null ? { type: 'pointerdown', target: 'outside' } : { type: 'pointerdown', target: 'cell', cell });
-      if (cell !== null && !session.isComposing()) {
+      if (cell !== null && !session.isComposing() && options?.focus !== false) {
         // preventScroll: 位置合わせは scroll-follow（mount-controller）が担うので、focus 既定の
         // scrollIntoView がそれと競合して画面が跳ねるのを防ぐ。
         textarea.focus({ preventScroll: true });

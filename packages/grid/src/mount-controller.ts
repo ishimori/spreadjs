@@ -24,11 +24,19 @@ import {
   createOverlayLayer,
   createTextMetricsCache,
   createViewportTransform,
+  mergedCellRect,
   normalizeDpr,
 } from '@nanairo-sheet/render';
 import type { CellRect, CellStatusMark, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
-import { singleCell } from '@nanairo-sheet/selection';
-import type { CellRange } from '@nanairo-sheet/selection';
+import {
+  EMPTY_MERGE_INDEX,
+  expandRangeToMerges,
+  mergeAnchorOf,
+  moveAcrossMerges,
+  singleCell,
+  stepAcrossMerges,
+} from '@nanairo-sheet/selection';
+import type { CellRange, MergeIndex, MergeMoveDirection } from '@nanairo-sheet/selection';
 import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
@@ -43,6 +51,10 @@ import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackg
 import { BorderConfigError, compileBorders, normalizeCanvasBorderColor, type CompiledBorders } from './border-rules';
 import { DisplayConfigError, compileDisplayFormats } from './display-format';
 import type { CompiledColumnDisplay } from './display-format';
+import { MergedCellsConfigError, describeMergeIssues, validateMergedCells } from './merged-cell-spec';
+import { createMergeRegistry } from './merged-cells';
+import { compileColumnGroups } from './column-groups';
+import type { CompiledColumnGroup } from './column-groups';
 import { shouldArmLinkCandidate } from './link-column';
 import { createSelectDropdown, decideSelectKey, filterOptionsByPrefix } from './select-editor';
 import type { SelectDropdown } from './select-editor';
@@ -106,6 +118,7 @@ import type {
   GridFlushOptions,
   GridFlushResult,
   GridInstance,
+  GridMergedCell,
   GridMountOptions,
   GridMountTarget,
   GridPresenceUser,
@@ -117,6 +130,7 @@ import type {
 } from './index';
 
 const HEADER_WIDTH = 52;
+/** 見出し 1 段の高さ（DD-064 K4: 2段の見出しでは上の段・下の段がそれぞれこの高さ）。 */
 const HEADER_HEIGHT = 24;
 const ROW_HEIGHT = 22;
 const COL_WIDTH = 80;
@@ -152,6 +166,26 @@ interface FlushWaiter {
   editTarget: object | null;
 }
 
+/** DD-064: キー → 結合を 1 セルとして動く方向（状態機械の keyToDirection と同じ対応。Shift＋矢印は範囲の拡張なので対象外）。 */
+function mergeMoveDirectionOf(key: string, shiftKey: boolean): MergeMoveDirection | null {
+  switch (key) {
+    case 'ArrowUp':
+      return shiftKey ? null : 'up';
+    case 'ArrowDown':
+      return shiftKey ? null : 'down';
+    case 'ArrowLeft':
+      return shiftKey ? null : 'left';
+    case 'ArrowRight':
+      return shiftKey ? null : 'right';
+    case 'Enter':
+      return shiftKey ? 'up' : 'down';
+    case 'Tab':
+      return shiftKey ? 'left' : 'right';
+    default:
+      return null;
+  }
+}
+
 /** GridMountOptions を受けて grid を container へ配線し、GridInstance を返す（同期 return・boot は非同期進行）。 */
 export function createGridController(target: GridMountTarget, options: GridMountOptions): GridInstance {
   let appearance = compileAppearance(undefined, [], () => true, () => undefined);
@@ -182,6 +216,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const stringColumnStrings = new Set<string>(stringColumns);
   // RC14（DD-052-3）: 行操作ショートカット自体の有効・無効（既定 true）。公開 API insertRows/deleteRows は対象外。
   const rowOperationsEnabled = options.rowOperations ?? true;
+  // DD-064 K4: 2段の見出し（columnGroups が 1 件以上なら上の段 HEADER_HEIGHT＋下の段 HEADER_HEIGHT）。mount 時固定。
+  // 形の検査は列の並びが分かる boot で行う（不正なら配線しない）ので、ここでは件数だけで高さを決める。
+  const groupBandHeight = Array.isArray(options.columnGroups) && options.columnGroups.length > 0 ? HEADER_HEIGHT : 0;
+  const headerHeight = HEADER_HEIGHT + groupBandHeight;
   // 行分割・文字測定の共有キャッシュ（base-layer 描画と自動行高計算で共有し line 数を一致させる・D4）。
   // measure は baseCtx.measureText（描画と同一フォント計測）。base-layer とキャッシュを共有する。
   const cellTextCache: TextMetricsCache = createTextMetricsCache((text, font) => {
@@ -236,6 +274,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // DD-033-2: 列見出しキャプション＋表示書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。
   // hasAny()=false（両オプション未指定）なら base-layer への columnHeaderLabel/formatCellText フック束縛を省く。
   let compiledDisplay: CompiledColumnDisplay | undefined;
+  // DD-064 K4: 2段の見出しのまとまり（列 index に解決済み・columnOrder 解決後に生成・fail-fast）。空なら 1 段。
+  let compiledColumnGroups: readonly CompiledColumnGroup[] = [];
+  // DD-064: 結合の形の検査に使う列の並び（boot で確定）。未確定の間に呼ばれた setMergedCells は最後の 1 回だけ保留する。
+  let mergeColumnOrder: readonly string[] | undefined;
+  let pendingMergedCells: { readonly raw: unknown } | undefined;
   // 選択式ドロップダウンの制御は attachBackendRendering 内で backend/editor を閉じ込めた関数として定義し、
   // createGridController 直下の handler（dblclick・pointerdown・redraw）からは以下の ref 経由で呼ぶ。
   let openSelectForActive: (() => void) | undefined;
@@ -257,7 +300,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let viewportHeight = 0;
   let selection: CellRange | null = null;
   // 矩形範囲選択の所有者（DD-020-1 案X）。activeCell の所有は editor-state-machine のまま・レンジのみここが持つ。
-  const selectionCtrl = createSelectionController();
+  // DD-064: 直前に描いた結合範囲で範囲を広げる（mergeRegistry は下で生成。呼ばれるのは配線後なので前方参照で足りる）。
+  const selectionCtrl = createSelectionController({ merges: () => mergeRegistry.index() });
   // Undo/Redo スタックの所有者（DD-020-3）。確定単位（1 op）ごとに逆値を保持し補償 SetCells を生成する。
   const undoCtrl = createUndoController();
   // RC13（DD-052-4）: submitSetCells が捕捉した逆値パッチを、standalone の beforeCellCommit フックへ橋渡しする
@@ -295,6 +339,45 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   // 診断ログ hook（opt-in・既定無出力）。GridEvent（consumer 契約）とは別系統の障害切り分け用。
   const diag = createDiagnosticSink(options.onDiagnostic);
+  // DD-064: 結合の指定と、描画の時に行へ張った結合（view-local）。張れない・壊れた理由は診断 warn（1 つの指定につき 1 回）。
+  const mergeRegistry = createMergeRegistry((code, message) => diag.emit('warn', code, message));
+  /** 直前の描画で張った結合（クリック・キー・コピー・描画はすべてこれで判定する＝画面と食い違わない）。 */
+  function currentMerges(): MergeIndex {
+    return mergeRegistry.index();
+  }
+  /** 張った結合が 1 つ以上あるか（無ければ結合の分岐は一切コストを持たない）。 */
+  function hasMergedCells(): boolean {
+    return mergeRegistry.index().size > 0;
+  }
+  /** 行・列 index が結合範囲のセルか（左上を含む）。 */
+  function isMergedCellIndex(rowIndex: number, colIndex: number): boolean {
+    return hasMergedCells() && currentMerges().at(rowIndex, colIndex) !== undefined;
+  }
+  /** RowId・ColumnId が結合範囲のセルか（SetCells の変更の判定用。今の行 Axis で index へ引く）。 */
+  function isMergedCellId(rowId: RowId, columnId: ColumnId): boolean {
+    if (!hasMergedCells() || sync === undefined) {
+      return false;
+    }
+    const row = sync.view.rowIndexOf(rowId);
+    const col = sync.view.colIndexOf(columnId);
+    return row >= 0 && col >= 0 && currentMerges().at(row, col) !== undefined;
+  }
+  /**
+   * 結合の指定を形の検査をして置き換える（setMergedCells・boot 前の保留の適用）。throw しない: 形の誤りの指定だけ捨てて
+   * 診断 warn（merged-cells-invalid）を出し、残りは張る。配列でなければ何も変えない。張るのは次の描画の時（contract §1.2）。
+   */
+  function applyMergedCellsCommand(raw: unknown, columnOrder: readonly string[]): void {
+    const result = validateMergedCells(raw, columnOrder, frozenColCount);
+    if (result.notArray) {
+      diag.emit('warn', 'merged-cells-invalid', 'setMergedCells: { rowId, columnId, rowSpan?, columnSpan? } の配列が必要（無視）');
+      return;
+    }
+    if (result.issues.length > 0) {
+      diag.emit('warn', 'merged-cells-invalid', `setMergedCells: 形の誤りの指定を捨てた（${describeMergeIssues(result.issues)}）`);
+    }
+    mergeRegistry.replace(result.specs);
+    sync?.view.markViewportDirty(); // 次の描画で張る（呼ぶ順によらず、その時の行の並びで張る）
+  }
 
   // DD-033-1: 表示専用モード（readOnly）。両モード共通。boolean 単値ゆえ構成不整合が無く fail-fast なし。
   // TS 型（boolean|undefined）が正規経路を強制するが、JS 経路の非 boolean は `=== true` の厳密判定で編集可能側へ倒し、
@@ -432,7 +515,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const overlayLayer = createOverlayLayer({
     ctx: overlayCtx,
     headerWidth: HEADER_WIDTH,
-    headerHeight: HEADER_HEIGHT,
+    headerHeight,
   });
 
   function overscanY(): number {
@@ -450,7 +533,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       rowAxis: sync.view.rowAxis,
       colAxis: sync.view.colAxis,
       headerWidth: HEADER_WIDTH,
-      headerHeight: HEADER_HEIGHT,
+      headerHeight,
       frozenRowCount,
       frozenColCount,
       viewportWidth,
@@ -465,7 +548,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   function placementConfig(): PlacementConfig {
     return {
       headerWidth: HEADER_WIDTH,
-      headerHeight: HEADER_HEIGHT,
+      headerHeight,
       viewportWidth,
       viewportHeight,
       frozenRowCount,
@@ -478,21 +561,72 @@ export function createGridController(target: GridMountTarget, options: GridMount
   }
 
   function overlayFrame(transform: ViewportTransform): OverlayFrame {
+    const merges = currentMerges();
     return {
       transform,
       viewportWidth,
       viewportHeight,
       dpr,
       // 明示レンジ（DD-020-1）があればそれを、無ければ activeCell の単一セル（onChange が更新する shadow）を描く。
-      selection: selectionCtrl.getRange() ?? selection,
+      // DD-064: 単一セルが結合の左上なら枠は結合範囲全体（明示レンジ・ドラッグは selection-controller が広げ済み）。
+      selection: selectionCtrl.getRange() ?? (selection === null ? null : expandRangeToMerges(merges, selection)),
       dragRange: selectionCtrl.getDragRange(),
       presences: sync !== undefined ? toPresenceUsers(sync.session.knownPresences(), sync.view) : [],
+      ...(merges.size > 0 ? { mergedRanges: merges } : {}),
     };
   }
 
+  /**
+   * DD-064: 結合を今の行の並びに張り直す（描画の直前にだけ呼ぶ＝setData・setMergedCells の呼ぶ順によらない・contract §1.2）。
+   * 張った結合が変わったら、wrap 列の自動行高を測り直し（結合範囲のセルは測らない）、アクティブセルを結合の左上へ寄せ、
+   * textarea のロックを取り直す。
+   */
+  function refreshMerges(): void {
+    if (resolveMerges()) {
+      afterMergesChanged();
+    }
+  }
+
+  /** DD-064: 結合を今の行 Axis に張り直すだけ（副作用なし）。張った結合が変わったら true。 */
+  function resolveMerges(): boolean {
+    const backend = sync;
+    return backend !== undefined && mergeRegistry.resolve(backend.view.rowAxis, frozenRowCount);
+  }
+
+  /** DD-064: 張った結合が変わった後の追従（wrap 列の自動行高・アクティブセルの左上への正規化・textarea のロック）。 */
+  function afterMergesChanged(): void {
+    if (wrapEnabled && sync !== undefined) {
+      sync.view.recomputeAllAutoRowHeights();
+      syncSpacer();
+    }
+    normalizeActiveIntoMerge();
+    syncCellLock();
+  }
+
+  /**
+   * DD-064: アクティブセルが結合範囲の中（左上以外）なら左上へ移す（Navigation かつ変換中でないときだけ・I-3）。
+   * 常駐 textarea へフォーカスは移さない（ページの他の入力欄からフォーカスを奪わない）。移したら true。
+   */
+  function normalizeActiveIntoMerge(): boolean {
+    if (editor === undefined || !hasMergedCells() || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
+      return false;
+    }
+    const active = editor.session.getActiveCell();
+    const anchor = mergeAnchorOf(currentMerges(), active);
+    if (anchor.row === active.row && anchor.col === active.col) {
+      return false;
+    }
+    editor.pointerdownCell(anchor, { focus: false });
+    return true;
+  }
+
   function redraw(): void {
+    if (sync === undefined || baseLayer === undefined) {
+      return;
+    }
+    refreshMerges(); // DD-064: 描く前に結合を今の行に張る（アクティブセルの正規化で scroll が動きうるので transform より先）
     const transform = currentTransform();
-    if (transform === undefined || baseLayer === undefined) {
+    if (transform === undefined) {
       return;
     }
     baseLayer.draw(frameViewport(transform));
@@ -515,9 +649,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (transform === undefined) {
       return;
     }
-    const rect = transform.cellRect(cell.row, cell.col);
+    // DD-064: 結合の左上なら範囲全体を見せる（範囲が可視域より大きければ上端・左端を優先する）。
+    const merge = hasMergedCells() ? currentMerges().at(cell.row, cell.col) : undefined;
+    const rect = merge !== undefined ? mergedCellRect(transform, merge) : transform.cellRect(cell.row, cell.col);
     const bodyOriginX = HEADER_WIDTH + transform.frozenWidth();
-    const bodyOriginY = HEADER_HEIGHT + transform.frozenHeight();
+    const bodyOriginY = headerHeight + transform.frozenHeight();
     // 固定行/列のセルはスクロール非依存ゆえ追従不要（body セルのみ）。
     // DD-036 C4: 軸指定（scrollToRow=縦のみ / scrollToColumn=横のみ）。既定 'both' は従来と同一挙動。
     // DD-046: stageにはネイティブスクロールバーも含まれる。文字が隠れない可視域へ収める。
@@ -526,14 +662,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (rect.y < bodyOriginY) {
         scroller.scrollTop += rect.y - bodyOriginY; // 上へはみ出し → スクロールアップ（負）
       } else if (rect.y + rect.height > visibleHeight) {
-        scroller.scrollTop += rect.y + rect.height - visibleHeight;
+        const down = rect.y + rect.height - visibleHeight;
+        scroller.scrollTop += merge === undefined ? down : Math.min(down, rect.y - bodyOriginY);
       }
     }
     if (axes !== 'vertical' && cell.col >= frozenColCount) {
       if (rect.x < bodyOriginX) {
         scroller.scrollLeft += rect.x - bodyOriginX;
       } else if (rect.x + rect.width > visibleWidth) {
-        scroller.scrollLeft += rect.x + rect.width - visibleWidth;
+        const right = rect.x + rect.width - visibleWidth;
+        scroller.scrollLeft += merge === undefined ? right : Math.min(right, rect.x - bodyOriginX);
       }
     }
   }
@@ -678,10 +816,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     closeSelectDropdown?.();
     closeDatePicker?.();
     selectionCtrl.clear();
-    editor.pointerdownCell({ row, col });
-    ensureCellVisible({ row, col }); // composition 中は activeCell が動かない（pendingNavigation）が可視化はしておく
+    // DD-064: 結合範囲の中を指したら左上へ（範囲の中は左上のセルとして選ぶ）。
+    const target = mergeAnchorOf(currentMerges(), { row, col });
+    editor.pointerdownCell(target);
+    ensureCellVisible(target); // composition 中は activeCell が動かない（pendingNavigation）が可視化はしておく
     backend.view.markViewportDirty();
-    diag.emit('info', 'set-active-cell', `setActiveCell: rowId=${rowId} columnId=${columnId} → (${row},${col})`);
+    diag.emit('info', 'set-active-cell', `setActiveCell: rowId=${rowId} columnId=${columnId} → (${target.row},${target.col})`);
   }
 
   // ---- DD-056 H12: 読み取り専用の実行時切替（setReadOnly）・送り切り（flush）・pendingCount（contract.md §4）----
@@ -965,8 +1105,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (result.structuralRebuilt) {
       metrics.mark('axisBuilt');
     }
+    // DD-064: 再ベースの前に結合を新しい行 Axis へ張り直す（古い索引のままだと、再ベース先の正規化が古い行 index で左上を
+    // 選び、挿入された別の行へ寄せてしまう）。追従（正規化・ロック）は再ベースの後に行う。
+    const mergesChanged = resolveMerges();
     // rowAxis 再構築後に activeCell/選択レンジを RowId で新 index へ引き直す（表示 index ずれの是正）。
     applyRebaseState(rebase);
+    if (mergesChanged) {
+      afterMergesChanged();
+    }
     syncSpacer();
     if (anchor !== null) {
       const corrected = correctScroll({
@@ -1102,8 +1248,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       if (row < 0 || col < 0) {
         return;
       }
-      emit(cellHoverEvent(hovered.rowId, hovered.columnId, transform.cellRect(row, col)));
+      emit(cellHoverEvent(hovered.rowId, hovered.columnId, hoverRect(transform, row, col)));
     });
+  }
+  /** DD-064: ホバーの矩形（結合の左上なら範囲全体）。 */
+  function hoverRect(transform: ViewportTransform, row: number, col: number): GridCellRect {
+    const merge = hasMergedCells() ? currentMerges().at(row, col) : undefined;
+    return merge !== undefined ? mergedCellRect(transform, merge) : transform.cellRect(row, col);
   }
   /** hit（cell 以外は null）を見てホバー中セルが変わっていれば cell-hover を発火する。 */
   function updateCellHover(hit: { readonly rowIndex: number; readonly colIndex: number } | null): void {
@@ -1113,10 +1264,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     const transform = currentTransform();
     let next: { rowId: string; columnId: string; rect: GridCellRect } | null = null;
     if (hit !== null && transform !== undefined) {
-      const rowId = sync.view.rowIdAt(hit.rowIndex);
-      const columnId = sync.view.columnIdAt(hit.colIndex);
+      // DD-064: 結合範囲の中は左上のセルとして通知する（範囲の中を動いても出し直さない・rect は範囲全体）。
+      const cell = mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex });
+      const rowId = sync.view.rowIdAt(cell.row);
+      const columnId = sync.view.columnIdAt(cell.col);
       if (rowId !== undefined && columnId !== undefined) {
-        next = { rowId: String(rowId), columnId: String(columnId), rect: transform.cellRect(hit.rowIndex, hit.colIndex) };
+        next = { rowId: String(rowId), columnId: String(columnId), rect: hoverRect(transform, cell.row, cell.col) };
       }
     }
     if (next?.rowId === hoveredCell?.rowId && next?.columnId === hoveredCell?.columnId) {
@@ -1193,6 +1346,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   /**
    * アクティブセルが readOnly 列・readOnly 行・行データ指定の readOnly セルのいずれかにあるか
    * （textarea のロック・入口抑止の共通条件）。DD-035 R4（列）・DD-036 C3（行）・RC3（セル）の和。
+   * DD-064: 結合範囲のセルも読むだけ（K3）なので含める（送信直前の保証層 touchesReadOnly* には含めない・contract §2）。
    */
   function isActiveCellReadOnly(): boolean {
     if (editor === undefined) {
@@ -1200,8 +1354,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     const active = editor.session.getActiveCell();
     return (
-      isReadOnlyColumnIndex(active.col) || isReadOnlyRowIndex(active.row) || isReadOnlyCellIndex(active.row, active.col)
+      isReadOnlyColumnIndex(active.col) ||
+      isReadOnlyRowIndex(active.row) ||
+      isReadOnlyCellIndex(active.row, active.col) ||
+      isMergedCellIndex(active.row, active.col)
     );
+  }
+  /**
+   * 読み取り専用のアクティブセルで編集 UI（候補欄・カレンダー）を止めたときの診断（DD-064: 結合範囲なら専用の code）。
+   * diag.emit へ展開して渡す引数（level・code・message）。
+   */
+  function readOnlyEntryBlocked(what: string): ['info', string, string] {
+    const active = editor?.session.getActiveCell();
+    if (active !== undefined && isMergedCellIndex(active.row, active.col)) {
+      return ['info', 'merged-cell-blocked', `mergedCells: 結合範囲で${what}を抑止`];
+    }
+    return ['info', 'readonly-column-blocked', `readOnlyColumns/readOnlyRows: ${what}を抑止`];
   }
   /**
    * 未知 rowId の診断 warn（DD-036 C3・契約 §3）。行 ID は mount 時点では検証できないため、**初回描画の直後に 1 回だけ**
@@ -1258,10 +1426,19 @@ export function createGridController(target: GridMountTarget, options: GridMount
    * 全件スキップなら null（呼び出し側は no-op）。上限/はみ出し検査は矩形全体で先に済んでいる（事後フィルタ）。
    */
   function filterReadOnlyCells(op: SetCellsOperation, label: string): SetCellsOperation | null {
-    if (!hasReadOnlyCells()) {
+    if (!hasReadOnlyCells() && !hasMergedCells()) {
       return op;
     }
     let changes: readonly SetCellsChange[] = op.changes;
+    // DD-064: 結合範囲のセルは読むだけ（K3）。貼り付け・範囲の消去・cut は範囲のセルだけ飛ばす（readOnly 列・行と同じ）。
+    if (hasMergedCells()) {
+      const kept = changes.filter((change) => !isMergedCellId(change.rowId, change.columnId));
+      const skipped = changes.length - kept.length;
+      if (skipped > 0) {
+        diag.emit('info', 'merged-cell-skipped', `${label}: 結合範囲のセル ${skipped} 件をスキップ（残り ${kept.length} 件）`);
+      }
+      changes = kept;
+    }
     if (hasReadOnlyColumns()) {
       const partition = partitionReadOnlyColumnChanges(changes, isReadOnlyColumnId);
       if (partition.skipped > 0) {
@@ -1411,16 +1588,34 @@ export function createGridController(target: GridMountTarget, options: GridMount
     sync?.view.markViewportDirty();
   }
 
+  /** DD-064 K4: 列 index を含むまとまり（無ければ undefined）。 */
+  function columnGroupAt(colIndex: number): CompiledColumnGroup | undefined {
+    return compiledColumnGroups.find((group) => colIndex >= group.colStart && colIndex < group.colEnd);
+  }
+  /** DD-064 K4: (列, y) が 2段の見出しの上の段の、まとまりの名前の上か（まとめていない列は 2 段ぶんが列の見出し）。 */
+  function isGroupBandHit(colIndex: number, y: number): boolean {
+    return groupBandHeight > 0 && y < groupBandHeight && columnGroupAt(colIndex) !== undefined;
+  }
+
   function resizeHit(transform: ViewportTransform, x: number, y: number): ResizeTarget | null {
     if (sync === undefined) {
       return null;
     }
-    return resizeHitTest(transform, x, y, {
+    const target = resizeHitTest(transform, x, y, {
       headerWidth: HEADER_WIDTH,
-      headerHeight: HEADER_HEIGHT,
+      headerHeight,
       rowCount: sync.view.rowAxis.count(),
       colCount: sync.view.colAxis.count(),
     });
+    // DD-064 K4: 上の段では、まとまりの中の列の境界（列 index とその右の列が同じまとまり）では列幅を変えない
+    // （境界の線が描かれていない所で掴めないように）。まとまりの端の境界・下の段は従来どおり。
+    if (target !== null && target.axis === 'column' && groupBandHeight > 0 && y < groupBandHeight) {
+      const group = columnGroupAt(target.index);
+      if (group !== undefined && target.index + 1 < group.colEnd) {
+        return null;
+      }
+    }
+    return target;
   }
 
   /**
@@ -1487,7 +1682,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 非空セル値を **AUTO_FIT_MAX_SCAN+1 件まで**収集して打ち切る（visitor が false を返すと queryRange が中断＝
     // 50k 行列でも定数コスト・予算保護・Fable P2）。measure と truncated 判定は純関数 computeAutoFitContentWidth が担う。
     const values: string[] = [];
-    backend.view.store.queryRange(0, rowCount, colIndex, colIndex + 1, (_row, _col, value) => {
+    const merges = currentMerges();
+    backend.view.store.queryRange(0, rowCount, colIndex, colIndex + 1, (row, col, value) => {
+      // DD-064: 結合範囲の左上以外（描かない値）と、2 列以上にまたがる結合の値（この列 1 本の幅で測る意味が無い）は測らない。
+      const merge = merges.size > 0 ? merges.at(row, col) : undefined;
+      if (merge !== undefined && (merge.rowStart !== row || merge.colStart !== col || merge.colEnd - merge.colStart > 1)) {
+        return;
+      }
       values.push(value);
       if (values.length > AUTO_FIT_MAX_SCAN) {
         return false; // 打ち切り判定に十分な件数を確保したら即中断
@@ -1587,20 +1788,20 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // 境界内のときだけ hit を解決する（不可視セルへ範囲が伸び、Delete で画面外の値を消す事故を防ぐ）。
         const inViewport = x >= 0 && y >= 0 && x < viewportWidth && y < viewportHeight;
         const hit = inViewport ? transform.hitTest(x, y) : null;
+        // DD-064: 候補（リンク・検索付き候補）は結合の左上で持つので、ポインタのセルも左上へ寄せて比べる（範囲の中の移動は
+        // 別のセルへの移動と見なさない）。
+        const hitCell = hit?.area === 'cell' ? mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex }) : null;
         // DD-027-2[Fable P1]: ドラッグで pointer が開始セルの外（別セル・ヘッダー・viewport 外）へ動いたらリンク候補を
         // 破棄する（=ドラッグ選択・発火なし・AC3）。selection の viewport 境界ガードより前で判定するため、
         // ヘッダーへの離脱や高速フリックでの格子外離脱でも確実に破棄される（旧実装は cell hit ブロック内でのみ破棄し
         // ヘッダー/viewport 外離脱が抜けていた）。
         if (
           linkCandidate !== null &&
-          (hit === null ||
-            hit.area !== 'cell' ||
-            hit.rowIndex !== linkCandidate.cell.row ||
-            hit.colIndex !== linkCandidate.cell.col)
+          (hitCell === null || hitCell.row !== linkCandidate.cell.row || hitCell.col !== linkCandidate.cell.col)
         ) {
           linkCandidate = null;
         }
-        if (searchSelectCandidate !== null && (hit?.area !== 'cell' || hit.rowIndex !== searchSelectCandidate.row || hit.colIndex !== searchSelectCandidate.col)) searchSelectCandidate = null;
+        if (searchSelectCandidate !== null && (hitCell === null || hitCell.row !== searchSelectCandidate.row || hitCell.col !== searchSelectCandidate.col)) searchSelectCandidate = null;
         // セル領域のみ focus を更新する（ヘッダー上・viewport 外は直近セルを保持）。
         if (hit !== null && hit.area === 'cell') {
           selectionCtrl.updateDrag({ row: hit.rowIndex, col: hit.colIndex });
@@ -1609,7 +1810,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       // 非ドラッグ: ヘッダー境界上でのみ resize カーソルへ切替（セル領域は cheap に既定へ戻す）。
-      if (x >= HEADER_WIDTH && y >= HEADER_HEIGHT) {
+      if (x >= HEADER_WIDTH && y >= headerHeight) {
         const hasLinkColumns = columnTypeRegistry?.hasAnyLinkColumn() === true;
         // RC6（DD-052-5）: セルホバー通知。既存の link 列 cursor 判定と hitTest を共有する（二重計算しない）。
         const transformForHover = currentTransform();
@@ -1648,8 +1849,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const candidate = searchSelectCandidate;
       const point = stageLocal(event);
       const hit = currentTransform()?.hitTest(point.x, point.y);
-      const openSearch = candidate?.pointerId === event.pointerId && hit?.area === 'cell'
-        && hit.rowIndex === candidate.row && hit.colIndex === candidate.col;
+      // DD-064: 候補は結合の左上で持つ（ポインタのセルも左上へ寄せて比べる）。
+      const upCell = hit?.area === 'cell' ? mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex }) : undefined;
+      const openSearch = candidate?.pointerId === event.pointerId && upCell !== undefined
+        && upCell.row === candidate.row && upCell.col === candidate.col;
       finishResize(event.pointerId, true);
       finishSelectionDrag(event.pointerId, true);
       if (openSearch) openSelectForActive?.();
@@ -1735,7 +1938,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const hit = transform.hitTest(x, y);
       if (hit.area !== 'cell') {
         // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
-        if (hit.area === 'column-header') {
+        // DD-064 K4: 2段の見出しの上の段（まとまりの名前）のクリックは通知しない（列の見出しではない）。
+        if (hit.area === 'column-header' && !isGroupBandHit(hit.colIndex, y)) {
           const columnId = sync.view.columnIdAt(hit.colIndex);
           if (columnId !== undefined) {
             emit({ type: 'header-click', columnId: String(columnId) });
@@ -1748,12 +1952,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // mousedown 既定挙動が focus を body へ奪い、直後の pointerdownCell の textarea.focus() を打ち消す。
       // これを止めないとクリック後の矢印キーが scroller のネイティブスクロールへ流れ、カレントセルが動かない。
       event.preventDefault();
-      const cell = { row: hit.rowIndex, col: hit.colIndex };
+      const hitCell = { row: hit.rowIndex, col: hit.colIndex };
+      // DD-064: 結合範囲の中のクリックは左上のセルとして扱う（アクティブセル・ドラッグの起点・リンク候補）。
+      const cell = mergeAnchorOf(currentMerges(), hitCell);
       // Shift+クリック（Navigation・非 composition 限定）: anchor=activeCell 固定でレンジ拡張（DD-020-1 AC2）。
       // activeCell は動かさない（editor.pointerdownCell を呼ばない）。編集中/変換中は前段消費せず従来経路
       // （確定して移動 / pendingNavigation）のまま＝IME・編集の挙動保存（案X）。
       if (event.shiftKey && !editor.session.isComposing() && editor.session.getPhase() === 'Navigation') {
-        selectionCtrl.extendTo(editor.session.getActiveCell(), cell);
+        // DD-064: 範囲は selection-controller が結合を含むまで広げる（焦点はクリックしたセルのまま）。
+        selectionCtrl.extendTo(editor.session.getActiveCell(), hitCell);
         editor.focus(); // 入力受け口（常駐 textarea）を保持（以降の Shift+矢印を受けられるように）
         sync.view.markViewportDirty();
         return;
@@ -1827,6 +2034,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // していたため、行データで readOnly にしたセルを dblclick で開けてしまっていた）。
         if (isReadOnlyCellIndex(hit.rowIndex, hit.colIndex)) {
           diag.emit('info', 'readonly-cell-blocked', `readOnlyColumns（行データ指定）: セル row=${String(sync.view.rowIdAt(hit.rowIndex))} col=${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
+          return;
+        }
+        // DD-064: 結合範囲は読むだけ（K3）。編集 UI（textarea・候補欄・カレンダー）を開かない。
+        if (isMergedCellIndex(hit.rowIndex, hit.colIndex)) {
+          const anchor = mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex });
+          diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲（左上 row=${String(sync.view.rowIdAt(anchor.row))} col=${String(sync.view.columnIdAt(anchor.col))}）のダブルクリック編集を抑止`);
           return;
         }
         // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列
@@ -1934,10 +2147,33 @@ export function createGridController(target: GridMountTarget, options: GridMount
         isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
         isLinkColumn: (columnId) => columnTypeRegistry?.isLinkColumn(columnId) === true,
       });
+      // DD-064 K4: 2段の見出しのまとまり（形の誤りは DisplayConfigError → column-display-invalid）。
+      compiledColumnGroups = compileColumnGroups(options.columnGroups, columnOrder, frozenColCount);
+      // DD-064: mount オプションの結合（形の誤りは 1 件でも fail-fast → merged-cells-invalid）。行に張るのは最初の描画の時。
+      const mountMerges = validateMergedCells(options.mergedCells, columnOrder, frozenColCount);
+      if (mountMerges.notArray) {
+        throw new MergedCellsConfigError('mergedCells: { rowId, columnId, rowSpan?, columnSpan? } の配列が必要');
+      }
+      if (mountMerges.issues.length > 0) {
+        throw new MergedCellsConfigError(describeMergeIssues(mountMerges.issues));
+      }
+      mergeRegistry.replace(mountMerges.specs);
+      mergeColumnOrder = columnOrder;
+      // boot 前に呼ばれた setMergedCells（最後の 1 回）を、mount オプションの後に適用する（呼んだ側の指定が勝つ）。
+      if (pendingMergedCells !== undefined) {
+        const pending = pendingMergedCells;
+        pendingMergedCells = undefined;
+        applyMergedCellsCommand(pending.raw, columnOrder);
+      }
       return true;
     } catch (error) {
       // DD-027-1/2: columnTypes 不正 ／ DD-027-3: columnFormats 不正 は column-types-invalid へ、
       // DD-033-2: columnCaptions/columnDisplayFormats 不正 は column-display-invalid へ（意味を分けて障害切り分けを濁さない）。
+      if (error instanceof MergedCellsConfigError) {
+        diag.emit('error', 'config-error', `merged-cells-invalid: ${error.message}`);
+        emit({ type: 'error', phase: 'config', code: 'merged-cells-invalid', message: error.message });
+        return false;
+      }
       if (error instanceof BorderConfigError) {
         diag.emit('error', 'config-error', `border-config-invalid: ${error.message}`);
         emit({ type: 'error', phase: 'config', code: 'border-config-invalid', message: error.message });
@@ -2480,11 +2716,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
+    // DD-064: wrap 列の自動行高から結合範囲のセルを外す（範囲の文字で行の高さを伸ばさない＝Excel と同じ）。結合が変わるたびに
+    // refreshMerges が全行を測り直す。wrap 列が無ければ自動行高そのものが無いので何もしない。
+    if (wrapEnabled) {
+      backend.view.setAutoHeightSkip((rowId, columnId) => isMergedCellId(rowId, columnId));
+    }
     baseLayer = createBaseLayer({
       ctx: baseCtx,
       store: backend.view.store,
       headerWidth: HEADER_WIDTH,
-      headerHeight: HEADER_HEIGHT,
+      headerHeight,
+      // DD-064: 結合範囲（直前の描画の前に張ったもの）と 2段の見出し。どちらも無ければ追加の描画ゼロ。
+      mergedRanges: currentMerges,
+      ...(compiledColumnGroups.length > 0
+        ? { columnGroupBand: { height: groupBandHeight, groups: compiledColumnGroups } }
+        : {}),
       // DD-012-5: 共有キャッシュ・wrap 判定・pane 境界・折り返し行高を渡す（オーバーフロー／折り返し描画）。
       cellFont: appearance.cellFont,
       headerFont: appearance.headerFont,
@@ -2590,6 +2836,24 @@ export function createGridController(target: GridMountTarget, options: GridMount
       rowCount: () => backend.view.rowAxis.count(),
       colCount: () => backend.view.colAxis.count(),
     };
+    /**
+     * DD-064: コピー（cut の書き出しも）用のポート。結合範囲の左上以外のセルは空として書く（左上に値・残りは空＝Excel と同じ。
+     * 範囲の中の他のセルに値があっても描いていないので書き出さない）。結合が無ければ clipPort と同じ値。
+     */
+    const copyPort: ClipboardDocumentPort = {
+      ...clipPort,
+      displayText: (rowId, columnId) => {
+        if (hasMergedCells()) {
+          const row = backend.view.rowIndexOf(rowId);
+          const col = backend.view.colIndexOf(columnId);
+          const merge = row >= 0 && col >= 0 ? currentMerges().at(row, col) : undefined;
+          if (merge !== undefined && (merge.rowStart !== row || merge.colStart !== col)) {
+            return '';
+          }
+        }
+        return backend.view.cellDisplay(rowId, columnId);
+      },
+    };
 
     /**
      * 実行前拒否（上限超過・はみ出し）の通知（範囲クリア／paste／cut 共有）。診断は常に出す。公開 rejected は
@@ -2662,7 +2926,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return null; // 非 Navigation → ブラウザ既定（textarea copy）
       }
       const range = selectionCtrl.selectedRange(editor.session.getActiveCell());
-      return serializeSelectionToTsv(clipPort, range);
+      return serializeSelectionToTsv(copyPort, range);
     };
 
     /**
@@ -2688,7 +2952,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         );
         return null; // クリップボードは変更しない（Navigation の空 textarea への既定 cut は no-op）
       }
-      const tsv = serializeSelectionToTsv(clipPort, range);
+      const tsv = serializeSelectionToTsv(copyPort, range);
       if (outcome.kind === 'submit') {
         // DD-035 R4: cut のクリアは readOnly 列をスキップ（copy＝TSV は全列そのまま＝閲覧系）。
         const op = filterReadOnlyCells(outcome.operation, 'cut');
@@ -2955,7 +3219,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       if (isActiveCellReadOnly()) {
-        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns/readOnlyRows: 選択式ドロップダウンを抑止');
+        diag.emit(...readOnlyEntryBlocked('選択式ドロップダウン'));
         return;
       }
       if (editor === undefined || selectDropdown === undefined || columnTypeRegistry === undefined) {
@@ -3099,7 +3363,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       if (isActiveCellReadOnly()) {
-        diag.emit('info', 'readonly-column-blocked', 'readOnlyColumns/readOnlyRows: 日付カレンダーを抑止');
+        diag.emit(...readOnlyEntryBlocked('日付カレンダー'));
         return;
       }
       if (editor === undefined || datePicker === undefined || columnTypeRegistry === undefined) {
@@ -3372,7 +3636,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return backend.view.colAxis.count();
       },
       rowHeaderWidth: HEADER_WIDTH,
-      columnHeaderHeight: HEADER_HEIGHT,
+      columnHeaderHeight: headerHeight,
       cellWidth: COL_WIDTH,
       cellHeight: ROW_HEIGHT,
     };
@@ -3431,6 +3695,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
         if (editor === undefined) {
           return;
         }
+        // DD-064: 移動の結果（編集中の Enter・Tab・矢印での確定と移動を含む）が結合範囲の中なら左上へ寄せる。寄せた先の
+        // onChange（入れ子）が以下を済ませるので、ここでは何もしない。
+        if (normalizeActiveIntoMerge()) {
+          return;
+        }
         syncCellLock(); // DD-035 R4 / DD-036 C3: activeCell の列・行に応じて textarea の readOnly 属性を同期（非 composing 時のみ）
         ensureActiveCellVisible(); // アクティブセルを可視域へ（scrollTop/Left を同期更新しうる）
         // DD-020-1 AC4: activeCell 移動・編集開始で明示レンジを単一選択へ戻す（不変条件は controller が判定）。
@@ -3477,7 +3746,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // アンカーが readOnly 列でも可編集列を含むレンジのクリアは契約どおり成立させる。
         const rangeDelete = input.key === 'Delete' && selectionCtrl.getRange() !== null;
         if (
-          hasReadOnlyCells() &&
+          (hasReadOnlyCells() || hasMergedCells()) &&
           !rangeDelete &&
           isActiveCellReadOnly() &&
           shouldSuppressReadonlyKey({
@@ -3491,9 +3760,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
             phase: current.session.getPhase(),
           })
         ) {
+          const active = current.session.getActiveCell();
+          // DD-064: 結合範囲（読むだけ）は専用の診断 code で区別する。
+          if (isMergedCellIndex(active.row, active.col)) {
+            diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲で編集キー「${input.key}」を抑止`);
+            return true;
+          }
           diag.emit(
             'info',
-            isReadOnlyRowIndex(current.session.getActiveCell().row) ? 'readonly-row-blocked' : 'readonly-column-blocked',
+            isReadOnlyRowIndex(active.row) ? 'readonly-row-blocked' : 'readonly-column-blocked',
             `readOnlyColumns/readOnlyRows: 編集キー「${input.key}」を抑止`,
           );
           return true;
@@ -3663,6 +3938,28 @@ export function createGridController(target: GridMountTarget, options: GridMount
           }
           performDeleteRows(rowIds);
           return true;
+        }
+        // DD-064: 結合を 1 つのセルとして動く（Navigation の矢印・Tab・Enter。Shift＋矢印は下の範囲の拡張）。状態機械が動かす先
+        // （1 セル先）と違うときだけ消費して、その先へ移す（結合の左上から下・右は範囲の外へ・結合の中へ入ったら左上）。
+        // 同じなら状態機械へ流す（結合が無ければ常に同じ＝従来経路のまま）。変換中・編集中は対象外（I-3・編集中の確定と
+        // 移動の先は onChange の正規化が左上へ寄せる）。
+        if (hasMergedCells() && !input.isComposing && !current.session.isComposing() && current.session.getPhase() === 'Navigation') {
+          const direction = mergeMoveDirectionOf(input.key, input.shiftKey);
+          if (direction !== null) {
+            const active = current.session.getActiveCell();
+            const bounds = { rowCount: backendNow.view.rowAxis.count(), colCount: backendNow.view.colAxis.count() };
+            const target = moveAcrossMerges(currentMerges(), active, direction, bounds);
+            const plain = stepAcrossMerges(EMPTY_MERGE_INDEX, active, direction, bounds);
+            if (target.row !== plain.row || target.col !== plain.col) {
+              // 動くときだけ明示レンジを解く（グリッドの端で結合の外へ出られないときは、端での通常の矢印と同じく何も変えない）。
+              if (target.row !== active.row || target.col !== active.col) {
+                selectionCtrl.clear();
+                current.pointerdownCell(target);
+              }
+              backendNow.view.markViewportDirty();
+              return true;
+            }
+          }
         }
         const decision = decideNavigationIntercept({
           key: input.key,
@@ -3938,6 +4235,19 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       applyCellStatus(rows);
     },
+    setMergedCells(mergedCells: readonly GridMergedCell[]) {
+      // DD-064: 両モード共通・view-local。列の並びが分かる前（boot 前）は最後の 1 回だけ保留して boot で適用する。
+      // 張るのは次の描画の時（setData と同じ処理の中ならどちらを先に呼んでもよい・contract §1.2）。
+      if (destroyed) {
+        return;
+      }
+      const raw: unknown = mergedCells;
+      if (mergeColumnOrder === undefined) {
+        pendingMergedCells = { raw };
+        return;
+      }
+      applyMergedCellsCommand(raw, mergeColumnOrder);
+    },
     insertRows(options: { readonly afterRowId: string | null; readonly count?: number }) {
       performInsertRows(options.afterRowId, options.count ?? 1);
     },
@@ -4117,6 +4427,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
       const caption = id === undefined ? undefined : compiledDisplay?.captionFor(String(id));
       return caption ?? columnLabel(col);
     },
+    // DD-064: 直前の描画で張った結合範囲（canvas の描画を DOM から読めないための E2E 観測用）。
+    mergedRanges: () => currentMerges().all().map((range) => ({ ...range })),
+    // DD-064 K4: 見出しの高さ（2段なら 48）。
+    headerHeight: () => headerHeight,
     // DD-033-1（統合レビュー P3-1）: debug API（test-support）も readOnly では文書 Operation を送信しない。
     // 行操作は submitToBackend を通らず session.submitLocalOperation 直呼びのため、素通しだと
     // 「送信ゼロの構造的保証」の唯一の例外になる（perform* 先頭ガードの設計規約に合わせる）。

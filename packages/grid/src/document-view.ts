@@ -120,6 +120,8 @@ export class DocumentView {
   private dirtyStructure = false;
   private dirtyViewport = false;
   private structuralRebuilds = 0;
+  /** DD-064: 自動の行高の計算から外すセル（結合範囲。範囲の文字で行の高さを伸ばさない＝Excel と同じ）。未設定なら全セルを測る。 */
+  private autoHeightSkip: ((rowId: RowId, columnId: ColumnId) => boolean) | undefined;
 
   constructor(config: DocumentViewConfig) {
     this.getDocument = config.getDocument;
@@ -291,6 +293,9 @@ export class DocumentView {
     const doc = this.getDocument();
     const lineCounts: number[] = [];
     for (const columnId of this.wrapColumnSet) {
+      if (this.autoHeightSkip?.(rowId, columnId) === true) {
+        continue; // DD-064: 結合範囲のセルは行の高さを伸ばさない
+      }
       const record = getCell(doc, rowId, columnId);
       if (record === undefined) {
         continue;
@@ -400,6 +405,14 @@ export class DocumentView {
     if (changed) {
       this.markViewportDirty();
     }
+  }
+
+  /**
+   * DD-064: 自動の行高の計算から外すセルの判定を差し替える（結合範囲が変わるたびに grid が呼び、続けて
+   * recomputeAllAutoRowHeights で全行を測り直す）。undefined で全セルを測る（DD-064 以前と同じ）。
+   */
+  setAutoHeightSkip(skip: ((rowId: RowId, columnId: ColumnId) => boolean) | undefined): void {
+    this.autoHeightSkip = skip;
   }
 
   /** DPR・Web font 変更で行分割キャッシュが無効化されたときの再計算（③相当・base-layer.clear と同期）。 */

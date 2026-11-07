@@ -11,9 +11,25 @@
 // activeCell が動く操作（通常矢印・Enter/Tab・クリック確定）や編集開始（printable/F2/ダブルクリック/composition）では
 // syncWithEditor が解除する（AC4）。解除は controller 内部状態の変更のみで textarea には触れない。
 
-import { rangeFromAnchorFocus, singleCell } from '@nanairo-sheet/selection';
-import type { CellPos, CellRange } from '@nanairo-sheet/selection';
+import {
+  EMPTY_MERGE_INDEX,
+  expandRangeToMerges,
+  isSingleMergeRange,
+  rangeFromAnchorFocus,
+  singleCell,
+  stepAcrossMerges,
+} from '@nanairo-sheet/selection';
+import type { CellPos, CellRange, MergeIndex } from '@nanairo-sheet/selection';
 import type { EditPhase, NavigationDirection } from '@nanairo-sheet/ime';
+
+/**
+ * 選択コントローラの設定（DD-064）。`merges` は直前に描いた結合範囲を返す（毎回呼ぶ）。指定があると、範囲は交わる結合を
+ * 全部含むまで広がり、1 つの結合そのものの範囲は単一選択として扱い、Shift＋矢印は焦点の結合の端から外へ動く。
+ * 未指定なら結合なし（DD-064 以前と完全に同じ動き）。
+ */
+export interface SelectionControllerOptions {
+  readonly merges?: () => MergeIndex;
+}
 
 /** 拡張のクランプ境界（現在の表示 Axis の行数・列数）。 */
 export interface SelectionBounds {
@@ -59,25 +75,14 @@ export interface SelectionController {
   syncWithEditor(active: CellPos, phase: EditPhase): boolean;
 }
 
-const ARROW_DELTA: Record<NavigationDirection, { readonly dRow: number; readonly dCol: number }> = {
-  up: { dRow: -1, dCol: 0 },
-  down: { dRow: 1, dCol: 0 },
-  left: { dRow: 0, dCol: -1 },
-  right: { dRow: 0, dCol: 1 },
-};
-
 function sameCell(a: CellPos, b: CellPos): boolean {
   return a.row === b.row && a.col === b.col;
 }
 
-function clampToBounds(pos: CellPos, bounds: SelectionBounds): CellPos {
-  return {
-    row: Math.min(Math.max(pos.row, 0), Math.max(bounds.rowCount - 1, 0)),
-    col: Math.min(Math.max(pos.col, 0), Math.max(bounds.colCount - 1, 0)),
-  };
-}
-
-export function createSelectionController(): SelectionController {
+export function createSelectionController(options: SelectionControllerOptions = {}): SelectionController {
+  const merges = options.merges ?? ((): MergeIndex => EMPTY_MERGE_INDEX);
+  /** DD-064: 交わる結合を全部含むまで広げる（結合が無ければそのまま）。 */
+  const expand = (range: CellRange): CellRange => expandRangeToMerges(merges(), range);
   // 明示レンジ（anchor/focus）。anchor は常に「レンジ開始時の activeCell」（不変条件は syncWithEditor が維持）。
   let anchor: CellPos | null = null;
   let focus: CellPos | null = null;
@@ -97,7 +102,13 @@ export function createSelectionController(): SelectionController {
   }
 
   function currentRange(): CellRange | null {
-    return anchor !== null && focus !== null ? rangeFromAnchorFocus(anchor, focus) : null;
+    if (anchor === null || focus === null) {
+      return null;
+    }
+    // DD-064: 結合を含むまで広げる。広げた結果が 1 つの結合そのものなら単一選択（明示レンジ無し）として扱う
+    // （anchor/focus は保持＝続く Shift＋矢印はその焦点から動く）。
+    const range = expand(rangeFromAnchorFocus(anchor, focus));
+    return isSingleMergeRange(merges(), range) ? null : range;
   }
 
   /** 明示レンジ・ドラッグの全状態を破棄する。戻り値=状態が変わったか。 */
@@ -113,10 +124,11 @@ export function createSelectionController(): SelectionController {
   return {
     getRange: currentRange,
     getDragRange: () =>
-      dragAnchor !== null && dragFocus !== null ? rangeFromAnchorFocus(dragAnchor, dragFocus) : null,
+      dragAnchor !== null && dragFocus !== null ? expand(rangeFromAnchorFocus(dragAnchor, dragFocus)) : null,
     isDragging: () => dragAnchor !== null,
     selectedRange(active) {
-      return currentRange() ?? singleCell(active);
+      // DD-064: 単一選択が結合の左上なら結合範囲全体（copy/cut/paste/行の削除の対象）。
+      return currentRange() ?? expand(singleCell(active));
     },
     beginDrag(a) {
       dragAnchor = { row: a.row, col: a.col };
@@ -147,10 +159,11 @@ export function createSelectionController(): SelectionController {
       setRange(a, f);
     },
     extendByArrow(active, direction, bounds) {
-      const delta = ARROW_DELTA[direction];
       // レンジ未形成なら activeCell を anchor に据え、focus を 1 セル動かすところから始める（Excel 準拠）。
       const base = anchor !== null && focus !== null ? focus : active;
-      const nextFocus = clampToBounds({ row: base.row + delta.dRow, col: base.col + delta.dCol }, bounds);
+      // DD-064: focus が結合の中なら、その結合の端から 1 つ外へ動く（押すたびに見える範囲が変わる）。結合が無ければ ±1 で
+      // 境界クランプ（従来どおり）。
+      const nextFocus = stepAcrossMerges(merges(), base, direction, bounds);
       setRange(anchor ?? active, nextFocus);
       return nextFocus;
     },

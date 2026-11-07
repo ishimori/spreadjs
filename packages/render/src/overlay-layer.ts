@@ -11,7 +11,7 @@
 import type { FrameViewport } from './base-layer';
 import { deviceLineWidth, snapToDevice } from './dpi';
 import type { PresenceUser } from './presence-sim';
-import type { CellRange } from '@nanairo-sheet/selection';
+import type { CellRange, MergeIndex } from '@nanairo-sheet/selection';
 import type { CellRect, ViewportTransform } from './viewport';
 
 /** Presence の色パレット（colorKey で参照）。 */
@@ -46,9 +46,12 @@ export interface OverlayLayerDeps {
 }
 
 export interface OverlayFrame extends FrameViewport {
+  /** 自分の選択（呼び出し側が結合を含むまで広げて渡す・DD-064）。 */
   readonly selection: CellRange | null;
   readonly dragRange: CellRange | null;
   readonly presences: readonly PresenceUser[];
+  /** 結合範囲（DD-064）。他の参加者のアクティブセルが結合の中なら、枠と名前タグを範囲全体に描く。未指定なら現行と同じ。 */
+  readonly mergedRanges?: MergeIndex;
 }
 
 export interface OverlayLayer {
@@ -163,7 +166,8 @@ export function createOverlayLayer(deps: OverlayLayerDeps): OverlayLayer {
       // content 全域の単一 clip だと、固定帯の裏へ回った他者のセル矩形が固定ペインの内側に落ち、
       // 枠とタグが固定行列の上へ重なる（選択ハイライトと同じ経路に揃え、pane 判定を二重に持たない）。
       // 半開区間なので単一セルは [r, r+1) × [c, c+1)。可視範囲外なら piece は 0 個＝何も描かない。
-      const activeRange: CellRange = {
+      // DD-064: 結合の中なら範囲全体（結合は固定行列の境界をまたがないので piece は 1 つ＝タグは範囲の左上に付く）。
+      const activeRange: CellRange = frame.mergedRanges?.at(user.activeRow, user.activeCol) ?? {
         rowStart: user.activeRow,
         rowEnd: user.activeRow + 1,
         colStart: user.activeCol,

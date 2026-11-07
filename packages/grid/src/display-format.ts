@@ -97,7 +97,9 @@ export class DisplayConfigError extends Error {
       | 'invalid-pattern'
       | 'invalid-negative'
       | 'wrap-conflict'
-      | 'link-conflict',
+      | 'link-conflict'
+      // DD-064 K4: columnGroups（2段の見出し）の形の誤り。
+      | 'invalid-column-group',
     /** 対象列 ID（診断用）。 */
     readonly columnId: string,
     message: string,

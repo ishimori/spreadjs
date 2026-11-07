@@ -31,6 +31,11 @@ export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
 import type { GridColumnFormatRule } from './format-rules';
 export type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
 import type { GridBorder, GridRowBorders, GridColumnBorders } from './border-rules';
+// セルの結合と2段の見出し（DD-064・Experimental 0.x）。公開型は grid 自身（merged-cell-spec.ts・column-groups.ts）で定義する（R7）。
+export type { GridMergedCell } from './merged-cell-spec';
+import type { GridMergedCell } from './merged-cell-spec';
+export type { GridColumnGroup } from './column-groups';
+import type { GridColumnGroup } from './column-groups';
 
 // 列見出しキャプション＋数値/日付の表示書式（DD-033-2・Experimental 0.x）。Canvas 描画テキストのみを整形する
 // view-local 書式（raw 契約不変）。公開型は grid 自身（display-format.ts）で定義する（R7 に反さない）。
@@ -542,6 +547,32 @@ export interface GridCommonMountOptions {
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
   /** 全データ行の下端（最終行を含む）へ共通罫線。個別top/bottom優先・行増減に追従。mount時固定。 */
   readonly defaultRowBorder?: GridBorder;
+  /**
+   * セルの結合（Experimental 0.x・DD-064）。左上のセル（`rowId`・`columnId`）と行数・列数（`rowSpan`・`columnSpan`・
+   * 省略は 1）で範囲を指定すると、1 つのセルとして描く（値・背景・状態表示は左上のセル。範囲の中の罫線は描かない）。
+   * 両モード共通・**view-local**（文書・Operation・cell-commit・Undo は変わらない。全クライアントの設定一致は利用側責務）。
+   * mount 時の値は初期値で、実行中は `GridInstance.setMergedCells` で置き換える。
+   * - **読むだけ**: 範囲の中は編集開始（印字キー・F2・ダブルクリック・IME）・Delete／Backspace・選択式の候補欄・日付の
+   *   カレンダーを開かない。貼り付け・範囲の消去・cut は範囲のセルだけ飛ばす（`readOnlyColumns` と同じ）。
+   * - **選択・移動**: 範囲の中を選ぶと左上を選び、枠は範囲全体に出る。矢印キー・Tab・Enter は範囲を 1 つのセルとして動く。
+   *   範囲の選択（Shift＋矢印・ドラッグ）は結合を含むまで広がる。コピーは左上に値・残りは空。
+   * - **張る時**: 次の描画の時に、その時の行の並びで範囲に入る行の ID を覚えて張る（範囲の上下に行が入っても一緒に動く）。
+   *   左上の行が無い・下に行が足りない間は張らずに診断 warn（`merged-cell-unresolved`）を 1 回出し、行が届けば張る。
+   *   固定行の境界をまたぐ・先の指定と重なる範囲は描かない（`merged-cell-conflict`）。範囲の行が欠けた・間に行が入った
+   *   範囲は捨てる（`merged-cell-broken`・`setMergedCells` で指定し直すと張る）。
+   * - **固定行**: `frozenRowCount` の既定は 1（先頭のデータ行が固定）。先頭の行から結合するときは `frozenRowCount: 0` にする。
+   * - 形の誤り（未知の列・右端を越える・固定列の境界をまたぐ・1×1・span が 1 以上の整数でない・同じ左上の重複）は mount 時に
+   *   `error`（phase=`config`・code=`merged-cells-invalid`）で fail-fast する。契約: doc/DD/DD-064/contract.md
+   */
+  readonly mergedCells?: readonly GridMergedCell[];
+  /**
+   * 2段の見出し（Experimental 0.x・DD-064）。列のまとまり（`caption` と `columnIds`）を指定すると見出しを 2 段にし、
+   * 上の段にまとまりの名前、下の段にまとめた列の名前を出す（まとめていない列は 2 段ぶんの高さに名前）。両モード共通・
+   * mount 時固定・**view-local**（描画だけ）。上の段のクリックは `header-click` を出さない。
+   * - 列は `columnOrder` で隣り合うこと・まとまり同士が同じ列を持たないこと・固定列の境界をまたがないこと。
+   * - 形の誤りは mount 時に `error`（phase=`config`・code=`column-display-invalid`）で fail-fast する（`columnCaptions` と同じ経路）。
+   */
+  readonly columnGroups?: readonly GridColumnGroup[];
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**
@@ -628,6 +659,14 @@ export interface GridInstance {
    * 単独モードの `setData` は状態も含めて作り直す。boot 前に呼んでもよい（単独モードは `setData`/`setRows` と同じ順で適用）。
    */
   setCellStatus(rows: readonly GridCellStatusRow[]): void;
+  /**
+   * セルの結合を丸ごと置き換える（Experimental 0.x・DD-064・**両モード共通**・view-local）。`[]` で全部外す。
+   * 同じ内容でも、次の描画の時の行の並びで張り直す（壊れて捨てた結合も、指定し直せば張る）。結合を張るのは次の描画の時なので、
+   * `setData`（単独モード）と同じ処理の中ならどちらを先に呼んでもよい。**同期 throw しない**（既存の命令と同じ）: 形の誤りの
+   * 指定だけ捨てて診断 warn（code=`merged-cells-invalid`）を出し、残りは張る（配列でなければ何も変えない）。
+   * boot 前に呼んでもよい（最後に呼んだものが勝つ）。destroy 後は何もしない。読み取り専用でも使える（表示の設定）。
+   */
+  setMergedCells(mergedCells: readonly GridMergedCell[]): void;
   /**
    * 行を挿入する（Experimental 0.x・DD-021-1・両モード）。`afterRowId` の直後へ `count` 行（既定 1）を挿入する
    * （`afterRowId=null` で先頭へ）。新 RowId は `crypto.randomUUID` で採番し `row-structure-change`（kind=insert）で

@@ -112,6 +112,10 @@ export interface GridDebugApi {
   cellRenderText(rowId: string, columnId: string): string;
   /** DD-033-2: 列ヘッダーに描く見出し（キャプション or 列記号）。canvas ヘッダー文字の E2E 観測用。 */
   columnHeaderText(col: number): string;
+  /** DD-064: 直前の描画で張った結合範囲（表示 index の半開区間・行の昇順）。 */
+  mergedRanges(): GridDebugCellRange[];
+  /** DD-064 K4: 見出しの高さ（2段なら 48・1段なら 24）。 */
+  headerHeight(): number;
   submitInsertRowsAfter(afterRowId: string | null, newRowId: string): void;
   submitDeleteRow(rowId: string): void;
   simulateDrop(): void;

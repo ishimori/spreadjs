@@ -10,6 +10,8 @@ import { borderOptions } from './border-options';
 import { validateCellOption } from './validate-options';
 import type {
   GridCellStatusColors,
+  GridColumnGroup,
+  GridMergedCell,
   GridColumnDisplayFormat,
   GridColumnFormatRule,
   GridColumnType,
@@ -300,6 +302,11 @@ const rowBackgrounds = parseStaticBackgrounds(searchParams.get('rowbg'));
 const cellStatusColors = parseJsonParam(searchParams.get('statuscolors')) as GridCellStatusColors | undefined;
 const readOnlyRows = (searchParams.get('readonlyrows') ?? '').split(',').filter((r) => r !== '');
 const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTypes);
+// DD-064: セルの結合・2段の見出し（JSON・例 `?merged=[{"rowId":"r1","columnId":"col-b","rowSpan":3}]`・
+// `?colgroups=[{"caption":"上期","columnIds":["col-c","col-d"]}]`）。JSON でなければ文字列のまま渡し、SDK の fail-fast を
+// E2E から確かめられるようにする（statuscolors と同じハーネス境界）。
+const mergedCells = parseJsonParam(searchParams.get('merged')) as GridMergedCell[] | undefined;
+const columnGroups = parseJsonParam(searchParams.get('colgroups')) as GridColumnGroup[] | undefined;
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
 const SAVE_KEY = 'nsheet:standalone:cells';
@@ -418,6 +425,8 @@ const handle: StandaloneHandle = {
         ...(columnBackgrounds !== undefined ? { columnBackgrounds } : {}),
         ...(rowBackgrounds !== undefined ? { rowBackgrounds } : {}),
         ...(cellStatusColors !== undefined ? { cellStatusColors } : {}),
+        ...(mergedCells !== undefined ? { mergedCells } : {}),
+        ...(columnGroups !== undefined ? { columnGroups } : {}),
         ...borderOptions(searchParams),
         ...validateCellOption(searchParams),
         ...(searchParams.has('wrap') ? { wrapColumns: searchParams.get('wrap')!.split(',').filter(Boolean) } : {}),

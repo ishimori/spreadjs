@@ -5,12 +5,14 @@
 // 本モジュールは Canvas API に依存する（描画アダプタの隔離）。座標計算は viewport.ts に委ね、
 // ここは「与えられた ViewportTransform をどう塗るか」だけを持つ。単体テストは座標側（viewport 等）で行う。
 
+import type { CellRange, MergeIndex } from '@nanairo-sheet/selection';
+
 import type { ChunkStore } from './chunk-store';
 import { drawBorders, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
 import { deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
 import { createTextMetricsCache, type TextMetricsCache } from './text-cache';
 import { MAX_LEFT_INFLOW_SCAN, nearestLeftNonEmpty, overflowRightExtent } from './text-overflow';
-import type { PaneId, PaneRange, ViewportTransform } from './viewport';
+import type { CellRect, PaneId, PaneRange, ViewportTransform } from './viewport';
 
 /** 1 フレーム分の viewport 情報（base/overlay 共通）。 */
 export interface FrameViewport {
@@ -69,6 +71,31 @@ export type CellStatusColorOverrides = Readonly<
 
 /** 状態表示の枠の太さ（CSS px・DD-060）。device px へ丸めて描く。 */
 export const CELL_STATUS_FRAME_WIDTH = 2;
+
+/** 2段の見出しの上の段に描く列のまとまり（DD-064 K4）。列は表示 index の半開区間（固定列の境界をまたがない）。 */
+export interface ColumnGroupSpan {
+  readonly colStart: number;
+  readonly colEnd: number;
+  readonly caption: string;
+}
+
+/** 2段の見出し（DD-064 K4）。`height` は上の段の高さ（px）で、`headerHeight` はこれを含む見出し全体の高さ。 */
+export interface ColumnGroupBand {
+  readonly height: number;
+  readonly groups: readonly ColumnGroupSpan[];
+}
+
+/** 結合範囲の viewport 矩形（左上のセルの左上から右下のセルの右下まで）。範囲は固定行列の境界をまたがない前提。 */
+export function mergedCellRect(transform: ViewportTransform, range: CellRange): CellRect {
+  const topLeft = transform.cellRect(range.rowStart, range.colStart);
+  const bottomRight = transform.cellRect(range.rowEnd - 1, range.colEnd - 1);
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: bottomRight.x + bottomRight.width - topLeft.x,
+    height: bottomRight.y + bottomRight.height - topLeft.y,
+  };
+}
 
 export interface BaseLayerColors {
   readonly cellBackground: string;
@@ -162,6 +189,18 @@ export interface BaseLayerDeps extends BorderLayerDeps {
   readonly cellStatusesInRow?: (rowIndex: number) => readonly CellStatusMark[] | undefined;
   /** 状態表示の色の上書き（DD-061）。未指定・省略した項目は `CELL_STATUS_COLORS`。不正な色は既定色で描く。 */
   readonly cellStatusColors?: CellStatusColorOverrides;
+  /**
+   * 結合範囲（DD-064）。描画のたびに呼ぶ。範囲は表示 index の半開区間で、重ならず、固定行列の境界をまたがない
+   * （grid が解決済みのものだけを渡す）。範囲の中のセルはふつうの経路で描かず（右隣へのはみ出しも結合の手前で止める）、
+   * 最後に範囲を 1 つの大きなセルとして描き直す（背景・文字・状態表示は左上のセルのもの・範囲の中の罫線は描かない）。
+   * 未指定・0 件なら追加の描画ゼロ（現行描画と完全一致）。
+   */
+  readonly mergedRanges?: () => MergeIndex | undefined;
+  /**
+   * 2段の見出し（DD-064 K4）。上の段にまとまりの名前、下の段にまとめた列の名前を描き、まとめていない列は 2 段ぶんの
+   * 高さの中央に名前を描く。`headerHeight` は 2 段ぶんの高さを渡す。未指定なら 1 段（現行描画と完全一致）。
+   */
+  readonly columnGroupBand?: ColumnGroupBand;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -305,16 +344,11 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.stroke();
   };
 
-  /** wrap 列セル: 折り返し複数行をセル内に clip して描く（DD-012-5 D4）。clipTop/clipBottom は pane 可視帯（Codex P1 対策）。 */
-  const drawWrapCell = (
-    transform: ViewportTransform,
-    row: number,
-    col: number,
-    value: string,
-    clipTop: number,
-    clipBottom: number,
-  ): void => {
-    const rect = transform.cellRect(row, col);
+  /**
+   * wrap 列セル: 折り返し複数行をセル内に clip して描く（DD-012-5 D4）。clipTop/clipBottom は pane 可視帯（Codex P1 対策）。
+   * rect はセルの矩形（DD-064: 結合範囲では範囲全体の矩形）。
+   */
+  const drawWrapCell = (rect: CellRect, value: string, clipTop: number, clipBottom: number): void => {
     const maxWidth = rect.width - CELL_PADDING * 2;
     const lines = textCache.wrapLines(value, cellFont, maxWidth);
     ctx.textAlign = 'left';
@@ -377,14 +411,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
    * リンク列セル（DD-027-2）: リンク色＋下線・自セル内 fitText クリップで描く（オーバーフローしない＝クリック領域と一致）。
    * 数値に解釈される値もリンク列ではリンク描画を優先する（表示文字列は不変・左寄せ）。下線は fitText 後の実文字幅ぶん。
    */
-  const drawLinkCell = (
-    transform: ViewportTransform,
-    dpr: number,
-    row: number,
-    col: number,
-    value: string,
-  ): void => {
-    const rect = transform.cellRect(row, col);
+  const drawLinkCell = (rect: CellRect, dpr: number, value: string): void => {
     const maxWidth = rect.width - CELL_PADDING * 2;
     const text = textCache.fitText(value, cellFont, maxWidth);
     const x = rect.x + CELL_PADDING;
@@ -444,14 +471,11 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
    * `decorationColor` は負の数の色（DD-059）で、style.textColor が無いときだけ使う。右余白はチップには付けない。
    */
   const drawBadgeCell = (
-    transform: ViewportTransform,
-    row: number,
-    col: number,
+    rect: CellRect,
     value: string,
     style: ResolvedCellStyle,
     decorationColor: string | undefined,
   ): void => {
-    const rect = transform.cellRect(row, col);
     const maxTextWidth = rect.width - CELL_PADDING * 2 - BADGE_TEXT_PADDING * 2;
     const text = textCache.fitText(value, cellFont, Math.max(0, maxTextWidth));
     const textWidth = Math.min(textCache.measureWidth(text, cellFont), Math.max(0, maxTextWidth));
@@ -472,6 +496,84 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.fillText(text, chipX + BADGE_TEXT_PADDING, rect.y + rect.height / 2);
   };
 
+  /**
+   * 1 セルの値を描く（書式背景 → バッジ/リンク/数値/wrap/オーバーフロー・Pass 1 と結合の描き直しで共有）。
+   * `merged` のとき（DD-064）は rect が結合範囲全体で、書式の背景は呼び出し側（drawPaneMerges）が塗り済み。
+   * ふつうの文字は右隣へはみ出させず、範囲に収まらなければ … で切る。
+   */
+  const drawCellValue = (
+    frame: FrameViewport,
+    row: number,
+    col: number,
+    value: string,
+    rect: CellRect,
+    options: {
+      readonly maxCol: number;
+      readonly isEmpty: (col: number) => boolean;
+      readonly clipTop: number;
+      readonly clipBottom: number;
+      readonly hasStatus: boolean;
+      readonly merged: boolean;
+    },
+  ): void => {
+    const { transform } = frame;
+    // DD-033-2: 描画テキストを display に確定する（判定は raw・描画は display）。書式のない列・非該当 raw は raw 恒等。
+    const display = formatCellText(col, value);
+    // DD-027-3: セル書式（値ベース・非空セルのみ）。**match は raw 完全一致のまま**（display で match しない・DD-033-2）。
+    // 背景色は罫線 inset で文字より先に塗る（罫線保存・1 pass）。
+    useColumnFont(col);
+    const style = getCellStyle(col, value);
+    // DD-059: 表示書式由来の装飾（負の数の色・括弧表記の右余白）。formatCellText と同じく判定は raw。
+    const decoration = cellTextDecoration(col, value);
+    // DD-060: 状態表示のあるセルは値ベース書式の背景を塗らない（先に塗った状態の背景を消さない）。
+    if (!options.merged && style?.cellBackground !== undefined && !options.hasStatus) {
+      drawCellBackground(transform, frame.dpr, row, col, style.cellBackground);
+    }
+    // バッジは最優先（オーバーフロー/wrap/リンク/数値より前・単行チップ・右隣へはみ出さない＝DD-027-3）。
+    // チップ文字は display で描く（match は raw・描画は display・DD-033-2）。
+    if (style?.badge === true) {
+      drawBadgeCell(rect, display, style, decoration?.textColor);
+      return;
+    }
+    // リンク列は数値/wrap より優先（列タイプが勝つ・自セル内クリップ＝クリック領域と一致・DD-027-2）。
+    // 書式 textColor はリンク色（linkText）で上書きされる（リンクの視認性を優先・背景色は既に塗り済み）。
+    // リンク列は表示書式と併用不可（mount fail-fast）ゆえ display===raw だが、契約上 display を渡す。
+    if (isLinkColumn(col)) {
+      drawLinkCell(rect, frame.dpr, display);
+      return;
+    }
+    // 数値右寄せ判定は **raw** で行う（書式済み "1,234.5" は NUMERIC_RE 不一致＝display で判定すると右寄せが壊れる・DD-033-2）。
+    const isNumber = isNumericCell(value);
+    // 文字色: columnFormats の textColor（DD-027-3）＞ 負の数の色（DD-059）＞ 数値/文字の既定色（右寄せ等の配置は維持）。
+    // 既定色を先に入れてから上書きする（Canvas は不正な色の代入を無視して直前の色を残すため・DD-036 と同じ理由）。
+    ctx.fillStyle = isNumber ? colors.numberText : colors.cellText;
+    const textColor = style?.textColor ?? decoration?.textColor;
+    if (textColor !== undefined) {
+      ctx.fillStyle = textColor;
+    }
+    // wrap 列は表示書式と併用不可（mount fail-fast）ゆえ display===raw だが、契約上 display を描く。
+    if (!isNumber && isWrapColumn(col)) {
+      drawWrapCell(rect, display, options.clipTop, options.clipBottom);
+      return;
+    }
+    if (isNumber) {
+      // DD-059: 括弧表記の列の正の数と 0 は右に `)` 1文字分をあけ、負の数 `(1,234)` と一の位をそろえる（Excel の `_)`）。
+      const pad = decoration?.trailingPad === undefined ? 0 : textCache.measureWidth(decoration.trailingPad, cellFont);
+      ctx.textAlign = 'right';
+      const text = textCache.fitText(display, cellFont, rect.width - CELL_PADDING * 2 - pad);
+      ctx.fillText(text, rect.x + rect.width - CELL_PADDING - pad, rect.y + rect.height / 2);
+      return;
+    }
+    if (options.merged) {
+      // DD-064: 結合範囲の文字は範囲の中だけ（右隣へはみ出さない）。収まらなければ … で切る。
+      ctx.textAlign = 'left';
+      const text = textCache.fitText(display, cellFont, Math.max(0, rect.width - CELL_PADDING * 2));
+      ctx.fillText(text, rect.x + CELL_PADDING, rect.y + rect.height / 2);
+      return;
+    }
+    drawOverflowCell(transform, row, col, display, options.maxCol, options.isEmpty);
+  };
+
   const drawPaneValues = (frame: FrameViewport, pane: PaneRange, statuses: PaneStatuses | undefined): void => {
     const { transform } = frame;
     ctx.font = cellFont;
@@ -479,59 +581,29 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     const maxCol = pane.cols.end;
     const clipTop = pane.clip.y;
     const clipBottom = pane.clip.y + pane.clip.height;
-    const isEmptyAt = (row: number) => (col: number): boolean => store.get(row, col) === '';
+    // DD-064: 結合範囲のセルは空セルとして扱わない（左のセルの文字は結合の手前で止まる）。結合が無ければ現行と同じ判定。
+    const merges = deps.mergedRanges?.();
+    const mergeIndex = merges !== undefined && merges.size > 0 ? merges : undefined;
+    const isMergedAt = (row: number, col: number): boolean => mergeIndex?.at(row, col) !== undefined;
+    const isEmptyAt =
+      mergeIndex === undefined
+        ? (row: number) => (col: number): boolean => store.get(row, col) === ''
+        : (row: number) => (col: number): boolean => store.get(row, col) === '' && !isMergedAt(row, col);
 
     // Pass 1: pane 内の非空セルを描く（書式背景 → バッジ/リンク/数値/wrap/オーバーフロー）。
     store.queryRange(pane.rows.start, pane.rows.end, pane.cols.start, pane.cols.end, (row, col, value) => {
-      // DD-033-2: 描画テキストを display に確定する（判定は raw・描画は display）。書式のない列・非該当 raw は raw 恒等。
-      const display = formatCellText(col, value);
-      // DD-027-3: セル書式（値ベース・非空セルのみ）。**match は raw 完全一致のまま**（display で match しない・DD-033-2）。
-      // 背景色は罫線 inset で文字より先に塗る（罫線保存・1 pass）。
-      useColumnFont(col);
-      const style = getCellStyle(col, value);
-      // DD-059: 表示書式由来の装飾（負の数の色・括弧表記の右余白）。formatCellText と同じく判定は raw。
-      const decoration = cellTextDecoration(col, value);
-      // DD-060: 状態表示のあるセルは値ベース書式の背景を塗らない（先に塗った状態の背景を消さない）。
-      if (style?.cellBackground !== undefined && statuses?.get(row)?.has(col) !== true) {
-        drawCellBackground(transform, frame.dpr, row, col, style.cellBackground);
-      }
-      // バッジは最優先（オーバーフロー/wrap/リンク/数値より前・単行チップ・右隣へはみ出さない＝DD-027-3）。
-      // チップ文字は display で描く（match は raw・描画は display・DD-033-2）。
-      if (style?.badge === true) {
-        drawBadgeCell(transform, row, col, display, style, decoration?.textColor);
+      // DD-064: 結合範囲のセルはここで描かない（左上の値は drawPaneMerges が範囲全体に描く。左上以外の値は描かない）。
+      if (mergeIndex !== undefined && isMergedAt(row, col)) {
         return;
       }
-      // リンク列は数値/wrap より優先（列タイプが勝つ・自セル内クリップ＝クリック領域と一致・DD-027-2）。
-      // 書式 textColor はリンク色（linkText）で上書きされる（リンクの視認性を優先・背景色は既に塗り済み）。
-      // リンク列は表示書式と併用不可（mount fail-fast）ゆえ display===raw だが、契約上 display を渡す。
-      if (isLinkColumn(col)) {
-        drawLinkCell(transform, frame.dpr, row, col, display);
-        return;
-      }
-      // 数値右寄せ判定は **raw** で行う（書式済み "1,234.5" は NUMERIC_RE 不一致＝display で判定すると右寄せが壊れる・DD-033-2）。
-      const isNumber = isNumericCell(value);
-      // 文字色: columnFormats の textColor（DD-027-3）＞ 負の数の色（DD-059）＞ 数値/文字の既定色（右寄せ等の配置は維持）。
-      // 既定色を先に入れてから上書きする（Canvas は不正な色の代入を無視して直前の色を残すため・DD-036 と同じ理由）。
-      ctx.fillStyle = isNumber ? colors.numberText : colors.cellText;
-      const textColor = style?.textColor ?? decoration?.textColor;
-      if (textColor !== undefined) {
-        ctx.fillStyle = textColor;
-      }
-      // wrap 列は表示書式と併用不可（mount fail-fast）ゆえ display===raw だが、契約上 display を描く。
-      if (!isNumber && isWrapColumn(col)) {
-        drawWrapCell(transform, row, col, display, clipTop, clipBottom);
-        return;
-      }
-      if (isNumber) {
-        const rect = transform.cellRect(row, col);
-        // DD-059: 括弧表記の列の正の数と 0 は右に `)` 1文字分をあけ、負の数 `(1,234)` と一の位をそろえる（Excel の `_)`）。
-        const pad = decoration?.trailingPad === undefined ? 0 : textCache.measureWidth(decoration.trailingPad, cellFont);
-        ctx.textAlign = 'right';
-        const text = textCache.fitText(display, cellFont, rect.width - CELL_PADDING * 2 - pad);
-        ctx.fillText(text, rect.x + rect.width - CELL_PADDING - pad, rect.y + rect.height / 2);
-        return;
-      }
-      drawOverflowCell(transform, row, col, display, maxCol, isEmptyAt(row));
+      drawCellValue(frame, row, col, value, transform.cellRect(row, col), {
+        maxCol,
+        isEmpty: isEmptyAt(row),
+        clipTop,
+        clipBottom,
+        hasStatus: statuses?.get(row)?.has(col) === true,
+        merged: false,
+      });
     });
 
     // Pass 2: 可視範囲の左外にあるはみ出し元からの流入を描く（D3・最大 20 列遡り・pane 境界で停止）。
@@ -539,13 +611,14 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     if (pane.cols.start > frozenColCount) {
       for (let row = pane.rows.start; row < pane.rows.end; row += 1) {
         // 可視左端セルが埋まっていれば左外流入は届かない（origin→可視の間に非空セルが要る）→ 走査省略（予算保護）。
-        if (store.get(row, pane.cols.start) !== '') {
+        // DD-064: 可視左端が結合範囲なら同じく届かない（結合は空セルとして扱わない）。
+        if (store.get(row, pane.cols.start) !== '' || isMergedAt(row, pane.cols.start)) {
           continue;
         }
         const isEmpty = isEmptyAt(row);
         const originCol = nearestLeftNonEmpty(pane.cols.start, frozenColCount, MAX_LEFT_INFLOW_SCAN, isEmpty, deps.columnBorder === undefined ? undefined : (index) => deps.columnBorder?.(index) !== undefined);
-        if (originCol === null) {
-          continue;
+        if (originCol === null || isMergedAt(row, originCol)) {
+          continue; // DD-064: 結合範囲は流入元にしない（範囲の文字は範囲の中だけ）
         }
         const value = store.get(row, originCol);
         // 数値・wrap・リンク列はオーバーフローしない（左寄せ文字列のみ流入・リンクは自セル内クリップ＝DD-027-2）。
@@ -683,28 +756,137 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
    * rowBorders/columnBorders。後段の drawBorders が上に描く）の内端から、隣の境界の罫線帯の手前までに収める
    * （太い罫線に上書きされない・Codex P2）。端と太さを device px へ丸め、非整数 DPR でもにじませない。
    */
-  const drawCellStatusFrames = (frame: FrameViewport, statuses: PaneStatuses): void => {
-    const d = normalizeDpr(frame.dpr);
+  /**
+   * 矩形 1 つに状態表示の枠を描く（DD-060。DD-064 で結合範囲にも使うため切り出した）。各辺の境界 index（左＝範囲の
+   * 左端の列・上＝上端の行・右＝右端の次の列・下＝下端の次の行）で罫線帯の幅を引き、その内側に収める。
+   */
+  const drawStatusFrame = (
+    rect: CellRect,
+    level: CellStatusLevel,
+    boundaries: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number },
+    dpr: number,
+  ): void => {
+    const d = normalizeDpr(dpr);
     const thickness = Math.max(1, Math.round(CELL_STATUS_FRAME_WIDTH * d));
+    const left = Math.round(rect.x * d) + Math.ceil(boundaryPixels(deps.columnBorder?.(boundaries.left), d) / 2);
+    const top = Math.round(rect.y * d) + Math.ceil(boundaryPixels(deps.rowBorder?.(boundaries.top), d) / 2);
+    const right = Math.round((rect.x + rect.width) * d) - Math.floor(boundaryPixels(deps.columnBorder?.(boundaries.right), d) / 2);
+    const bottom = Math.round((rect.y + rect.height) * d) - Math.floor(boundaryPixels(deps.rowBorder?.(boundaries.bottom), d) / 2);
+    const width = right - left;
+    const height = bottom - top;
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    const tx = Math.min(thickness, width);
+    const ty = Math.min(thickness, height);
+    setStatusFill(level, 'frame');
+    ctx.fillRect(left / d, top / d, width / d, ty / d);
+    ctx.fillRect(left / d, (bottom - ty) / d, width / d, ty / d);
+    ctx.fillRect(left / d, top / d, tx / d, height / d);
+    ctx.fillRect((right - tx) / d, top / d, tx / d, height / d);
+  };
+
+  const drawCellStatusFrames = (frame: FrameViewport, statuses: PaneStatuses): void => {
     for (const [row, cols] of statuses) {
       for (const [col, level] of cols) {
-        const rect = frame.transform.cellRect(row, col);
-        const left = Math.round(rect.x * d) + Math.ceil(boundaryPixels(deps.columnBorder?.(col), d) / 2);
-        const top = Math.round(rect.y * d) + Math.ceil(boundaryPixels(deps.rowBorder?.(row), d) / 2);
-        const right = Math.round((rect.x + rect.width) * d) - Math.floor(boundaryPixels(deps.columnBorder?.(col + 1), d) / 2);
-        const bottom = Math.round((rect.y + rect.height) * d) - Math.floor(boundaryPixels(deps.rowBorder?.(row + 1), d) / 2);
-        const width = right - left;
-        const height = bottom - top;
-        if (width <= 0 || height <= 0) {
-          continue;
+        drawStatusFrame(frame.transform.cellRect(row, col), level, { left: col, top: row, right: col + 1, bottom: row + 1 }, frame.dpr);
+      }
+    }
+  };
+
+  /** 左上のセルの状態表示の水準（DD-064: 範囲の上の端が pane の可視行の外でも引けるよう、行のフックから直接引く）。 */
+  const statusLevelAt = (row: number, col: number): CellStatusLevel | undefined => {
+    const marks = cellStatusesInRowFn?.(row);
+    return marks?.find((mark) => mark.colIndex === col)?.level;
+  };
+
+  /**
+   * 結合範囲の描き直し（DD-064）: pane の可視範囲に交わる結合を、1 つの大きなセルとして上から描く（範囲の中のグリッド線・
+   * 範囲の中のセルの背景と状態表示を覆う）。背景は左上の行・列のもの（pane 背景 → 列背景 → 行背景 → 状態表示 or
+   * 値ベース書式の背景＝ふつうのセルと同じ優先順位）で、左・上の罫線を残すため罫線幅ぶん内側から塗る（drawCellBackground と同じ）。
+   * 文字は範囲の矩形で clip して描き、状態表示の枠は範囲の外周の内側に描く。範囲は固定行列の境界をまたがない（grid が保証）。
+   */
+  const drawPaneMerges = (frame: FrameViewport, pane: PaneRange, paneBackground: string): void => {
+    const merges = deps.mergedRanges?.();
+    if (merges === undefined || merges.size === 0) {
+      return;
+    }
+    if (pane.rows.end <= pane.rows.start || pane.cols.end <= pane.cols.start) {
+      return;
+    }
+    const visible = merges.intersecting({
+      rowStart: pane.rows.start,
+      rowEnd: pane.rows.end,
+      colStart: pane.cols.start,
+      colEnd: pane.cols.end,
+    });
+    if (visible.length === 0) {
+      return;
+    }
+    const { transform, dpr } = frame;
+    const inset = deviceLineWidth(dpr) / dpr;
+    const clipTop = pane.clip.y;
+    const clipBottom = pane.clip.y + pane.clip.height;
+    for (const merge of visible) {
+      const row = merge.rowStart;
+      const col = merge.colStart;
+      const rect = mergedCellRect(transform, merge);
+      const left = isPatternBorder(deps.columnBorder?.(col)) ? 0 : inset;
+      const top = isPatternBorder(deps.rowBorder?.(row)) ? 0 : inset;
+      const width = rect.width - left;
+      const height = rect.height - top;
+      if (width <= 0 || height <= 0) {
+        continue;
+      }
+      const bx = rect.x + left;
+      const by = rect.y + top;
+      // 背景: ふつうのセルと同じ重ね順を範囲の矩形 1 つで再現する（不正な色は Canvas が無視する＝直前の色を引き継がないよう、
+      // 色ごとに pane 背景へ戻してから代入する・drawColumnBackgrounds と同じ理由）。
+      ctx.fillStyle = paneBackground;
+      ctx.fillRect(bx, by, width, height);
+      const columnColor = columnBackgroundFn?.(col);
+      if (columnColor !== undefined) {
+        ctx.fillStyle = paneBackground;
+        ctx.fillStyle = columnColor;
+        ctx.fillRect(bx, by, width, height);
+      }
+      const rowColor = rowBackgroundFn?.(row);
+      if (rowColor !== undefined) {
+        ctx.fillStyle = paneBackground;
+        ctx.fillStyle = rowColor;
+        ctx.fillRect(bx, by, width, height);
+      }
+      const level = statusLevelAt(row, col);
+      const value = store.get(row, col);
+      if (level !== undefined) {
+        setStatusFill(level, 'background');
+        ctx.fillRect(bx, by, width, height);
+      } else if (value !== '') {
+        const background = getCellStyle(col, value)?.cellBackground;
+        if (background !== undefined) {
+          ctx.fillStyle = background;
+          ctx.fillRect(bx, by, width, height);
         }
-        const tx = Math.min(thickness, width);
-        const ty = Math.min(thickness, height);
-        setStatusFill(level, 'frame');
-        ctx.fillRect(left / d, top / d, width / d, ty / d);
-        ctx.fillRect(left / d, (bottom - ty) / d, width / d, ty / d);
-        ctx.fillRect(left / d, top / d, tx / d, height / d);
-        ctx.fillRect((right - tx) / d, top / d, tx / d, height / d);
+      }
+      if (value !== '') {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rect.x, rect.y, rect.width, rect.height);
+        ctx.clip();
+        ctx.font = cellFont;
+        ctx.textBaseline = 'middle';
+        drawCellValue(frame, row, col, value, rect, {
+          maxCol: merge.colEnd,
+          isEmpty: () => false,
+          clipTop,
+          clipBottom,
+          hasStatus: level !== undefined,
+          merged: true,
+        });
+        ctx.restore();
+      }
+      if (level !== undefined) {
+        drawStatusFrame(rect, level, { left: col, top: row, right: merge.colEnd, bottom: merge.rowEnd }, dpr);
       }
     }
   };
@@ -734,6 +916,9 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     if (statuses !== undefined) {
       drawCellStatusFrames(frame, statuses);
     }
+    // DD-064: 結合範囲は最後に 1 つの大きなセルとして描き直す（範囲の中の罫線・セルを覆う。指定罫線は後段の drawBorders が
+    // 範囲の中を抜いて描く）。結合が無ければ何もしない。
+    drawPaneMerges(frame, pane, paneBackground);
     ctx.restore();
   };
 
@@ -751,6 +936,16 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     draw();
     ctx.restore();
   };
+
+  // DD-064 K4: 2段の見出し。上の段の高さ（0＝1段）と、列 index → まとまり（列は mount 時に固定＝作成時に引く表を作る）。
+  const groupBandHeight =
+    deps.columnGroupBand !== undefined && deps.columnGroupBand.groups.length > 0 ? deps.columnGroupBand.height : 0;
+  const groupOfColumn = new Map<number, ColumnGroupSpan>();
+  for (const group of deps.columnGroupBand?.groups ?? []) {
+    for (let col = group.colStart; col < group.colEnd; col += 1) {
+      groupOfColumn.set(col, group);
+    }
+  }
 
   const drawHeaders = (frame: FrameViewport): void => {
     const { transform, viewportWidth, dpr } = frame;
@@ -771,21 +966,62 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.textBaseline = 'middle';
     const drawColHeader = (col: number): void => {
       const rect = transform.columnHeaderRect(col);
+      // DD-064 K4: まとめた列は下の段の中央、まとめていない列は 2 段ぶんの中央（1 段なら従来どおり見出しの中央）。
+      const labelY =
+        groupBandHeight > 0 && groupOfColumn.has(col)
+          ? groupBandHeight + (headerHeight - groupBandHeight) / 2
+          : headerHeight / 2;
       // DD-033-2: キャプションフック未指定なら現行どおり列記号を素描画する（既存 consumer と完全一致・AC9）。
       if (columnHeaderLabelFn === undefined) {
-        ctx.fillText(columnLabel(col), rect.x + rect.width / 2, headerHeight / 2);
+        ctx.fillText(columnLabel(col), rect.x + rect.width / 2, labelY);
         return;
       }
       // キャプションは自ヘッダーセル幅で fitText クリップ（長い業務名が隣接ヘッダーへ重ならない・AC2）。中央寄せは維持。
       const label = columnHeaderLabelFn(col);
       const text = textCache.fitText(label, headerFont, Math.max(0, rect.width - CELL_PADDING * 2));
       ctx.font = headerFont; // fitText の measure コールバックが ctx.font を触るため描画前に復帰させる。
-      ctx.fillText(text, rect.x + rect.width / 2, headerHeight / 2);
+      ctx.fillText(text, rect.x + rect.width / 2, labelY);
+    };
+    /**
+     * DD-064 K4: 帯（固定列・スクロール列のどちらか）の列範囲に交わるまとまりの名前と区切りの線を描く。まとまりは
+     * 固定列の境界をまたがない（grid が保証）ので、帯の clip の中に収まる。名前はまとまりの幅の中央（範囲と一緒に動く）。
+     */
+    const drawColumnGroups = (colStart: number, colEnd: number): void => {
+      if (groupBandHeight <= 0 || colEnd <= colStart) {
+        return;
+      }
+      for (const group of deps.columnGroupBand?.groups ?? []) {
+        if (group.colEnd <= colStart || group.colStart >= colEnd) {
+          continue;
+        }
+        const first = transform.columnHeaderRect(group.colStart);
+        const last = transform.columnHeaderRect(group.colEnd - 1);
+        const x = first.x;
+        const width = last.x + last.width - first.x;
+        const text = textCache.fitText(group.caption, headerFont, Math.max(0, width - CELL_PADDING * 2));
+        ctx.font = headerFont;
+        ctx.fillStyle = colors.headerText;
+        ctx.fillText(text, x + width / 2, groupBandHeight / 2);
+        // 区切り: まとまりの下（上の段と下の段の間）と、まとまりの左右（上の段だけ）。
+        ctx.strokeStyle = colors.gridLine;
+        ctx.lineWidth = deviceLineWidth(dpr);
+        ctx.beginPath();
+        const y = snapToDevice(groupBandHeight, dpr);
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + width, y);
+        for (const edge of [x, x + width]) {
+          const ex = snapToDevice(edge, dpr);
+          ctx.moveTo(ex, 0);
+          ctx.lineTo(ex, groupBandHeight);
+        }
+        ctx.stroke();
+      }
     };
     const drawScrollColHeaders = (): void => {
       for (let col = body.cols.start; col < body.cols.end; col += 1) {
         drawColHeader(col);
       }
+      drawColumnGroups(body.cols.start, body.cols.end);
     };
     // DD-039: 固定列の見出しとスクロール列の見出しを pane 境界で切り分ける。scrollColRange() は
     // 固定境界に半分かかる列と overscan 分の列を含むため、単一 clip だとそれらが固定帯の内側へ描かれる。
@@ -798,6 +1034,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
         for (let col = corner.cols.start; col < corner.cols.end; col += 1) {
           drawColHeader(col);
         }
+        drawColumnGroups(corner.cols.start, corner.cols.end);
       });
       withBandClip(headerWidth + frozenW, 0, viewportWidth - headerWidth - frozenW, headerHeight, drawScrollColHeaders);
     }

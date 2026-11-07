@@ -10,7 +10,7 @@ import {
 import type { GridConflictCode } from './error-codes';
 
 describe('error-codes: 公開エラー語彙', () => {
-  it('error コード語彙が phase 対応で固定されている（罫線1種＋共同編集4種＋単独モード2種＋列タイプ1種＋表示書式1種）', () => {
+  it('error コード語彙が phase 対応で固定されている（罫線1種＋共同編集4種＋単独モード2種＋列タイプ1種＋表示書式1種＋結合1種）', () => {
     expect([...GRID_ERROR_CODES]).toEqual([
       'border-config-invalid',
       'config-unavailable',
@@ -21,6 +21,7 @@ describe('error-codes: 公開エラー語彙', () => {
       'standalone-options-invalid',
       'column-types-invalid',
       'column-display-invalid',
+      'merged-cells-invalid',
     ]);
   });
 

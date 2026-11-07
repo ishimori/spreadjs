@@ -79,11 +79,11 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 - [x] 🔬 機械検証: `bash scripts/doc-check.sh` → OK
 
 ### Phase 2: 実装
-- [ ] `packages/selection`: 結合の索引（セル→結合・矩形に交わる結合・範囲の拡張）と、結合を1セルとして動く移動の純関数
-- [ ] `packages/render`: 結合範囲の描画（範囲の中のセルを飛ばす・文字のはみ出しを止める・1つのセルとして描き直す）・罫線層で範囲の中の線を抜く・Presence の枠・2段の見出し
-- [ ] `packages/grid`: `mergedCells`・`setMergedCells`・`columnGroups`（検証・診断・エラーコード）、結合の解決（描画の時・行 ID で保持・壊れたら捨てる）、選択・移動・クリック・ホバーの正規化、入口の抑止、貼り付け・消去・cut のスキップ、コピー、自動の行高からの除外、見出しの高さ・クリック・列幅の変更
-- [ ] `packages/react`: `mergedCells`（値の変化で `setMergedCells`）・`columnGroups`（識別系）の写像
-- [ ] playground（`standalone.html` の URL 指定）と E2E（結合・2段の見出し）
+- [x] `packages/selection`: 結合の索引（セル→結合・矩形に交わる結合・範囲の拡張）と、結合を1セルとして動く移動の純関数
+- [x] `packages/render`: 結合範囲の描画（範囲の中のセルを飛ばす・文字のはみ出しを止める・1つのセルとして描き直す）・罫線層で範囲の中の線を抜く・Presence の枠・2段の見出し
+- [x] `packages/grid`: `mergedCells`・`setMergedCells`・`columnGroups`（検証・診断・エラーコード）、結合の解決（描画の時・行 ID で保持・壊れたら捨てる）、選択・移動・クリック・ホバーの正規化、入口の抑止、貼り付け・消去・cut のスキップ、コピー、自動の行高からの除外、見出しの高さ・クリック・列幅の変更
+- [x] `packages/react`: `mergedCells`（値の変化で `setMergedCells`）・`columnGroups`（識別系）の写像
+- [x] playground（`standalone.html` の URL 指定）と E2E（結合・2段の見出し）
 - [ ] 🔬 機械検証: 対象の unit・E2E → 全パス
 - [ ] Codex レビュー（high）を依頼し、指摘を仕分けて直す（ユーザー指示）
 
@@ -109,3 +109,12 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 - 起票時の AC5・AC7 を確定した論点に合わせて直し、AC9（2段の見出し）・AC10（呼ぶ順と行の挿入・削除）を足した
 - ADR-019 は Open のまま（決定事項）。開発計画の ADR 表・D-17 に1行足した
 - 実装前の確認: 作業ツリーはクリーン（並行セッション spreadjs-d3 は待機中で未コミットの変更なし・配布作業の形跡なし）。alpha.18 以降のコード変更は E2E テスト1件だけで、CI は 7f2678d で green（10/26・11/02）＝土台はそのまま使える
+- Phase 1 をコミット（64d1c27）。Phase 2 実装:
+  - selection: `merges.ts`（索引は行ごとの表と「上端の昇順＋そこまでの下端の最大値」。範囲の拡張・Shift の焦点・1セル移動の純関数）
+  - render: base-layer の値の描画を `drawCellValue` に切り出し、Pass 1 で結合範囲のセルを飛ばし（結合は空セルとして扱わない＝左のセルの文字が結合の手前で止まる）、`drawPaneMerges` で範囲を描き直す。状態の枠を `drawStatusFrame` に一般化。罫線層は線ごとに結合の内側の区間を抜く（実線は区間を分割・点線は区間の中の点だけ）。2段の見出しは `columnGroupBand`
+  - grid: 公開型と形の検査は `merged-cell-spec.ts`（公開宣言の閉包に入るため内部 package に依存しない。最初は `merged-cells.ts` に同居させて R7 の契約テストで `Axis`・`MergeIndex` の漏れを検出→分けた）、解決は `merged-cells.ts`、2段の見出しは `column-groups.ts`。IME 状態機械は無改変（前段の消費と onChange の正規化だけ）。`integration-editor` の `pointerdownCell` に `focus: false` を足した（自動の正規化でページの他の入力欄からフォーカスを奪わない）
+  - react: `mergedCells` は `readOnly` と同じ「値が変わったら開き直さずに命令を呼ぶ」形。handle の網羅チェック（型）に `setMergedCells` を除外として足した
+- 自己レビューで2件直した: ①構造 flush で、アクティブセルの再ベース（新しい行の位置へ移す）の正規化が**古い結合の索引**で左上を選び、範囲の上に行が入ると挿入された行へ寄せていた → 再ベースの前に結合を張り直す順に変えた（E2E AC10 に固定）。②共同編集モードの snapshot 前（行 0 件）の描画で、mount オプションの全指定に `merged-cell-unresolved` を出していた → 行が 0 件の間は判定しない（unit に固定）。あわせて、同じ指定を渡し直したときは今の行で張り直す（壊れた結合も戻る）に決め、契約 §1.3 を直した
+- 機械検証: unit 151 ファイル・1,585 件 green（`--testTimeout=40000`・初回 listen の環境制約）。typecheck・consumer-strict・lint（boundary 含む）green。facade の公開 .d.ts スナップショットを更新（追加のみ。`GridErrorCode` に `merged-cells-invalid`）。E2E `merged-cells.spec.ts` 8 件 green。証跡 `test-results/dd-evidence/DD-064/`（ac1・ac6・ac9 の画面）
+- E2E 全件の1回目は、実行中に mount-controller を直したため Vite の再読み込みで3件が「実行コンテキストが消えた」で落ちた（コードの不具合ではない）→ 編集を止めて流し直し
+- 観察（別件・未調査）: アクティブセルが行0のときに scrollTop を代入して行0を隠すと、スクロールが0へ戻る（アクティブセルを行10へ移すと戻らない）。結合の有無によらず起きる既存の挙動。AC6 の E2E はアクティブセルを固定列の行10へ置いて避けた
