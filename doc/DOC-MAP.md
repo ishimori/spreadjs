@@ -90,6 +90,7 @@
 |------|------|
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
+| `doc/archived/DD/DD-064/` | セルの結合（mergedCells・setMergedCells）と2段の見出し（columnGroups）の契約・Codex レビュー（依頼・結果）・alpha.19 引き渡し（hiroshima-keikaku K1〜K4） |
 | `doc/archived/DD/DD-057/` | 広島空港 H14 の文字選択契約・SDK検証・alpha.13引き渡しと、showcase F列での選択画面 |
 | `doc/archived/DD/DD-058/` | 広島空港 H15。高DPICanvasの原因・方式比較、位置/DPR追従の画素検証・自己レビュー・alpha.14引き渡し |
 | `doc/archived/DD/DD-056/` | 広島空港 H11〜H13 の確定契約・設計と各子DDの実装レビュー（依頼・結果）・配布と検証記録 |

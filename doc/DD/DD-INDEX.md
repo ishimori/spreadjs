@@ -6,7 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-064 | セルの結合（consumer 駆動・計画策定の入力シート） | 進行中 | consumer 駆動（hiroshima-keikaku DD-001-15）。要件正本は hiroshima-keikaku `doc/DD/DD-001-15/sdk-requirements.md` の K1〜K4。論点1〜12 を推奨案で確定（2026-11-08・ユーザー指示）。実装中 |
+| DD-065 | grid の mount 配線の分割と再肥大の防止 | 検討中 | 起票のみ。着手は DD-064 の完了後。論点1〜8 は Human Spec Gate 待ち |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | N/A |  |
 
@@ -20,6 +20,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-064 | セルの結合（consumer 駆動・計画策定の入力シート） | セルの結合（mergedCells・setMergedCells）と2段の見出し（columnGroups）を追加。Codex high の4件を修正し alpha.19 で配布。実 IME と consumer の取り込みは未保証境界へ |
 | DD-063 | 確定前のセル入力の検証 | validateCell と cell-invalid を追加（入力を捨てて通知・貼り付けは全体を拒否）。alpha.16 で配布。実 IME の確認は未保証境界へ |
 | DD-062 | セルの状態表示の共同編集モード対応 | setCellStatus を両モードで追加（状態の置き場を共有・view-local）。Codex P2 2件を修正。alpha.16 で配布 |
 | DD-061 | セルの状態表示の色の設定 | cellStatusColors を追加（既定色を入れてから上書き・不正な設定は fail-fast）。DD-062・063 と alpha.16 で配布 |

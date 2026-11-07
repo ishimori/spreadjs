@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-07 | 2026-11-08 | 進行中 | consumer 駆動（hiroshima-keikaku DD-001-15）。要件正本は hiroshima-keikaku `doc/DD/DD-001-15/sdk-requirements.md` の K1〜K4。論点1〜12 を推奨案で確定（2026-11-08・ユーザー指示）。実装中 |
+| 2026-11-07 | 2026-11-08 | 完了 | セルの結合（mergedCells・setMergedCells）と2段の見出し（columnGroups）を追加。Codex high の4件を修正し alpha.19 で配布。実 IME と consumer の取り込みは未保証境界へ |
 
 > アプローチ: 標準（描画・選択・貼り付けの経路に結合を通す。範囲を決めてから、selection と clipboard は TDD で進める）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -11,7 +11,7 @@
 Risk Class: A（選択・移動・貼り付けの経路を変え、公開 mount オプションと命令 API を足す。論点1 は表示のための結合に決めたので protocol・snapshot は変わらない）
 Risk Triggers: selection（アクティブセルの正規化・矢印キー・範囲の拡張）・clipboard（貼り付けのスキップ・コピー）・描画（結合範囲の clip・2段の見出し）。公開 API の追加
 Human Spec Gate: passed＋delegated（2026-11-08・ユーザーが「論点は推奨値を足して、それでスタート」と指示。論点1〜12 を推奨案で確定。細目は contract.md）
-Codex: high（xhigh は明示指示時のみ）
+Codex: high（1 回・P1×1／P2×3 をすべて採用して修正。xhigh は明示指示時のみ）
 Manual Gate: 実 IME で、結合範囲の隣のセルへ矢印キーで移って入力を始められることの確認（クローズはブロックしない）
 External Review: なし
 Evidence Level: standard
@@ -88,15 +88,39 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 - [x] Codex レビュー（high）を依頼し、指摘を仕分けて直す（ユーザー指示）→ 4 件すべて採用して修正（ログ 2026-11-08）
 
 ### Phase 3: 配布
-- [ ] 配布の前の検証（typecheck・typecheck:consumer-strict・lint・test・build）を1回通し、alpha を作って consumer へ渡す
-- [ ] `apps/showcase/src/features.json`・README・CHANGELOG を直す
-- [ ] 🔬 機械検証: `bash scripts/release/build-release.sh` → 10 個の tarball と manifest（`closureDirty=false`）ができる。`npm run consumer-harness` → PASS
+- [x] 配布の前の検証（typecheck・typecheck:consumer-strict・lint・test・build）を1回通し、alpha を作って consumer へ渡す → alpha.19（bd2985f）。引き渡しは `DD-064/handoff.md`（release/0.1.0-alpha.19/README.md と同じ）
+- [x] `apps/showcase/src/features.json`・README・CHANGELOG を直す
+- [x] 🔬 機械検証: `bash scripts/release/build-release.sh --skip-verify` → 10 個の tarball と manifest（`closureDirty=false`）。`npm run consumer-harness` → PASS（consumer-app の E2E 10 件も green）
 
 ### 完了前チェック
-- [ ] 受け入れ基準を1項目ずつ照合（未達成があれば理由をログへ）
-- [ ] 製品化6観点（`doc/plan/dd-risk-class-header.md` §2）を確かめる
-- [ ] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ）
-- [ ] 🔬 全回帰1回
+- [x] 受け入れ基準を1項目ずつ照合（「検証」の表。AC8 は consumer 側＝未保証境界へ）
+- [x] 製品化6観点（`doc/plan/dd-risk-class-header.md` §2）を確かめる（ログ）
+- [x] 😈 セルフレビュー1巡（「どこが壊れるか」を探す。読み返す価値のある所見のみログへ）→ 2 件直した（ログ）
+- [x] 🔬 全回帰1回（bd2985f で unit 1,586 件・typecheck・consumer-strict・lint・build・playground E2E 289 件・showcase E2E 5 件）
+
+## 検証（2026-11-08）
+
+| AC | 結果 | 根拠 |
+|---|---|---|
+| 1 | 達成 | render 単体（範囲を罫線の内側から覆う・左上の値を範囲の縦の中央に 1 回・左上以外の値は描かない・背景は左上の行）・E2E AC1（範囲の中の横線の画素 0・隣の列には線・背景が縞にならない・画面 `ac1-merged-3x1.png`） |
+| 2 | 達成 | selection・選択コントローラの単体・E2E AC2（範囲の中のクリック→左上・↓で範囲の外・↑で左上・→・←・Tab・Enter・Shift+Enter・編集中の Tab で入っても左上で入力は確定） |
+| 3 | 達成 | E2E AC3（印字キー・F2・Delete・Backspace・ダブルクリックで値と draft が不変・`merged-cell-blocked`。3×3 の貼り付けは範囲の 2 セルだけ飛ばし残り 7 セルへ入る・`merged-cell-skipped`）。Codex 回帰（変換中に結合を足しても確定できる・開いた候補欄が閉じて書かない） |
+| 4 | 達成 | E2E AC4（Shift+↓ で範囲が結合を含む 0〜3 行へ・コピーの TSV は「空・ビル・空・空」、左上の単一選択のコピーは「ビル・空・空」）・選択コントローラの単体 |
+| 5 | 達成 | 単体（形の検査 8 種・保留・重なり・固定行・壊れた）・E2E AC5（未知の列で `config:merged-cells-invalid`・命令の形の誤り・重なり・未知の行・`undefined` で warn して保つ・入れ直しで消えた行は `merged-cell-broken`） |
+| 6 | 達成 | E2E AC6（固定 2 列の中の結合を横 600px・縦 30px 動かす → x 不変・y は 30 上・範囲は左上の行の背景・スクロール側と見出しへの漏れの画素 0・画面 `ac6-frozen-scrolled.png`） |
+| 7 | 達成 | React 単体（`mergedCells` は mount の初期値・参照が変われば開き直さず `setMergedCells`・同じ参照なら呼ばない・未指定で []。`columnGroups` は値が同じなら開き直さず変われば開き直す）・型の網羅チェック（handle から `setMergedCells` を除外） |
+| 8 | 未確認（consumer 側） | 配布物は consumer-harness・consumer-app で確認済み。試作への取り込みは hiroshima-keikaku DD-001-15 で行う（未保証境界） |
+| 9 | 達成 | render 単体（まとめた列は下の段・まとめていない列は 2 段ぶんの中央・区切りの線）・column-groups 単体（形の誤り 9 種）・E2E AC9（見出し 48px・上の段のクリックは header-click なし・上の段のまとまりの中の境界は列幅を変えない・誤りは `column-display-invalid`・画面 `ac9-column-groups.png`） |
+| 10 | 達成 | 単体（解決の 12 件）・E2E AC10（setData→setMergedCells と逆順のどちらでも新しい行に張る・warn なし・範囲の上の挿入で範囲とアクティブセルが一緒に動く・中の挿入で捨てる） |
+
+## 既知の未保証境界
+
+- 実 IME（Microsoft IME）で、結合範囲の隣のセルへ矢印キーで移って日本語入力を始められることは未確認（Manual Gate。synthetic composition の経路と、変換中に結合を足した場合の確定は E2E で確認済み。結合範囲の入力の止め方は readOnlyColumns と同じ textarea の読み取り専用の機構）
+- consumer の試作（React 19・単独モード・`vite-plugin-singlefile` の 1 ファイル HTML）への取り込みと画面での確認は未実施（AC8・hiroshima-keikaku DD-001-15）
+- 結合は表示の設定（view-local）。利用者が画面で結合・解除する操作と、文書の状態としての結合の共有は無い（ADR-019 は Open のまま）。共同編集モードで各クライアントが同じ指定を持つのは consumer の責務
+- 結合範囲の文字で行の高さを自動で伸ばさない。範囲に収まらない文字は … で切る
+- 範囲の行の挿入・削除は「壊れたら捨てる」だけで、縮小・拡大はしない（D-17）
+- 2 段の見出しは mount 固定で、まとまりの名前は上の段 1 段だけ（3 段以上・実行中の切り替えは無い）
 
 ## ログ
 
@@ -131,3 +155,11 @@ consumer が指定した範囲のセルを1つのセルとして描き、選択�
 
   回帰テスト: E2E に「変換中に結合を足しても確定できる」「開いている候補欄が閉じて書かない」、AC5 に `undefined`、unit に「張らなかった結合は今の並びで張る」を足した。**4 件とも、修正を外す（stash）と落ち、戻すと通る**ことを確かめた。契約 §1.1・§1.2・§2 に追記
 - 別件（未対応・記録のみ）: P1 と同じ「論理ロックが進行中の変換の終わりのイベントを捨てる」形は、DD-052-3 の行データのセル単位 readOnly を変換中に `setRows` で付けた場合や、変換中に行の構造変更でアクティブセルの index が読み取り専用の行を指した場合にも起こりうる（どちらも結合とは無関係・まれ）。要望・不具合の報告が出たら別 DD で、論理ロックを「新しい入力だけ」に揃える
+- Codex の修正をコミット（dce3754）。回帰を含む E2E merged-cells 10 件 green
+- Phase 3: 10 package と package-lock を 0.1.0-alpha.19 へ。CHANGELOG に alpha.19 の節を足し、末尾にあった alpha.18 の節を正しい位置へ移し、無かった alpha.17 の節を表と README から補った（開始前の確認で見つけた不整合）。README に「セルの結合と2段の見出し（alpha.19）」、機能カタログに `merged-cells` を足した（bd2985f）
+- 配布の前の検証を最終の配布対象（bd2985f）で 1 回: unit 151 ファイル・1,586 件（`--testTimeout=40000`）・typecheck・consumer-strict・lint（boundary）・build・playground E2E 289 件（4.3 分）・showcase E2E 5 件、すべて green
+- `build-release.sh --skip-verify`: 10 tarball・manifest（`0.1.0-alpha.19`・`closureDirty=false`・`gitDirty=true` は DD 文書のみ）。pack 内容 121 files。`verify-manifest.mjs` OK。consumer-harness（pack→install→tsc）OK。consumer-app（配布の tarball だけ・型検査・server lifecycle・E2E 10 件）OK
+- 配布物: `release/0.1.0-alpha.19/`（10 tarball＋manifest＋README＝`DD-064/handoff.md`）。ZIP `release/nanairo-sheet-0.1.0-alpha.19.zip`（431,028 bytes・SHA-256 `658f8e8e412423ab20652688e82ad575ed75e29e4034ebf5ba04eccd6ae94215`）。consumer（hiroshima-keikaku）のリポジトリは別セッションが作業中で未コミットの変更があるため触らず、取り込みは DD-001-15 側に任せる
+- 製品化6観点: ①公開 API は追加のみ（mount オプション 2・命令 1・型 2・エラーコード 1・React props 2。`.d.ts` スナップショット更新）②内部と Facade の境界: R7 の契約テストで内部型の漏れを検出→公開型を `merged-cell-spec.ts` へ分けて解消、boundary lint green ③再利用性: 汎用の結合・見出しのまとまりで案件固有の処理なし ④拡張性: 宣言的なオプションと命令だけ ⑤DX: README・CHANGELOG・JSDoc・契約・診断コード・機能カタログ ⑥互換性: Experimental 0.x の追加。`GridErrorCode` の union 拡張を CHANGELOG の Changed に明記
+- 並行セッション: 作業の途中で別セッションが DD-065「grid の mount 配線の分割と再肥大の防止」を起票した（未コミット・着手は DD-064 の完了後）。DD-065 のファイルには触れず、アーカイブで再生成した DD-INDEX には DD-065 の行が載る（作業ツリーの DD から生成するため）
+- 完了。アーカイブ（DD 本体と `DD-064/` を `doc/archived/DD/` へ・DD-INDEX 再生成・DOC-MAP に1行）を 1 コミットで行う
