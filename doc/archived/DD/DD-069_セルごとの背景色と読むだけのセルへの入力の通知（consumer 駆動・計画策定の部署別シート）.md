@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-08 | 2026-11-08 | 進行中 | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を実装し、単体・E2E で確認。Codex レビュー待ち |
+| 2026-11-08 | 2026-11-08 | 完了 | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を追加。Codex high の2件とセルフレビューの1件を直し alpha.23 で配布。実 IME と consumer の取り込みは未保証境界へ |
 
 > アプローチ: 標準（描画の背景の重ね順と、編集を止める経路に通知を足す。範囲を決めてから、通知の発火条件は TDD で進める）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -80,14 +80,32 @@ consumer がセルごとに背景色を指定できるようにする（K8）。
 - [x] 🔬 E2E: playground `cell-backgrounds.spec.ts`（2）・`edit-blocked.spec.ts`（4）
 - [x] 🔬 機械検証: `typecheck`・`typecheck:consumer-strict`・`lint`（boundary・size）・`test`・`build` が成功する（公開 .d.ts の snapshot は追加だけを確かめて更新）
 - [x] Codex high のレビューと対応（`DD-069/codex-review-result.md`。P2×2 を採用して修正）
-- [ ] alpha.23 を pack し、manifest と内容を検査する
+- [x] alpha.23 を pack し、manifest と内容を検査する → `release/0.1.0-alpha.23/`（72c1363・`closureDirty=false`・10 tarball・144 ファイル・新しい部品と公開型を含む）。引き渡しは同じフォルダの README.md。consumer-app（S1-3・型解決・寿命・E2E 10 件）と consumer-harness が成功
 
 ### 完了前チェック
 
-- [ ] 受け入れ基準を1項目ずつ照合（未達成は理由を、人手の確認が残るものは確認していない範囲をログへ — guides.md §3）
+- [x] 受け入れ基準を1項目ずつ照合（「検証」の表。実 IME と consumer の取り込みは未保証境界へ）
+- [x] 製品化6観点（`doc/plan/dd-risk-class-header.md` §2）を確かめる（ログ）
 - [x] 📄 現在形の文書へ反映 — 対象: `doc/quick-start.md`（mount・行データ・イベントの手引き）・CHANGELOG・`apps/showcase/src/features.json`
-- [ ] 😈 セルフレビュー1巡
-- [ ] 🔬 全回帰1回（`npm test` → 全パス）
+- [x] 😈 セルフレビュー1巡 → 1 件直した（印字キーの通知の時点・ログ）
+- [x] 🔬 全回帰1回（72c1363 の作業ツリーで test 1,738 件・typecheck・consumer-strict・lint・build・playground の関連 E2E 88 件）
+
+## 検証（2026-11-08）
+
+| AC | 結果 | 根拠 |
+|---|---|---|
+| 1 | 達成 | render 単体（列→行→セル→状態表示→罫線→文字の順・値ベース書式がセルの背景に勝つ・固定 pane で二重に塗らない・不正な色は pane の背景・結合は左上の色で範囲全体）・grid 単体（置き場の setData／setRows／{}・背景だけの変更は再描画だけ）・E2E（実ピクセル: 行の灰・列の桃の上でセルの青が勝ち、HIT の緑と warning の薄黄はセルの青に勝つ・結合の 2 行が青・setRows／setCellBackgrounds で描き直り {} で戻る・画面 `test-results/dd-evidence/DD-069/e2e-cell-backgrounds.png`） |
+| 2 | 達成 | keyboard・edit-blocked 単体（キー→操作・理由の優先順位・結合の左上・1 打鍵 1 回・二度出さない・変換中は出さない・控えの順）・E2E（列・行・行データのセル・結合・表全体の readOnly で、印字キー・F2・Delete・Backspace・ダブルクリック・貼り付け・切り取り・範囲の消去が位置と理由つきで 1 回ずつ・操作の順に届き、読むだけのセルの値と文書は変わらない。範囲の操作は cells-skipped が cell-commit の後に届く） |
+| 3 | 達成 | 単体・E2E（入力できるセルの打鍵・F2・ダブルクリック、移動キー、Ctrl+C、setRows では届かない。読むだけのセルを含まない範囲の操作では cells-skipped が出ない）。リモートの変更は通知を出す経路（キー・ポインタ・貼り付け／切り取り／範囲の消去）を通らない |
+| 4 | 達成 | 公開型 4 つ・`GridEvent` 2 種・`setCellBackgrounds`・`cellBackgrounds`、React の ref handle、CHANGELOG（alpha.23）・features.json・quick-start。typecheck・consumer-strict・公開 .d.ts の snapshot・consumer-harness |
+
+## 既知の未保証境界
+
+- 実 IME（Microsoft IME・日本語入力オン）で読むだけのセルに打ったとき、通知が 1 打鍵で 1 回届き変換が始まらないことは未確認（Manual Gate。synthetic の打鍵 `Process` は単体、読むだけのセルで textarea の readOnly により変換が始まらない機構は readOnlyColumns と同じ）
+- consumer の試作（hiroshima-keikaku の部署別シート）への取り込みと画面での確認は未実施（hiroshima-keikaku DD-001-28 Phase 3）
+- 選択式列の候補欄を開く操作（Alt+↓・検索つきの列の 1 回のクリック）と日付のカレンダーを止めたときは通知しない（決定事項・論点5）
+- 印字キーの通知は打鍵の処理の後に届く（次のキー・クリックの処理より前）。購読者の中で選択を動かしても、その打鍵の文字は入らない。消費するキー・ダブルクリック・貼り付けなどはその場で届く
+- セルの背景は view-local。共同編集モードで各クライアントが同じ指定を持つのは consumer の責務
 
 ## ログ
 
@@ -106,3 +124,6 @@ consumer がセルごとに背景色を指定できるようにする（K8）。
   2. 変換中に `setReadOnly(true)` を呼ぶと、変換の終わりを待つ間も表全体の判定が先に効き、貼り付け・切り取りが変換中でも `edit-blocked` を出す（決定事項の「変換中は出さない」に反する）→ 選択中のセルへの通知（`atActive`・印字キーの控え）は、変換中・Navigation でない位相では出さない。止める動きと診断は変えない
   - どちらも単体テストを足し、直す前の作りで落ちることを確かめた
 - 修正後の検証: playground の関連 E2E 88 件（DD-069 の 6 件と、読み取り専用・結合・貼り付け・状態表示・行背景・検証・React の読み取り専用）が成功。`typecheck`・`typecheck:consumer-strict`・`lint`（boundary・size）・`test`（1,738 件）・`build` が成功。公開 .d.ts の snapshot は `edit-blocked` の説明文の 3 行だけが変わったことを確かめて更新。版を 10 package とも `0.1.0-alpha.23` に上げた
+- 配布: 72c1363（修正と版上げのコミット）から `build-release.sh --skip-verify --out release/0.1.0-alpha.23`（同じソースで全体検証済み）。manifest は `closureDirty=false`・10 package とも 0.1.0-alpha.23、内容検査 OK（144 ファイル）。grid の tarball に `cell-background.ts`・`mount/edit-blocked.ts`、render に `background-bands.ts`、grid・react の公開面に `setCellBackgrounds` などが入っていることを確かめた。`RELEASE_VENDOR_DIR=release/0.1.0-alpha.23 bash scripts/consumer-app.sh` → S1-3 不合格 0・型解決・寿命・E2E 10 件 green。`npm run consumer-harness` → 成功。引き渡しは `release/0.1.0-alpha.23/README.md`（git 管理外）
+- 製品化6観点: ①公開 API は追加のみ（行データの項目 1・命令 1・イベント 2・型 4・React handle 1。`.d.ts` スナップショット更新）②内部と Facade の境界: 公開型は grid の index.ts に置き、R7 の契約テストと boundary lint が green ③再利用性: 汎用の背景色と通知で案件固有の処理なし ④拡張性: 行データ・命令・イベントだけ（描画のフックは render 内部）⑤DX: quick-start・CHANGELOG・JSDoc・診断コード・機能カタログ ⑥互換性: Experimental 0.x の追加。`GridEvent` の union 拡張を CHANGELOG の Changed に明記
+- 完了。アーカイブ（DD 本体と `DD-069/` を `doc/archived/DD/` へ・DD-INDEX 再生成・DOC-MAP に1行）を 1 コミットで行う。consumer への取り込みは hiroshima-keikaku DD-001-28 Phase 3（保留中・再開条件「DD-069 が新しい版を配布したら」を満たした）

@@ -6,7 +6,6 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-069 | セルごとの背景色と読むだけのセルへの入力の通知（consumer 駆動・計画策定の部署別シート） | 進行中 | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を実装し、単体・E2E で確認。Codex レビュー待ち |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | 検討中 | DD-039 の Manual Gate M1（実機での見え方）を 2026-09-04 に後追い実施して観測した現象。DD-039 が「実機で不自然だった場合は別 DD で扱う」と明記していた分岐の実行。**未着手（起票のみ）** |
 
@@ -20,6 +19,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-069 | セルごとの背景色と読むだけのセルへの入力の通知（consumer 駆動・計画策定の部署別シート） | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を追加。Codex high の2件とセルフレビューの1件を直し alpha.23 で配布。実 IME と consumer の取り込みは未保証境界へ |
 | DD-068 | 見出し下端の太い境界線 | 見出し下端を濃い3px実線に統一。unit1692件・PC4条件・配布HTMLで検証済み |
 | DD-067 | 列見出しの縦罫線 | 見出しと本文の縦罫線を統一。unit1688件・consumerのPC4条件とビルド成功 |
 | DD-066 | 結合したセルを選んだときの二重の枠（consumer 駆動・DD-064 の取りこぼし） | 二重枠・固定帯へのはみ出しを修正。alpha.20を作成、unit1681・E2E303件成功。実IME・consumer確認は未保証境界へ |
