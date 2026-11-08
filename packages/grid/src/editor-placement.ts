@@ -8,8 +8,9 @@
 //
 // wrap 列を編集中の textarea の高さ（RC2・DD-055）も同じく DOM 非依存の純関数としてここに置く。
 
-import { CELL_TEXT_LINE_HEIGHT } from '@nanairo-sheet/render';
+import { CELL_TEXT_LINE_HEIGHT, mergedCellRect } from '@nanairo-sheet/render';
 import type { CellRect, ViewportTransform } from '@nanairo-sheet/render';
+import type { CellRange } from '@nanairo-sheet/selection';
 
 export interface PlacementConfig {
   readonly headerWidth: number;
@@ -54,6 +55,34 @@ export function computeEditorPlacement(
     rect.y + rect.height > minY &&
     rect.y < cfg.viewportHeight;
   return { visible, rect };
+}
+
+export interface MergedEditorPlacement extends EditorPlacement {
+  /** 実矩形を動かさずに表示する部分（stage 座標）。隠れた端へ新しい枠を描かない。 */
+  readonly clip: CellRect;
+}
+
+/** DD-066: Navigation 中の結合の枠。可視判定も左上1セルではなく範囲全体で行う。 */
+export function computeMergedEditorPlacement(
+  transform: ViewportTransform,
+  range: CellRange,
+  cfg: PlacementConfig,
+): MergedEditorPlacement {
+  const rect = mergedCellRect(transform, range);
+  const frozenCol = range.colStart < cfg.frozenColCount;
+  const frozenRow = range.rowStart < cfg.frozenRowCount;
+  const minX = cfg.headerWidth + (frozenCol ? 0 : transform.frozenWidth());
+  const minY = cfg.headerHeight + (frozenRow ? 0 : transform.frozenHeight());
+  const maxX = Math.min(cfg.viewportWidth, frozenCol ? cfg.headerWidth + transform.frozenWidth() : cfg.viewportWidth);
+  const maxY = Math.min(cfg.viewportHeight, frozenRow ? cfg.headerHeight + transform.frozenHeight() : cfg.viewportHeight);
+  const x = Math.max(rect.x, minX);
+  const y = Math.max(rect.y, minY);
+  const clip = {
+    x, y,
+    width: Math.max(0, Math.min(rect.x + rect.width, maxX) - x),
+    height: Math.max(0, Math.min(rect.y + rect.height, maxY) - y),
+  };
+  return { rect, clip, visible: clip.width > 0 && clip.height > 0 };
 }
 
 /** RC2（DD-052-1）: wrap 列の編集欄が内容に合わせて下へ伸びる上限（8 行相当）。超えたら内部スクロールに切り替える。 */

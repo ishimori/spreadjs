@@ -171,6 +171,7 @@ const mergedCells = useMemo(
 ```
 
 - 結合は表示の設定（view-local）で、結合したセルは読むだけです。値は左上のセルのもので、範囲の中は編集・消去できず、貼り付けは範囲のセルを飛ばします。コピーは左上に値・残りは空です。
+- alpha.20（DD-066）では、結合セルを選ぶ枠を範囲全体へ揃えました。初期表示の枠も結合全体を囲み、スクロールしても固定行・固定列や見出しへはみ出しません。
 - 行を入れ直すとき（`ref.setData`）は、`mergedCells` も同じ commit で新しい行に合わせて変えてください。結合は次の描画の時の行に張るので、どちらが先でも構いません。React では値が変わっても開き直さず、grid の `setMergedCells` を呼びます（`mount` を直接使う場合は `instance.setMergedCells`）。
 - `frozenRowCount` の既定は 1（先頭のデータ行が固定）です。先頭の行から結合するときは `frozenRowCount: 0` にしてください。固定行・固定列の境界をまたぐ結合とまとまりは張れません。
 - 指定の誤り（未知の列など）は mount 時に `onError`（code=`merged-cells-invalid`／まとまりは `column-display-invalid`）、行が無い・重なる・行の挿入で壊れた結合は `onDiagnostic` の warn で分かります。細目は `CHANGELOG.md` の alpha.19 と DD-064 の `contract.md`。

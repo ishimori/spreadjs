@@ -439,7 +439,8 @@ const handle: StandaloneHandle = {
     this.instance = instance;
     connLabel = instance.connectionState();
     renderBar();
-    instance.focus();
+    // DD-066 E2E: SDK の自動 focus なしの初期配置も確認する（既定は従来どおり focus）。
+    if (searchParams.get('autofocus') !== '0') instance.focus();
     // E2E introspection（displayCell/ready 等）を公開する（test-support 経由・mount 直後に登録済み）。
     window.__integrationTestApi = getDebugApi(instance);
     window.__gridInstance = instance;

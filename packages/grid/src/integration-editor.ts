@@ -17,7 +17,7 @@ import type { EditorEvent } from '@nanairo-sheet/ime';
 import { CELL_TEXT_LINE_HEIGHT } from '@nanairo-sheet/render';
 import type { CellRect, ViewportTransform } from '@nanairo-sheet/render';
 
-import { computeEditorPlacement, computeWrapEditorHeight, type PlacementConfig } from './editor-placement';
+import { computeEditorPlacement, computeMergedEditorPlacement, computeWrapEditorHeight, type PlacementConfig } from './editor-placement';
 import {
   createImeEditingSession,
   type DivertedDraft,
@@ -29,6 +29,7 @@ import type { VisibleArea } from './popup-placement';
 import type { PresenceUpdate } from '@nanairo-sheet/collab';
 import type { SetCellsOperation } from '@nanairo-sheet/core';
 import type { OperationId } from '@nanairo-sheet/types';
+import type { CellRange } from '@nanairo-sheet/selection';
 
 const CELL_FONT = '13px system-ui, sans-serif';
 const EDITING_BACKGROUND = '#ffffff';
@@ -114,6 +115,8 @@ export interface IntegrationEditorConfig {
    * 縮めるのに使う（wrap 列の編集中だけ読む）。未指定なら縮めない。
    */
   readonly visibleArea?: () => VisibleArea;
+  /** DD-066: 直前に描いた結合。Navigation 中の枠だけに使い、編集中・変換中の配置は変えない。 */
+  readonly mergedRangeAt?: (rowIndex: number, colIndex: number) => CellRange | undefined;
 }
 
 export interface IntegrationEditor {
@@ -207,6 +210,14 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
   // port/badge のクロージャは session 生成後に実行されるため、前方参照を ref で保持する。
   const sessionRef: { current: ImeEditingSession | undefined } = { current: undefined };
   let currentRect: CellRect | null = null;
+  // CSSOM は inset(0px 0px 0px 0px) を inset(0px) へ正規化するので、要求値で比較して毎フレームの再代入を避ける。
+  let currentClipPath = '';
+  const setPlacementClip = (value: string): void => {
+    if (currentClipPath !== value) {
+      textarea.style.clipPath = value;
+      currentClipPath = value;
+    }
+  };
   let currentInputFont = CELL_FONT;
   // RC2: 現在 setEditingVisual(true) 中か（Navigation では常に単一行・固定高のまま = 既存挙動を保つ）。
   let editingVisual = false;
@@ -526,6 +537,23 @@ export function createIntegrationEditor(config: IntegrationEditorConfig): Integr
     },
     refreshPlacement: (transform, placement) => {
       session.refreshPlacement((rowIndex, colIndex) => {
+        const merge = session.getPhase() === 'Navigation' ? config.mergedRangeAt?.(rowIndex, colIndex) : undefined;
+        if (merge !== undefined) {
+          const area = config.visibleArea?.();
+          const p = computeMergedEditorPlacement(transform, merge, {
+            ...placement,
+            viewportWidth: Math.min(placement.viewportWidth, area?.width ?? placement.viewportWidth),
+            viewportHeight: Math.min(placement.viewportHeight, area?.height ?? placement.viewportHeight),
+          });
+          const { rect, clip } = p;
+          const top = clip.y - rect.y;
+          const right = Math.max(0, rect.x + rect.width - clip.x - clip.width);
+          const bottom = Math.max(0, rect.y + rect.height - clip.y - clip.height);
+          const left = clip.x - rect.x;
+          setPlacementClip(`inset(${top}px ${right}px ${bottom}px ${left}px)`);
+          return p.visible ? p.rect : null;
+        }
+        setPlacementClip('');
         const p = computeEditorPlacement(transform, rowIndex, colIndex, placement);
         return p.visible ? p.rect : null;
       });

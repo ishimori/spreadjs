@@ -45,7 +45,7 @@ export interface EditorWiringDeps {
   readonly events: Pick<GridEvents, 'noteSelfActiveCell' | 'schedulePresenceRefresh'>;
   readonly readonlySwitch: Pick<ReadOnlySwitch, 'isReadOnly' | 'isDeferred' | 'isDeferredLockIdle' | 'scheduleEditStateCheck' | 'runEditorCommit'>;
   readonly cellLock: Pick<CellLock, 'isActiveCellReadOnly' | 'syncCellLock'>;
-  readonly merges: Pick<MountMerges, 'normalizeActiveCell'>;
+  readonly merges: Pick<MountMerges, 'normalizeActiveCell' | 'current'>;
   emit(event: GridEvent): void;
   registry(): ColumnTypeRegistry | undefined;
   appearance(): CompiledAppearance;
@@ -118,6 +118,7 @@ export function createEditorWiring(deps: EditorWiringDeps): EditorWiring {
       };
       editor = createIntegrationEditor({
         fontForColumn: deps.appearance().fontFor,
+        mergedRangeAt: (row, col) => merges.current().at(row, col),
         host: deps.host,
         document: editCommands.documentPort(),
         submit: editorSubmit,

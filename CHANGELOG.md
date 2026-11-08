@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.19`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.20`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.20` | `alpha` | `0.1.0-experimental` | DD-066。結合セルの二重の選択枠と固定帯へのはみ出しを修正。DD-065 の内部構造整理を同梱 |
 | `0.1.0-alpha.19` | `alpha` | `0.1.0-experimental` | DD-064（広島 計画策定 K1〜K4）。セルの結合（`mergedCells`・`setMergedCells`）と 2 段の見出し（`columnGroups`） |
 | `0.1.0-alpha.18` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。選択式列に任意の検索入力（部分一致）を追加 |
 | `0.1.0-alpha.17` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。Canvas・編集欄の文字と罫線の外観設定 |
@@ -34,11 +35,15 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
-## [Unreleased]
+## [0.1.0-alpha.20] - 2026-11-08
+
+### Fixed
+
+- **結合セルの二重の選択枠（DD-066）**: Navigation 中の枠を結合範囲全体の矩形に揃え、内側の1セルぶんの枠を解消。自動 focus なしの初期表示も範囲全体を囲む。スクロールで一部が隠れたときは枠を所属 pane 内へ clip し、左上セルだけが隠れても結合の残りが見えれば表示と focus を保つ。隣の通常セルの編集・IME・候補欄・日付の配置は従来どおり。
 
 ### Changed
 
-- **grid 内部構造の変更（DD-065）**: mount の配線を機能ごとの部品へ分割し、キー入力の優先順位を明示。公開 API・挙動の変更なし。単独の配布は行わず、次回配布へ含める。
+- **grid 内部構造の変更（DD-065）**: mount の配線を機能ごとの部品へ分割し、キー入力の優先順位を明示。公開 API・挙動の変更なし。DD-065 単独では配布せず、本版へ同梱。
 
 ## [0.1.0-alpha.19] - 2026-11-08
 
