@@ -5,6 +5,7 @@ import { createTextMetricsCache } from '@nanairo-sheet/render';
 import { createColumnId, createRowId } from '@nanairo-sheet/types';
 
 import { compileAppearance } from '../appearance';
+import { createCellBackgroundStore } from '../cell-background';
 import { createCellStatusStore } from '../cell-status';
 import { createDiagnosticSink } from '../diagnostics';
 import type { GridDiagnostic } from '../diagnostics';
@@ -27,6 +28,7 @@ function setup(options: GridMountOptions = { mode: 'standalone', columnOrder: ['
   const events: GridEvent[] = [];
   const diagnostics: GridDiagnostic[] = [];
   const cellStatusStore = createCellStatusStore(undefined);
+  const cellBackgroundStore = createCellBackgroundStore(undefined);
   const undoCtrl = createUndoController();
   const clearUndo = vi.spyOn(undoCtrl, 'clear');
   const build = vi.fn(() => true);
@@ -51,6 +53,7 @@ function setup(options: GridMountOptions = { mode: 'standalone', columnOrder: ['
     metrics: createLoadMetrics(),
     undoCtrl,
     cellStatusStore,
+    cellBackgroundStore,
     events: {
       emit: (event) => events.push(event),
       hasListeners: () => true,
@@ -73,7 +76,7 @@ function setup(options: GridMountOptions = { mode: 'standalone', columnOrder: ['
     lifecycle.closeTransport();
   });
   const value = (rowId: string, columnId = 'a') => lifecycle.backend()?.view.cellDisplay(createRowId(rowId), createColumnId(columnId));
-  return { lifecycle, state, abort, events, diagnostics, cellStatusStore, clearUndo, build, recordProgrammaticUndo, refreshHoverStatus, attachBackend, value };
+  return { lifecycle, state, abort, events, diagnostics, cellStatusStore, cellBackgroundStore, clearUndo, build, recordProgrammaticUndo, refreshHoverStatus, attachBackend, value };
 }
 
 describe('mount/lifecycle: 起動と保留した再注入', () => {
@@ -118,6 +121,32 @@ describe('mount/lifecycle: 起動と保留した再注入', () => {
     await Promise.resolve();
     expect(env.value('r1')).toBe('new');
     expect(env.cellStatusStore.hasAny()).toBe(false);
+  });
+
+  it('DD-069: boot 前の setData → setCellBackgrounds → setRows を呼び出し順に再生し、setData は背景も作り直す', async () => {
+    const env = setup();
+    env.lifecycle.setCellBackgrounds([{ rowId: 'r1', cellBackgrounds: { a: '#111111' } }]);
+    env.lifecycle.setData({ rows: [{ rowId: 'r1', cells: { a: 'v' } }, { rowId: 'r2' }] });
+    env.lifecycle.setCellBackgrounds([{ rowId: 'r2', cellBackgrounds: { a: '#222222' } }]);
+    env.lifecycle.setRows([{ rowId: 'r2', cellBackgrounds: { a: '#333333' } }]);
+    expect(env.cellBackgroundStore.hasAny()).toBe(false);
+    env.lifecycle.start();
+    await Promise.resolve();
+    expect(env.cellBackgroundStore.row('r1')).toBeUndefined(); // setData の前に付けた背景は作り直しで消える
+    expect(env.cellBackgroundStore.row('r2')?.get('a')).toBe('#333333'); // 後から呼んだ setRows が勝つ
+    expect(env.events).toEqual([]);
+  });
+
+  it('DD-069: JS 経路の不正な背景色は診断だけにし、保留した後続の setData を失わない', async () => {
+    const env = setup();
+    Reflect.apply(env.lifecycle.setCellBackgrounds, env.lifecycle, [null]);
+    Reflect.apply(env.lifecycle.setCellBackgrounds, env.lifecycle, [[null, { rowId: 1 }, { rowId: 'r1', cellBackgrounds: { a: ' ', b: 3 } }]]);
+    env.lifecycle.setData({ rows: [{ rowId: 'r1', cells: { a: 'first' }, cellBackgrounds: { a: '' } }] });
+    env.lifecycle.start();
+    await Promise.resolve();
+    expect(env.value('r1')).toBe('first');
+    expect(env.cellBackgroundStore.hasAny()).toBe(false);
+    expect(env.diagnostics.filter((entry) => entry.code === 'cell-background-invalid')).toHaveLength(4);
   });
 
   it('JS 経路の不正な状態表示があっても、保留した後続の setData と setRows を失わない', async () => {
@@ -174,6 +203,15 @@ describe('mount/lifecycle: 共同編集の起動途中', () => {
     env.state.destroyed = true;
     env.lifecycle.setCellStatus([{ rowId: 'r1', cellStatus: {} }]);
     expect(env.cellStatusStore.hasAny()).toBe(true);
+  });
+
+  it('DD-069: 共同編集モードの setCellBackgrounds は boot を待たず view-local に保持し、destroy 後は無視する', () => {
+    const env = setup({ serverUrl: 'http://localhost:9499' });
+    env.lifecycle.setCellBackgrounds([{ rowId: 'r1', cellBackgrounds: { a: '#e6eaee' } }]);
+    expect(env.cellBackgroundStore.row('r1')?.get('a')).toBe('#e6eaee');
+    env.state.destroyed = true;
+    env.lifecycle.setCellBackgrounds([{ rowId: 'r1', cellBackgrounds: {} }]);
+    expect(env.cellBackgroundStore.hasAny()).toBe(true);
   });
 
   it('config の HTTP エラーを公開 error に写し、tick interval を破棄時に解放する', async () => {

@@ -178,6 +178,30 @@ export type GridEvent =
       readonly type: 'cell-invalid';
       readonly source: 'edit' | 'select' | 'date' | 'paste';
       readonly cells: readonly GridInvalidCell[];
+    }
+  /**
+   * 読むだけのセルへの編集を止めた通知（Experimental 0.x・DD-069・両モード共通）。選択中のセルで印字キー（日本語入力オンの
+   * 打鍵を含む）・Delete／Backspace・F2 を、ダブルクリックしたセルで編集の開始を止めたときと、表全体が読み取り専用
+   * （`readOnly`）で貼り付け・切り取り・範囲の消去を止めたときに、1 回の操作で 1 回出す。文書は変わらない。
+   * consumer が止めた理由と直す先を利用者に示すために使う（診断 `readonly-*-blocked`・`merged-cell-blocked` と同じ時に出る）。
+   * 選択式の候補欄・日付のカレンダーを開くのを止めたときは出さない。
+   */
+  | {
+      readonly type: 'edit-blocked';
+      readonly rowId: string;
+      readonly columnId: string;
+      readonly input: GridEditBlockedInput;
+      readonly reason: GridEditBlockedReason;
+    }
+  /**
+   * 範囲の操作で読むだけのセルを飛ばした通知（Experimental 0.x・DD-069・両モード共通）。貼り付け・切り取りのクリア・範囲の
+   * 消去が、読み取り専用の列・行・セルや結合範囲にかかって変えずに残したセルを `cells` に載せる（範囲が 1 セルでも同じ。
+   * 変える値の無い空のセルは載せない）。ほかのセルへの適用は従来どおり行う（全部を飛ばしたら文書は変わらない）。
+   */
+  | {
+      readonly type: 'cells-skipped';
+      readonly operation: 'paste' | 'cut' | 'clear';
+      readonly cells: readonly GridCellRef[];
     };
 
 /**
@@ -206,6 +230,27 @@ export interface GridInvalidCell extends GridCellValidationInput {
 export interface GridCellStatusRow {
   readonly rowId: string;
   readonly cellStatus: Readonly<Record<string, GridCellStatus>>;
+}
+
+/** セルの位置（DD-069）。RowId と ColumnId の文字列。 */
+export interface GridCellRef {
+  readonly rowId: string;
+  readonly columnId: string;
+}
+
+/** `edit-blocked` で止めた操作（DD-069）。`key` は印字キー（日本語入力オンの打鍵を含む）、`delete` は Delete／Backspace。 */
+export type GridEditBlockedInput = 'key' | 'delete' | 'f2' | 'dblclick' | 'paste' | 'cut' | 'clear';
+
+/**
+ * `edit-blocked` の理由（DD-069）。`readonly-column`=mount の `readOnlyColumns`・`readonly-row`=`readOnlyRows`・
+ * `readonly-cell`=行データの `readOnlyColumns`・`merged`=結合範囲・`grid-readonly`=表全体の `readOnly`。
+ */
+export type GridEditBlockedReason = 'readonly-column' | 'readonly-row' | 'readonly-cell' | 'merged' | 'grid-readonly';
+
+/** `setCellBackgrounds` に渡す 1 行（DD-069）。`cellBackgrounds` は ColumnId 文字列→CSS color（`{}` でその行の背景を消す）。 */
+export interface GridCellBackgroundRow {
+  readonly rowId: string;
+  readonly cellBackgrounds: Readonly<Record<string, string>>;
 }
 
 /** セルの状態表示の 1 水準の色（DD-061・省略した項目は既定色）。 */
@@ -325,6 +370,14 @@ export interface GridStandaloneRow {
    * `level` が `error`/`warning` 以外のセルは無視して診断 `warn`（code=`cell-status-invalid`）を出す。
    */
   readonly cellStatus?: Readonly<Record<string, GridCellStatus>>;
+  /**
+   * DD-069: この行のセルごとの背景色（ColumnId 文字列→CSS color・Experimental 0.x）。行・列の背景（`rowBackgrounds`・
+   * `columnBackgrounds`）より勝ち、状態表示（`cellStatus`）と値ベース書式の背景には負ける。文書のデータではない（view-local）。
+   * `setRows`・`setData`・`initialData` での扱いは `cellStatus` と同じ（渡した行は丸ごと置き換え・省略した行は保つ・`{}` で
+   * 消す・未知列は静かにスキップ）。空・空白だけの色のセルは無視して診断 `warn`（code=`cell-background-invalid`）を出す。
+   * 行データでの指定は **standalone モード専用**（両モードで使える `GridInstance.setCellBackgrounds` と同じ置き場）。
+   */
+  readonly cellBackgrounds?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -659,6 +712,13 @@ export interface GridInstance {
    * 単独モードの `setData` は状態も含めて作り直す。boot 前に呼んでもよい（単独モードは `setData`/`setRows` と同じ順で適用）。
    */
   setCellStatus(rows: readonly GridCellStatusRow[]): void;
+  /**
+   * セルごとの背景色を付け外しする（Experimental 0.x・DD-069・**両モード共通**・view-local）。渡した行の背景を丸ごと置き換え、
+   * `{}` で消す（単独モードの `setRows` の `cellBackgrounds` と同じ決まり・同じ置き場）。サーバーへ送らず、文書・Undo・
+   * cell-commit・コピーの対象外。未知の RowId（まだ届いていない行）も受け付け、行が現れれば描く。解決できない列は描かない。
+   * 単独モードの `setData` は背景も含めて作り直す。boot 前に呼んでもよい（`setCellStatus` と同じく呼んだ順で適用）。
+   */
+  setCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void;
   /**
    * セルの結合を丸ごと置き換える（Experimental 0.x・DD-064・**両モード共通**・view-local）。`[]` で全部外す。
    * 同じ内容でも、次の描画の時の行の並びで張り直す（壊れて捨てた結合も、指定し直せば張る）。結合を張るのは次の描画の時なので、

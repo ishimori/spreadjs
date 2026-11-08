@@ -2,12 +2,13 @@
 // 各フックは該当する設定があるときだけ束縛する（無ければ描画コスト増ゼロ＝従来と同じ条件）。
 
 import { CELL_TEXT_LINE_HEIGHT, DEFAULT_BASE_COLORS, columnLabel, createBaseLayer } from '@nanairo-sheet/render';
-import type { CellStatusMark, TextMetricsCache } from '@nanairo-sheet/render';
+import type { CellBackgroundMark, CellStatusMark, TextMetricsCache } from '@nanairo-sheet/render';
 import type { MergeIndex } from '@nanairo-sheet/selection';
 import { createColumnId } from '@nanairo-sheet/types';
 
 import type { CompiledAppearance } from '../appearance';
 import type { CompiledBorders } from '../border-rules';
+import type { CellBackgroundStore } from '../cell-background';
 import type { CellStatusStore } from '../cell-status';
 import type { CompiledColumnGroup } from '../column-groups';
 import type { CompiledColumnDisplay } from '../display-format';
@@ -28,6 +29,8 @@ export interface BaseLayerConfig {
   readonly wrapColumnStrings: ReadonlySet<string>;
   readonly cellTextCache: TextMetricsCache;
   readonly cellStatusStore: CellStatusStore;
+  /** DD-069: セルごとの背景色の置き場。 */
+  readonly cellBackgroundStore: CellBackgroundStore;
   /** 直前の描画の前に張った結合範囲。 */
   currentMerges(): MergeIndex;
   isLinkColumnIndex(colIndex: number): boolean;
@@ -59,6 +62,26 @@ export function cellStatusMarksAt(store: CellStatusStore, backend: GridBackend, 
     const colIndex = backend.view.colIndexOf(createColumnId(columnId));
     if (colIndex >= 0) {
       marks.push({ colIndex, level: status.level });
+    }
+  }
+  return marks;
+}
+
+/** DD-069: 行 index → その行のセルごとの背景色（base-layer の cellBackgroundsInRow フック）。0 件なら RowId の解決もせず即 undefined。 */
+export function cellBackgroundMarksAt(store: CellBackgroundStore, backend: GridBackend, rowIndex: number): readonly CellBackgroundMark[] | undefined {
+  if (!store.hasAny()) {
+    return undefined;
+  }
+  const rowId = backend.view.rowIdAt(rowIndex);
+  const colors = rowId === undefined ? undefined : store.row(String(rowId));
+  if (colors === undefined) {
+    return undefined;
+  }
+  const marks: CellBackgroundMark[] = [];
+  for (const [columnId, color] of colors) {
+    const colIndex = backend.view.colIndexOf(createColumnId(columnId));
+    if (colIndex >= 0) {
+      marks.push({ colIndex, color });
     }
   }
   return marks;
@@ -143,6 +166,8 @@ export function createMountBaseLayer(backend: GridBackend, cfg: BaseLayerConfig)
     // DD-060/062: セルの状態表示。後から付くため両モードで常に束縛し、0 件なら即 undefined を返す。
     // RowId→ColumnId を描画のたびに index へ解決する（行の挿入・削除・列の並びに追従。解決できない列は描かない）。
     cellStatusesInRow: (rowIndex: number) => cellStatusMarksAt(cfg.cellStatusStore, backend, rowIndex),
+    // DD-069: セルごとの背景色（状態表示と同じく両モードで常に束縛し、0 件なら即 undefined。行の帯の後・状態表示の前に塗る）。
+    cellBackgroundsInRow: (rowIndex: number) => cellBackgroundMarksAt(cfg.cellBackgroundStore, backend, rowIndex),
     ...(compiledStatusColors !== undefined ? { cellStatusColors: compiledStatusColors } : {}),
     // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
     // 完全一致（AC9）。判定は raw・描画は display（columnHeaderLabel=ヘッダー・formatCellText=セル）。

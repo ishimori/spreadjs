@@ -15,8 +15,11 @@ import { createSelectionController } from './selection-controller';
 import { createUndoController } from './undo-stack';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
+import { createCellBackgroundStore } from './cell-background';
+import { createEditBlocked } from './mount/edit-blocked';
 import { createCellStatusStore } from './cell-status';
 import type {
+  GridCellBackgroundRow,
   GridCellStatusRow,
   GridCollaborationMountOptions,
   GridConnectionState,
@@ -102,6 +105,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       ? (columnId) => (standaloneColumnSet ??= new Set(Array.isArray(standaloneColumns) ? standaloneColumns : [])).has(columnId)
       : undefined,
   );
+  // DD-069: セルごとの背景色の置き場（状態表示と同じ決まり。単独モードは未知の列を入力時に落とす）。
+  const cellBackgroundStore = createCellBackgroundStore(
+    options.mode === 'standalone'
+      ? (columnId) => (standaloneColumnSet ??= new Set(Array.isArray(standaloneColumns) ? standaloneColumns : [])).has(columnId)
+      : undefined,
+  );
   // 矩形範囲選択の所有者（DD-020-1 案X）。activeCell の所有は editor-state-machine のまま・レンジのみここが持つ。
   // DD-064: 直前に描いた結合範囲で範囲を広げる（mergeRegistry は下で生成。呼ばれるのは配線後なので前方参照で足りる）。
   const selectionCtrl = createSelectionController({ merges: () => merges.current() });
@@ -160,6 +169,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
     registry: () => config.registry(),
   });
   const { validateReadOnlyRowsOnce, syncCellLock } = cellLock;
+  // DD-069: 読むだけのセルへの編集を止めたときの consumer への通知（edit-blocked・cells-skipped）は mount/edit-blocked.ts。
+  const editBlocked = createEditBlocked({
+    emit,
+    backend: () => lifecycle.backend(),
+    editor: () => editorWiring.get(),
+    cellLock,
+    merges,
+    isReadOnly: () => readonlySwitch.isReadOnly(),
+  });
   // 送信の関所・Undo の記録・確定前の検証・行操作・再ベース（区画⑦の前半・mount/edit-submit.ts）。
   const editSubmit = createEditSubmit({
     diag,
@@ -187,6 +205,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     cellLock,
     editSubmit,
     merges,
+    editBlocked,
     emit,
     editor: () => editorWiring.get(),
     isReadOnly: () => readonlySwitch.isReadOnly(),
@@ -276,6 +295,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         wrapColumnStrings,
         cellTextCache,
         cellStatusStore,
+        cellBackgroundStore,
         currentMerges,
         isLinkColumnIndex: (colIndex) => link.isLinkColumnIndex(colIndex),
         appearance: () => config.appearance(),
@@ -331,6 +351,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     selectionCtrl,
     cellLock,
     merges,
+    editBlocked,
     date,
     select,
     editor: () => editorWiring.get(),
@@ -403,6 +424,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     selectionCtrl,
     merges,
     cellLock,
+    editBlocked,
     select,
     date,
     hover,
@@ -453,6 +475,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     metrics,
     undoCtrl,
     cellStatusStore,
+    cellBackgroundStore,
     events,
     config,
     editSubmit,
@@ -507,6 +530,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     setCellStatus(rows: readonly GridCellStatusRow[]) {
       lifecycle.setCellStatus(rows); // DD-062: 両モード共通
+    },
+    setCellBackgrounds(rows: readonly GridCellBackgroundRow[]) {
+      lifecycle.setCellBackgrounds(rows); // DD-069: 両モード共通
     },
     setMergedCells(mergedCells: readonly GridMergedCell[]) {
       // DD-064: 両モード共通・view-local。列の並びが分かる前（boot 前）は最後の 1 回だけ保留して boot で適用する。

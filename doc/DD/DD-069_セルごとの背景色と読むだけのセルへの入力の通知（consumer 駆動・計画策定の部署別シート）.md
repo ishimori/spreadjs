@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-08 | 2026-11-08 | 検討中 | consumer 駆動（hiroshima-keikaku DD-001-28）。要件正本は hiroshima-keikaku `doc/archived/DD/DD-001-27/sdk-requirements.md` の K8・K11。範囲（論点1〜6）は Human Spec Gate 待ち |
+| 2026-11-08 | 2026-11-08 | 進行中 | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を実装し、単体・E2E で確認。Codex レビュー待ち |
 
 > アプローチ: 標準（描画の背景の重ね順と、編集を止める経路に通知を足す。範囲を決めてから、通知の発火条件は TDD で進める）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -10,7 +10,7 @@
 ```text
 Risk Class: A（編集を止める経路〔印字キー・IME・Delete・F2・ダブルクリック・貼り付け・切り取り・範囲の消去〕に通知を足し、公開のイベントと行データの項目を足す）
 Risk Triggers: 描画（セルの背景の重ね順）・入力の経路（キー・textarea・IME・ポインタ・clipboard）。公開 API の追加
-Human Spec Gate: required（論点1〜6。起票時点では未実施）
+Human Spec Gate: passed＋delegated（2026-11-08・ユーザーが「DD-069を推奨で進めて」と指示。論点1〜6 を推奨案で確定。実装で詰めた細目は決定事項）
 Codex: high（xhigh は明示指示時のみ）
 Manual Gate: 実 IME（日本語入力オン）で読むだけのセルに打つと、通知が1回だけ届き、変換が始まらないことの確認（クローズはブロックしない）
 External Review: なし
@@ -43,33 +43,48 @@ consumer がセルごとに背景色を指定できるようにする（K8）。
 
 ## 決定事項
 
-（Human Spec Gate の後に、論点ごとの結果を書く）
+- 2026-11-08（ユーザー・hiroshima-keikaku DD-001-28）: K8・K11 を持ち込む。K9・K10・K12 は見送り
+- 2026-11-08（ユーザー）: 「DD-069を推奨で進めて」→ **論点1〜6 を上の推奨案で確定**（Human Spec Gate を推奨案で代行確定）。実装が終わったら Codex にレビューを頼み、指摘は妥当性を判断した上で Claude が直す
+- 実装で詰めた細目（推奨案の範囲の中での判断）:
+  - **論点1**: 置き場は `cellStatus` と同じ形の `CellBackgroundStore`（`grid/src/cell-background.ts`）。単独モードの行データ（`initialData`・`setData`・`setRows`）と両モード共通の `setCellBackgrounds` が同じ置き場を使う。単独モードの boot 前の `setCellBackgrounds` は `setData`/`setRows` と同じ queue に積んで呼んだ順に適用する（DD-062 と同じ）。共同編集モードの置き場は列を確かめず、描画で解決できない列を描かない
+  - **論点2**: 重なり順は pane → 列 → 行 → **セル** → 値ベース書式 → 状態表示（値ベース書式と状態表示の間は従来どおり状態表示が勝つ）。結合範囲は左上のセルの色で範囲全体を塗る（範囲の中の他の行の指定は描かない）
+  - **論点3（推奨案から変えた）**: mount 時（`initialData`）も fail-fast にせず、空・空白だけ・文字列でない色はそのセルだけ捨てて診断 warn（`cell-background-invalid`）。`cellBackgrounds` 自体がオブジェクトでない行は、その行を変えずに同じ診断。理由: `cellStatus` の不正な `level` と同じ扱いにそろえる（行データは consumer の業務データから作る値で、1 セルの誤りで画面全体を出さないのは重すぎる。mount オプションではないので `column-types-invalid` の経路に乗らない）
+  - **論点4**: `edit-blocked` は選択中のセル（キー、表全体が readOnly のときの貼り付け・切り取り・範囲の消去）とダブルクリックしたセルについて出す。理由が重なるときは `grid-readonly` → `merged` → `readonly-row` → `readonly-column` → `readonly-cell` の順で先のもの。結合範囲は左上のセルとして知らせる。印字キーは従来どおり素通し（textarea の readOnly で止まる）で通知だけ足し、抑止するキー（F2・Delete・Backspace）と素通しのキーで知らせる段を分けて、1 打鍵で 1 回にする
+  - **論点4**: 貼り付け・切り取り・範囲の消去で飛ばしたセルは、1 つだけでも `cells-skipped`（`edit-blocked` にしない）。理由: 貼り付けの範囲はクリップボードの大きさで決まり選択中のセルとは限らないので、飛ばしたかどうかを 1 つの経路で知らせる。結合範囲は覆うセルを全部含む。通知は書き込みの後（貼り付けは選択の移動の後）に出し、受け取った consumer が `setActiveCell` などを呼んでも上書きしない。`validateCell` で貼り付け全体を拒否したときは出さない（`cell-invalid` が出る）
+  - **論点5**: 選択式列の候補欄を開く操作（Alt+↓・検索つきの列の 1 回のクリック）と日付のカレンダーを止めたときは通知しない（consumer の部署別シートに選択式・日付の列がない。印字キー・F2・ダブルクリックは通知する。要れば別 DD）。日本語入力オンの打鍵は、読むだけのセルでは変換が始まらないので 1 打鍵で 1 回
+  - **render**: 列・行・セルの背景と結合範囲の重ね塗りを `render/src/background-bands.ts` へ切り出した（`base-layer.ts` はサイズのガードの超過 1,105 行を増やせないため。1,046 行に減り baseline を更新）
 
 ## 受け入れ基準
 
 | # | 基準（操作 → 期待結果） | 検証方法 |
 |---|------------------------|---------|
-| 1 | 行データの `cellBackgrounds` で指定したセルだけがその色で描かれる。行・列の背景より勝ち、状態表示（黄・赤）には負ける。`setRows` で変えると描き直る | vitest（背景の解決）・consumer-harness |
-| 2 | 読むだけのセル（列・行・セル単位・結合・表全体の readOnly）で、印字キー・Delete・F2・ダブルクリック・貼り付け・切り取り・範囲の消去をすると、`edit-blocked`（範囲の一部なら `cells-skipped`）が位置と操作つきで1回だけ届き、文書は変わらない | vitest（keyboard・pointer・edit-commands） |
-| 3 | 入力できるセルの編集・`setRows`・リモートの変更・移動キーでは届かない | vitest |
+| 1 | 行データの `cellBackgrounds` で指定したセルだけがその色で描かれる。行・列の背景より勝ち、状態表示（黄・赤）には負ける。`setRows` で変えると描き直る | vitest（render の重ね順・grid の置き場）・E2E（`cell-backgrounds.spec.ts` の実ピクセル） |
+| 2 | 読むだけのセル（列・行・セル単位・結合・表全体の readOnly）で、印字キー・Delete・F2・ダブルクリック・貼り付け・切り取り・範囲の消去をすると、`edit-blocked`（範囲の一部なら `cells-skipped`）が位置と操作つきで1回だけ届き、文書は変わらない | vitest（keyboard・edit-blocked）・E2E（`edit-blocked.spec.ts`） |
+| 3 | 入力できるセルの編集・`setRows`・リモートの変更・移動キーでは届かない | vitest・E2E（リモートの変更は通知の経路を通らないことをコードで確認） |
 | 4 | 公開の型・React の写像（必要なら）・CHANGELOG・`apps/showcase/src/features.json` がそろう | typecheck・`npm test` |
 
 ## タスク一覧
 
 ### Phase 1: 範囲を決める（Human Spec Gate）
 
-- [ ] 論点1〜6 をユーザーと確定し、決定事項に書く（公開 API の細目は、要れば `DD-069/contract.md` に分ける）
-- [ ] 🔬 机上検証: 決定事項・受け入れ基準・Risk Class の欄が食い違わない
+- [x] 論点1〜6 をユーザーと確定し、決定事項に書く（公開 API の細目は決定事項と quick-start に書き、contract.md は作らない）
+- [x] 🔬 机上検証: 決定事項・受け入れ基準・Risk Class の欄が食い違わない
 
 ### Phase 2: 実装と検証（Phase 1 の後）
 
-- [ ] 範囲が決まったら、触るファイルと手順をここに書く
-- [ ] 🔬 機械検証: `npm test`（lint・typecheck・vitest）が成功する
+- [x] K8 描画: render `background-bands.ts`（列・行・セルの背景・結合範囲の重ね塗り）、`base-layer.ts` のフック `cellBackgroundsInRow`
+- [x] K8 置き場と注入: grid `cell-background.ts`・`standalone-session.ts`（行データ）・`mount/lifecycle.ts`（`setCellBackgrounds`・boot 前の queue）・`mount/base-layer-options.ts`（描画への橋渡し）・`mount-controller.ts`・公開型 `GridCellBackgroundRow`。react の ref handle `setCellBackgrounds`
+- [x] K11: grid `mount/edit-blocked.ts`（通知の組み立て）・`mount/keyboard.ts`・`mount/pointer.ts`・`mount/edit-commands.ts`・`mount/cell-lock.ts`（飛ばしたセルを集める）・公開型 `GridCellRef`・`GridEditBlockedInput`・`GridEditBlockedReason`
+- [x] 🔬 単体: render 6 件・grid（keyboard 5・edit-blocked 10・standalone-session 14・lifecycle 3）・react 1
+- [x] 🔬 E2E: playground `cell-backgrounds.spec.ts`（2）・`edit-blocked.spec.ts`（3）
+- [x] 🔬 機械検証: `typecheck`・`typecheck:consumer-strict`・`lint`（boundary・size）・`test`・`build` が成功する（公開 .d.ts の snapshot は追加だけを確かめて更新）
+- [ ] Codex high のレビューと対応
+- [ ] alpha.23 を pack し、manifest と内容を検査する
 
 ### 完了前チェック
 
 - [ ] 受け入れ基準を1項目ずつ照合（未達成は理由を、人手の確認が残るものは確認していない範囲をログへ — guides.md §3）
-- [ ] 📄 現在形の文書へ反映 — 対象: README（mount オプションとイベント）・CHANGELOG・`apps/showcase/src/features.json`
+- [x] 📄 現在形の文書へ反映 — 対象: `doc/quick-start.md`（mount・行データ・イベントの手引き）・CHANGELOG・`apps/showcase/src/features.json`
 - [ ] 😈 セルフレビュー1巡
 - [ ] 🔬 全回帰1回（`npm test` → 全パス）
 
@@ -78,3 +93,8 @@ consumer がセルごとに背景色を指定できるようにする（K8）。
 ### 2026-11-08
 
 - 起票（consumer 駆動・hiroshima-keikaku DD-001-28）。hiroshima-keikaku の DD-001-27 で合意した部署別シートの見せ方のうち、表の部品に機能がなかった5つを、consumer のユーザーが DD-001-28 で判断し、K8（セルごとの背景色）と K11（読むだけのセルへの入力の通知）を持ち込むことにした。論点1〜6 は推奨案で、Human Spec Gate 待ち。実装は未着手
+- Human Spec Gate: ユーザーが「推奨で進めて」と指示 → 論点1〜6 を推奨案で確定。実装で詰めた細目（論点3 は推奨案から変えた）は決定事項へ
+- 実装: K8 は render の背景の描画を `background-bands.ts` に切り出してセルの段を足し、grid に置き場（`cell-background.ts`）と注入（行データ・`setCellBackgrounds`）を足した。K11 は止める判断を変えずに、止めた所から `mount/edit-blocked.ts` を通して通知を出す（キー 2 段・ダブルクリック 5 か所・貼り付け／切り取り／範囲の消去）
+- テスト: 単体（render 6・grid 32・react 1）と playground の E2E 5 件が成功。E2E は最初、色を見る点が文字に重なる・固定列の地の色が白でない・`setData` で文書のハッシュが変わる、というテスト側の誤りで 3 回落ち、見る点と確かめる順を直した（実装の変更なし）
+- 文書: quick-start に 2 節、CHANGELOG に alpha.23、features.json の 2 項目。CHANGELOG の版の表に alpha.21（DD-067）・alpha.22（DD-068）の行が抜けていたので 1 行ずつ足した
+- 機械検証: `typecheck`・`typecheck:consumer-strict`・`lint`・`build` は成功。`test` は公開 .d.ts の snapshot（`tests/contract/facade-surface.test.ts`・DD-028）だけが落ちた。差分が追加だけ（grid の公開型 4 つ・`GridEvent` の 2 種・`setCellBackgrounds`・`cellBackgrounds`、react の import 行に `GridCellBackgroundRow`）で削除が無いことを確かめて `-u` で更新した。公開 API への影響は追加のみ（`GridEvent` の union の拡張は CHANGELOG の Changed に記録）。更新後の全体実行は 1,726 件成功。`tests/tooling/size-guard-base-ref.test.ts` の準備（一時 git リポジトリの作成）が 10 秒の制限を超えて 1 回落ちたが、同時に doc-check を走らせた負荷によるもので、単体で再実行して成功（今回の変更と無関係・1 回目の全体実行でも成功していた）

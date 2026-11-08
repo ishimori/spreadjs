@@ -23,6 +23,7 @@ import {
 import {
   type GridAppearance,
   mount,
+  type GridCellBackgroundRow,
   type GridCellCommitChange,
   type GridCellStatusColors,
   type GridCellStatusRow,
@@ -189,6 +190,8 @@ export interface NanairoSheetViewHandle {
   setRows(rows: readonly GridStandaloneRow[]): void;
   /** セルの状態表示の付け外し（grid GridInstance.setCellStatus 直結・DD-062・両モード共通・view-local）。 */
   setCellStatus(rows: readonly GridCellStatusRow[]): void;
+  /** セルごとの背景色の付け外し（grid GridInstance.setCellBackgrounds 直結・DD-069・両モード共通・view-local）。 */
+  setCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void;
   /** グリッドへフォーカス（常駐 textarea）。 */
   focus(): void;
   /** 現在の接続状態（未 mount 時は 'stopped'）。 */
@@ -516,6 +519,14 @@ function NanairoSheetViewImpl(
           return;
         }
         instance.setCellStatus(rows);
+      },
+      setCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'setCellBackgrounds を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.setCellBackgrounds(rows);
       },
       focus(): void {
         const instance = instanceRef.current;

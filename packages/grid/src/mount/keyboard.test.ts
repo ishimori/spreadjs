@@ -41,6 +41,7 @@ function setup(overrides: Partial<Env> = {}) {
   };
   const calls: string[] = [];
   const diagnostics: GridDiagnostic[] = [];
+  const blocked: string[] = [];
   const editor = {
     session: {
       isComposing: () => env.composing,
@@ -79,6 +80,7 @@ function setup(overrides: Partial<Env> = {}) {
       isReadOnlyRowIndex: () => false,
     },
     merges: { any: () => false, isMergedCellIndex: () => false, current: () => EMPTY_MERGE_INDEX },
+    editBlocked: { atActive: (input) => blocked.push(input) },
     date: {
       isAttached: () => env.dateAttached,
       openOnOf: () => (env.dateColumn ? 'dblclick' : undefined),
@@ -113,7 +115,7 @@ function setup(overrides: Partial<Env> = {}) {
     performRangeClear: () => calls.push('rangeClear'),
     ensureCellVisible: () => calls.push('ensureCellVisible'),
   });
-  return { keyboard, env, calls, codes: () => diagnostics.map((d) => d.code) };
+  return { keyboard, env, calls, blocked, codes: () => diagnostics.map((d) => d.code) };
 }
 
 function key(k: string, mods: Partial<KeydownInterceptInput> = {}): KeydownInterceptInput {
@@ -199,5 +201,57 @@ describe('mount/keyboard: 各段の結果', () => {
     const { keyboard, calls } = setup({ readOnly: true, composing: true, phase: 'Composing', dateAttached: true, dateColumn: true });
     expect(keyboard.dispatch(key('Enter', { isComposing: true }))).toEqual({ handler: null, outcome: 'continue' });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('DD-069: 読むだけのセルで止めた編集キーの通知（edit-blocked）', () => {
+  it('表全体が読み取り専用: F2・Delete・Backspace は消費して知らせ、印字キーと日本語入力の打鍵は素通しして知らせる', () => {
+    const { keyboard, blocked } = setup({ readOnly: true });
+    expect(keyboard.dispatch(key('F2'))).toEqual({ handler: 'readOnly', outcome: 'consume' });
+    expect(keyboard.dispatch(key('Delete', { ctrlKey: true }))).toEqual({ handler: 'readOnly', outcome: 'consume' });
+    expect(keyboard.dispatch(key('Backspace')).outcome).toBe('consume');
+    expect(keyboard.dispatch(key('5')).outcome).not.toBe('consume'); // textarea の readOnly で止まる
+    expect(keyboard.dispatch(key('Process')).outcome).not.toBe('consume');
+    expect(blocked).toEqual(['f2', 'delete', 'delete', 'key', 'key']);
+  });
+
+  it('表全体が読み取り専用: 移動・コピー・修飾つきの文字・変換中・編集中は知らせない', () => {
+    const { keyboard, blocked, env } = setup({ readOnly: true });
+    keyboard.dispatch(key('ArrowDown'));
+    keyboard.dispatch(key('Enter'));
+    keyboard.dispatch(key('c', { ctrlKey: true }));
+    keyboard.dispatch(key('a', { isComposing: true }));
+    env.composing = true;
+    keyboard.dispatch(key('5'));
+    env.composing = false;
+    env.phase = 'Editing';
+    keyboard.dispatch(key('5'));
+    expect(blocked).toEqual([]);
+  });
+
+  it('読み取り専用のセル: F2 は消費して知らせ、印字キーは素通しして知らせる（1 回の打鍵で 1 回）', () => {
+    const { keyboard, blocked } = setup({ activeReadOnly: true });
+    expect(keyboard.dispatch(key('F2'))).toEqual({ handler: 'readOnlyCells', outcome: 'consume' });
+    expect(keyboard.dispatch(key('5')).outcome).not.toBe('consume');
+    expect(keyboard.dispatch(key(' ')).outcome).not.toBe('consume');
+    expect(blocked).toEqual(['f2', 'key', 'key']);
+  });
+
+  it('表全体も選択中のセルも読み取り専用なら、表全体の段だけが 1 回知らせる', () => {
+    const { keyboard, blocked } = setup({ readOnly: true, activeReadOnly: true });
+    keyboard.dispatch(key('5'));
+    keyboard.dispatch(key('F2'));
+    expect(blocked).toEqual(['key', 'f2']);
+  });
+
+  it('範囲を選んだ Delete は範囲の消去へ流す（飛ばしたセルは cells-skipped で別に知らせる）。入力できるセルでは知らせない', () => {
+    const ranged = setup({ activeReadOnly: true, range: { rowStart: 1, rowEnd: 3, colStart: 1, colEnd: 2 } });
+    ranged.keyboard.dispatch(key('Delete'));
+    expect(ranged.blocked).toEqual([]);
+    expect(ranged.calls).toContain('rangeClear');
+    const editable = setup();
+    editable.keyboard.dispatch(key('5'));
+    editable.keyboard.dispatch(key('F2'));
+    expect(editable.blocked).toEqual([]);
   });
 });

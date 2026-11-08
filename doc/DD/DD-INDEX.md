@@ -6,7 +6,7 @@
 
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
-| DD-069 | セルごとの背景色と読むだけのセルへの入力の通知（consumer 駆動・計画策定の部署別シート） | 検討中 | consumer 駆動（hiroshima-keikaku DD-001-28）。要件正本は hiroshima-keikaku `doc/archived/DD/DD-001-27/sdk-requirements.md` の K8・K11。範囲（論点1〜6）は Human Spec Gate 待ち |
+| DD-069 | セルごとの背景色と読むだけのセルへの入力の通知（consumer 駆動・計画策定の部署別シート） | 進行中 | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を実装し、単体・E2E で確認。Codex レビュー待ち |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | 検討中 | DD-039 の Manual Gate M1（実機での見え方）を 2026-09-04 に後追い実施して観測した現象。DD-039 が「実機で不自然だった場合は別 DD で扱う」と明記していた分岐の実行。**未着手（起票のみ）** |
 

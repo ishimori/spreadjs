@@ -7,6 +7,7 @@
 
 import type { CellRange, MergeIndex } from '@nanairo-sheet/selection';
 
+import { createBackgroundBands, type CellBackgroundMark } from './background-bands';
 import type { ChunkStore } from './chunk-store';
 import { drawBorders, drawHeaderBottomBorder, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
 import { deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
@@ -181,6 +182,11 @@ export interface BaseLayerDeps extends BorderLayerDeps {
    */
   readonly rowBackground?: (rowIndex: number) => string | undefined;
   /**
+   * セルごとの背景色フック（DD-069）。行 index → その行で背景色を持つセル（無ければ undefined）。行の帯の後・状態表示の前に
+   * セル全体を塗る（セルが行・列に勝ち、状態表示と値ベース書式の背景はさらに上に乗る）。未指定なら追加描画ゼロ。
+   */
+  readonly cellBackgroundsInRow?: (rowIndex: number) => readonly CellBackgroundMark[] | undefined;
+  /**
    * セルの状態表示フック（DD-060）。行 index → その行で状態表示を持つセル（無ければ undefined）。値の有無によらず、
    * 行背景の後・罫線の前にセル全体の背景を塗り、値の後に罫線の内側の枠を描く（色は `CELL_STATUS_COLORS`）。
    * 状態のあるセルでは値ベース書式の背景を塗らない（状態の背景が勝つ）。文字・バッジは背景の上に描く。
@@ -275,8 +281,13 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
   // DD-059: 表示書式由来の装飾フック（負の数の色・括弧表記の右余白）。未指定なら装飾なし。
   const cellTextDecoration = deps.cellTextDecoration ?? (() => undefined);
   const columnHeaderLabelFn = deps.columnHeaderLabel;
-  const columnBackgroundFn = deps.columnBackground;
-  const rowBackgroundFn = deps.rowBackground;
+  // DD-036 C2・DD-045・DD-069: 列・行・セルの背景は background-bands.ts（罫線より前に、列 → 行 → セルの順で塗る）。
+  const bands = createBackgroundBands({
+    ctx,
+    ...(deps.columnBackground !== undefined ? { columnBackground: deps.columnBackground } : {}),
+    ...(deps.rowBackground !== undefined ? { rowBackground: deps.rowBackground } : {}),
+    ...(deps.cellBackgroundsInRow !== undefined ? { cellBackgroundsInRow: deps.cellBackgroundsInRow } : {}),
+  });
   const cellStatusesInRowFn = deps.cellStatusesInRow;
   const cellStatusColors = deps.cellStatusColors;
   /**
@@ -644,65 +655,6 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     }
   };
 
-  /**
-   * 静的列背景（DD-036 C2）: pane 内の指定列を「可視行範囲いっぱいの縦バンド」として 1 列 1 回で塗る。
-   * セル単位に塗らないのは、空セルも含む列全体が対象で、かつ列数ぶんの fillRect で足りるため（描画予算）。
-   * 罫線は本メソッドの後に引かれるため網掛けで消えない。
-   */
-  const drawColumnBackgrounds = (frame: FrameViewport, pane: PaneRange, paneBackground: string): void => {
-    if (columnBackgroundFn === undefined) {
-      return;
-    }
-    if (pane.rows.end <= pane.rows.start || pane.cols.end <= pane.cols.start) {
-      return;
-    }
-    const { transform } = frame;
-    const top = transform.cellRect(pane.rows.start, pane.cols.start).y;
-    const lastRow = transform.cellRect(pane.rows.end - 1, pane.cols.start);
-    const height = lastRow.y + lastRow.height - top;
-    for (let col = pane.cols.start; col < pane.cols.end; col += 1) {
-      const color = columnBackgroundFn(col);
-      if (color === undefined) {
-        continue;
-      }
-      const rect = transform.cellRect(pane.rows.start, col);
-      // DD-036（Codex P2）: Canvas は不正な色の代入を**無視**する（例外は投げない）＝直前に設定した色がそのまま
-      // 残る。列ごとに一度 pane 背景へ戻してから候補色を代入することで、不正色の列が「直前の列の色」で塗られる
-      // のを防ぐ（不正色は pane 背景で塗られる＝見た目は現行どおり＝「Canvas が無視して安全」の契約を守る）。
-      ctx.fillStyle = paneBackground;
-      ctx.fillStyle = color;
-      ctx.fillRect(rect.x, top, rect.width, height);
-    }
-  };
-
-  /**
-   * 静的行背景（DD-045）: pane 内の指定行を「可視列範囲いっぱいの横バンド」として 1 行 1 回で塗る。
-   * 列背景の後に呼ぶため交差セルでは行背景が勝ち、罫線・値ベース書式は後から上に乗る。
-   */
-  const drawRowBackgrounds = (frame: FrameViewport, pane: PaneRange, paneBackground: string): void => {
-    if (rowBackgroundFn === undefined) {
-      return;
-    }
-    if (pane.rows.end <= pane.rows.start || pane.cols.end <= pane.cols.start) {
-      return;
-    }
-    const { transform } = frame;
-    const left = transform.cellRect(pane.rows.start, pane.cols.start).x;
-    const lastCol = transform.cellRect(pane.rows.start, pane.cols.end - 1);
-    const width = lastCol.x + lastCol.width - left;
-    for (let row = pane.rows.start; row < pane.rows.end; row += 1) {
-      const color = rowBackgroundFn(row);
-      if (color === undefined) {
-        continue;
-      }
-      const rect = transform.cellRect(row, pane.cols.start);
-      // Canvas が不正色を無視して直前行の fillStyle を残しても色漏れしないよう、行ごとに pane 背景へ戻す。
-      ctx.fillStyle = paneBackground;
-      ctx.fillStyle = color;
-      ctx.fillRect(left, rect.y, width, rect.height);
-    }
-  };
-
   /** pane 内の状態表示セル（行 index → 列 index → 水準）。1 つも無ければ undefined（DD-060）。 */
   type PaneStatuses = Map<number, Map<number, CellStatusLevel>>;
 
@@ -841,21 +793,10 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       const bx = rect.x + left;
       const by = rect.y + top;
       // 背景: ふつうのセルと同じ重ね順を範囲の矩形 1 つで再現する（不正な色は Canvas が無視する＝直前の色を引き継がないよう、
-      // 色ごとに pane 背景へ戻してから代入する・drawColumnBackgrounds と同じ理由）。
+      // 色ごとに pane 背景へ戻してから代入する・background-bands.ts と同じ理由）。
       ctx.fillStyle = paneBackground;
       ctx.fillRect(bx, by, width, height);
-      const columnColor = columnBackgroundFn?.(col);
-      if (columnColor !== undefined) {
-        ctx.fillStyle = paneBackground;
-        ctx.fillStyle = columnColor;
-        ctx.fillRect(bx, by, width, height);
-      }
-      const rowColor = rowBackgroundFn?.(row);
-      if (rowColor !== undefined) {
-        ctx.fillStyle = paneBackground;
-        ctx.fillStyle = rowColor;
-        ctx.fillRect(bx, by, width, height);
-      }
+      bands.fillLayers(row, col, bx, by, width, height, paneBackground); // 列 → 行 → セル（DD-069）
       const level = statusLevelAt(row, col);
       const value = store.get(row, col);
       if (level !== undefined) {
@@ -902,10 +843,10 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     const paneBackground = pane.pane === 'body' ? colors.cellBackground : colors.frozenBackground;
     ctx.fillStyle = paneBackground;
     ctx.fillRect(pane.clip.x, pane.clip.y, pane.clip.width, pane.clip.height);
-    // DD-036 C2: 静的列背景は pane 背景の直後・罫線の前（固定 pane でも frozenBackground より優先して塗る）。
-    drawColumnBackgrounds(frame, pane, paneBackground);
-    // DD-045: 静的行背景は列背景の後・罫線の前（交差は行が勝ち、値ベース書式はさらに上に乗る）。
-    drawRowBackgrounds(frame, pane, paneBackground);
+    // DD-036 C2・DD-045・DD-069: pane 背景の直後・罫線の前に、列 → 行 → セルの背景（交差は後が勝ち、値ベース書式はさらに上に乗る）。
+    bands.drawColumnBackgrounds(frame.transform, pane, paneBackground);
+    bands.drawRowBackgrounds(frame.transform, pane, paneBackground);
+    bands.drawCellBackgrounds(frame.transform, pane, paneBackground);
     // DD-060: 状態表示の背景は行背景の後・罫線の前、枠は値の後（文字・バッジより上、選択枠〔overlay〕より下）。
     const statuses = collectPaneStatuses(pane);
     if (statuses !== undefined) {

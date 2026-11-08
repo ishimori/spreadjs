@@ -4,6 +4,7 @@
 //   - DD-061: cellStatusColors が GridMountOptions へそのまま渡り、識別系（値で直列化）として扱われる
 //   - DD-062: ref handle の setCellStatus が grid の setCellStatus へそのまま渡る（mount 前は無視＋warn）
 //   - DD-063: validateCell は開き直しの判定に入らず、最新の関数が呼ばれる
+//   - DD-069: ref handle の setCellBackgrounds が grid の setCellBackgrounds へそのまま渡る
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, createRef } from 'react';
@@ -15,8 +16,10 @@ interface FakeInstance {
   options: Record<string, unknown>;
   destroyed: boolean;
   cellStatusCalls: unknown[];
+  cellBackgroundCalls: unknown[];
   setData(data: unknown): void;
   setCellStatus(rows: unknown): void;
+  setCellBackgrounds(rows: unknown): void;
   focus(): void;
   connectionState(): string;
   destroy(): void;
@@ -30,9 +33,13 @@ vi.mock('@nanairo-sheet/grid', () => ({
       options,
       destroyed: false,
       cellStatusCalls: [],
+      cellBackgroundCalls: [],
       setData() {},
       setCellStatus(rows: unknown) {
         this.cellStatusCalls.push(rows);
+      },
+      setCellBackgrounds(rows: unknown) {
+        this.cellBackgroundCalls.push(rows);
       },
       focus() {},
       connectionState() {
@@ -90,6 +97,16 @@ describe('DD-062 ref handle の setCellStatus', () => {
     const rows = [{ rowId: 'r1', cellStatus: { a: { level: 'error' as const, message: 'm' } } }];
     ref.current!.setCellStatus(rows);
     expect(h.instances[0]!.cellStatusCalls).toEqual([rows]);
+  });
+});
+
+describe('DD-069 ref handle の setCellBackgrounds', () => {
+  it('grid の setCellBackgrounds へそのまま渡す', () => {
+    const ref = createRef<NanairoSheetViewHandle>();
+    render(createElement(NanairoSheetView, { ...standaloneProps(), ref }));
+    const rows = [{ rowId: 'r1', cellBackgrounds: { a: '#eee' } }];
+    ref.current!.setCellBackgrounds(rows);
+    expect(h.instances[0]!.cellBackgroundCalls).toEqual([rows]);
   });
 });
 

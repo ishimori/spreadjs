@@ -10,12 +10,15 @@ import { createColumnId, createDocumentId } from '@nanairo-sheet/types';
 import type { ColumnId } from '@nanairo-sheet/types';
 
 import { BrowserWebSocketTransport } from '../browser-transport';
+import { cellBackgroundInvalidMessage } from '../cell-background';
+import type { CellBackgroundStore } from '../cell-background';
 import { cellStatusInvalidMessage } from '../cell-status';
 import type { CellStatusStore } from '../cell-status';
 import type { DiagnosticSink } from '../diagnostics';
 import { GridBootError, toCompensationConflictCode } from '../error-codes';
 import type { GridBackend } from '../grid-backend';
 import type {
+  GridCellBackgroundRow,
   GridCellStatusRow,
   GridConnectionState,
   GridMountOptions,
@@ -62,6 +65,8 @@ export interface LifecycleDeps {
   readonly metrics: LoadMetrics;
   readonly undoCtrl: UndoController;
   readonly cellStatusStore: CellStatusStore;
+  /** DD-069: セルごとの背景色の置き場（`setCellBackgrounds` と単独モードの行データが共有する）。 */
+  readonly cellBackgroundStore: CellBackgroundStore;
   readonly events: Pick<GridEvents, 'emit' | 'hasListeners' | 'queueRemoteChange' | 'flushRemoteChanges' | 'refreshPresence'>;
   readonly config: Pick<MountConfig, 'build' | 'appearance'>;
   readonly editSubmit: Pick<EditSubmit, 'recordPendingStandaloneUndo' | 'recordProgrammaticUndo'>;
@@ -88,6 +93,7 @@ export interface MountLifecycle {
   setData(data: GridStandaloneData): void;
   setRows(rows: readonly GridStandaloneRow[]): void;
   setCellStatus(rows: readonly GridCellStatusRow[]): void;
+  setCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void;
   /** 起動する（単独モードは microtask で backend を作る。共同編集モードは tick interval を始めて boot する）。 */
   start(): void;
   /** destroy: tick interval を止める。 */
@@ -97,7 +103,7 @@ export interface MountLifecycle {
 }
 
 export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
-  const { options, isStandalone, diag, metrics, undoCtrl, cellStatusStore, events, config, editSubmit } = deps;
+  const { options, isStandalone, diag, metrics, undoCtrl, cellStatusStore, cellBackgroundStore, events, config, editSubmit } = deps;
   const emit = events.emit;
   // backend は共同編集（SessionSync）と単独（StandaloneSession）の共通面（GridBackend・DD-024）。
   let sync: GridBackend | undefined;
@@ -118,6 +124,7 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
     | { readonly kind: 'data'; readonly data: GridStandaloneData }
     | { readonly kind: 'rows'; readonly rows: readonly GridStandaloneRow[] }
     | { readonly kind: 'status'; readonly rows: readonly GridCellStatusRow[] }
+    | { readonly kind: 'backgrounds'; readonly rows: readonly GridCellBackgroundRow[] } // DD-069: setCellStatus と同じ理由
   > = [];
 
   async function fetchConfig(): Promise<ResolvedConfig> {
@@ -347,6 +354,11 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
       },
       // DD-062: 状態の置き場は setCellStatus と共有する（setData の作り直しは setCellStatus の分も含む）。
       cellStatusStore,
+      // DD-069: 背景色も同じ（不正な色の診断・置き場の共有）。
+      onCellBackgroundInvalid: (message) => {
+        diag.emit('warn', 'cell-background-invalid', message);
+      },
+      cellBackgroundStore,
     });
     sync = standalone;
     deps.attachBackend();
@@ -358,8 +370,10 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
         applyStandaloneData(call.data);
       } else if (call.kind === 'rows') {
         applyStandaloneSetRows(call.rows);
-      } else {
+      } else if (call.kind === 'status') {
         applyCellStatus(call.rows);
+      } else {
+        applyCellBackgrounds(call.rows);
       }
     }
   }
@@ -462,6 +476,41 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
     }
   }
 
+  /**
+   * DD-069: 両モード共通のセルごとの背景色の付け外し（`setCellBackgrounds`）を適用する。渡した行の背景を丸ごと置き換える
+   * （`{}` で消す）。view-local で文書・サーバー・Undo には触れない。JS の consumer の不正な形は例外にせず、その行だけ飛ばして
+   * 診断する（applyCellStatus と同じ。boot 前の queue の再生を止めない）。
+   */
+  function applyCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void {
+    const list: unknown = rows;
+    if (!Array.isArray(list)) {
+      diag.emit('warn', 'cell-background-invalid', 'setCellBackgrounds: rows は { rowId, cellBackgrounds } の配列が必要（無視）');
+      return;
+    }
+    const invalid: string[] = [];
+    const malformed: number[] = [];
+    let updated = false;
+    list.forEach((row: unknown, index) => {
+      const rowId: unknown = typeof row === 'object' && row !== null ? (row as { rowId?: unknown }).rowId : undefined;
+      if (typeof rowId !== 'string') {
+        malformed.push(index);
+        return;
+      }
+      if (cellBackgroundStore.replaceRow(rowId, (row as { cellBackgrounds?: unknown }).cellBackgrounds, invalid)) {
+        updated = true;
+      }
+    });
+    if (malformed.length > 0) {
+      diag.emit('warn', 'cell-background-invalid', `setCellBackgrounds: rows[${malformed.join(', ')}] は { rowId, cellBackgrounds } ではないため無視しました`);
+    }
+    if (invalid.length > 0) {
+      diag.emit('warn', 'cell-background-invalid', cellBackgroundInvalidMessage(invalid));
+    }
+    if (updated) {
+      sync?.view.markCellDirty();
+    }
+  }
+
   return {
     backend: () => sync,
     standalone: () => standalone,
@@ -517,6 +566,17 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
         return;
       }
       applyCellStatus(rows);
+    },
+    setCellBackgrounds(rows) {
+      // DD-069: setCellStatus と同じ（両モード共通。単独モードの boot 前は setData/setRows と同じ queue に積んで順を保つ）。
+      if (deps.isDestroyed()) {
+        return;
+      }
+      if (isStandalone && standalone === undefined) {
+        pendingStandaloneCalls.push({ kind: 'backgrounds', rows });
+        return;
+      }
+      applyCellBackgrounds(rows);
     },
     start() {
       if (isStandalone) {

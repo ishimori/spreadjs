@@ -20,6 +20,7 @@ import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resi
 import type { ResizeTarget } from '../resize-interaction';
 import type { SelectionController } from '../selection-controller';
 import type { CellLock } from './cell-lock';
+import type { EditBlocked } from './edit-blocked';
 import { AUTO_FIT_MAX_SCAN, HEADER_WIDTH } from './constants';
 import type { DateWiring } from './date-wiring';
 import type { CellHover } from './hover';
@@ -41,6 +42,8 @@ export interface PointerDeps {
   readonly selectionCtrl: SelectionController;
   readonly merges: Pick<MountMerges, 'current' | 'isMergedCellIndex'>;
   readonly cellLock: Pick<CellLock, 'isReadOnlyRowIndex' | 'isReadOnlyColumnIndex' | 'isReadOnlyCellIndex'>;
+  /** DD-069: ダブルクリックで編集の開始を止めたセルの consumer への通知。 */
+  readonly editBlocked: Pick<EditBlocked, 'atCell'>;
   readonly select: Pick<SelectWiring, 'isOpen' | 'close' | 'open' | 'isSelectColumnIndex' | 'isSearchableSelectColumnIndex'>;
   readonly date: Pick<DateWiring, 'isOpen' | 'close' | 'open' | 'isDblclickDateColumnIndex'>;
   readonly hover: CellHover;
@@ -589,27 +592,32 @@ export function registerPointerInteraction(deps: PointerDeps): void {
         // 列境界 dblclick の auto-fit（上の分岐）は閲覧系ゆえ維持する（要確認4・view-local layout）。
         if (deps.isReadOnly()) {
           diag.emit('info', 'readonly-blocked', 'readOnly: ダブルクリック編集を抑止（閲覧専用）');
+          deps.editBlocked.atCell(hit.rowIndex, hit.colIndex, 'dblclick');
           return;
         }
         // DD-035 R4: readOnly 列のセルは編集 UI（textarea・ドロップダウン・カレンダー）を一切開かない（入口抑止）。
         if (cellLock.isReadOnlyRowIndex(hit.rowIndex)) {
           diag.emit('info', 'readonly-row-blocked', `readOnlyRows: 行 ${String(sync.view.rowIdAt(hit.rowIndex))} のダブルクリック編集を抑止`);
+          deps.editBlocked.atCell(hit.rowIndex, hit.colIndex, 'dblclick');
           return;
         }
         if (cellLock.isReadOnlyColumnIndex(hit.colIndex)) {
           diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 列 ${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
+          deps.editBlocked.atCell(hit.rowIndex, hit.colIndex, 'dblclick');
           return;
         }
         // RC3（DD-052-3・Codex P2）: 行データ指定のセル単位 readOnly も同じ入口抑止に含める（列/行版のみ判定
         // していたため、行データで readOnly にしたセルを dblclick で開けてしまっていた）。
         if (cellLock.isReadOnlyCellIndex(hit.rowIndex, hit.colIndex)) {
           diag.emit('info', 'readonly-cell-blocked', `readOnlyColumns（行データ指定）: セル row=${String(sync.view.rowIdAt(hit.rowIndex))} col=${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
+          deps.editBlocked.atCell(hit.rowIndex, hit.colIndex, 'dblclick');
           return;
         }
         // DD-064: 結合範囲は読むだけ（K3）。編集 UI（textarea・候補欄・カレンダー）を開かない。
         if (merges.isMergedCellIndex(hit.rowIndex, hit.colIndex)) {
           const anchor = mergeAnchorOf(merges.current(), { row: hit.rowIndex, col: hit.colIndex });
           diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲（左上 row=${String(sync.view.rowIdAt(anchor.row))} col=${String(sync.view.columnIdAt(anchor.col))}）のダブルクリック編集を抑止`);
+          deps.editBlocked.atCell(hit.rowIndex, hit.colIndex, 'dblclick');
           return;
         }
         // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列

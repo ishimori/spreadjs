@@ -561,6 +561,60 @@ grid.subscribe((event) => {
 - `cell-invalid` は確定処理が終わった後に届くので、受け取って `setActiveCell` で元のセルへ戻すこともできる
 - `validateCell` が例外を投げたら通す（診断 `validate-cell-threw`）。React では関数を差し替えても開き直さない
 
+### セルごとの背景色（`cellBackgrounds`・DD-069）
+
+入力できるセルと読むだけのセルを色で分けるなど、セル 1 つずつに背景色を付ける。行データの `cellBackgrounds`
+（ColumnId → CSS の色）で指定し、両モード共通の `setCellBackgrounds` でも付け外しできる。
+
+```ts
+const initialData: GridStandaloneData = {
+  rows: [
+    // 11月は式で計算する（読むだけ）ので灰、12月は入力できるので白。
+    { rowId: 'r1', cells: { m11: '120', m12: '' }, readOnlyColumns: ['m11'], cellBackgrounds: { m11: '#f3f4f6', m12: '#ffffff' } },
+  ],
+};
+// 両モード共通（渡した行の背景を丸ごと置き換える・{} で消す）。
+grid.setCellBackgrounds([{ rowId: 'r1', cellBackgrounds: { m12: '#f3f4f6' } }]);
+```
+
+- 重なり順は 列の背景（`columnBackgrounds`）→ 行の背景（`rowBackgrounds`）→ **セルの背景** → 値に応じた書式（`columnFormats`）・
+  状態表示（`cellStatus`）。未入力の黄・計算できない赤などの状態表示は消えない。結合したセルは左上のセルの色で全体を塗る
+- 置き場の決まりは `cellStatus` と同じ: `setRows` では渡した行を丸ごと置き換え、省略した行は保つ（`{}` で消す）。
+  `setData`／`initialData` では作り直す。共同編集モードでは各クライアントの画面だけに持つ（サーバーへ送らない）
+- 文書のデータではない（cell-commit・コピー・Undo/Redo に混ざらない）。未知の列は静かに飛ばし、空・空白だけ・文字列でない色は
+  そのセルだけ捨てて診断 warn（`cell-background-invalid`。mount 時も例外にしない）。CSS の色として正しいかは確かめない
+  （描けない色は地の色になる）
+- React は ref handle の `setCellBackgrounds`（行データの `cellBackgrounds` は `setData`／`setRows` でそのまま渡る）
+
+### 読むだけのセルへの入力の通知（`edit-blocked`・`cells-skipped`・DD-069）
+
+読むだけのセル（`readOnlyColumns`・`readOnlyRows`・行データの `readOnlyColumns`・結合範囲・表全体の `readOnly`）で編集を
+止めたとき、どのセルで何をしたかが届く（両モード共通）。止める動きは従来どおりで、通知が増えるだけ。
+
+```ts
+grid.subscribe((event) => {
+  if (event.type === 'edit-blocked') {
+    // input: 'key'（印字キー・日本語入力オンの打鍵）| 'delete'（Delete・Backspace）| 'f2' | 'dblclick' | 'paste' | 'cut' | 'clear'
+    // reason: 'grid-readonly' | 'merged' | 'readonly-row' | 'readonly-column' | 'readonly-cell'
+    showToast(explain(event.rowId, event.columnId)); // 「11月は式で計算しています。下の『利用率』を直してください」など
+  }
+  if (event.type === 'cells-skipped') {
+    // operation: 'paste' | 'cut' | 'clear'。範囲の操作で書かずに飛ばしたセル（1 つだけでも）。
+    showToast(`${event.cells.length} 件のセルは読むだけのため、書き込みませんでした`);
+  }
+});
+```
+
+- `edit-blocked` は選択中のセル（ダブルクリックはそのセル）について、1 回の操作で 1 回。日本語入力オンの打鍵も 1 打鍵で 1 回
+  （読むだけのセルでは変換が始まらない）。結合範囲は左上のセルとして届く。理由が重なるときは `grid-readonly` → `merged` →
+  `readonly-row` → `readonly-column` → `readonly-cell` の順で先のもの
+- 貼り付け・切り取り・範囲の消去で読むだけのセルを飛ばしたら `cells-skipped`（飛ばしたセルの一覧。結合範囲は覆うセルを全部含む。
+  切り取り・範囲の消去では、もともと空のセルは消す値が無いので載らない）。
+  書き込みと選択の移動の後に届くので、受け取って `setActiveCell` などを呼んでもよい。`validateCell` で貼り付け全体を拒否したときは出ない
+- 表全体が `readOnly` のときは、貼り付け・切り取りも `edit-blocked`（`input: 'paste'`／`'cut'`）で届く（文書は変わらない）
+- 届かない: 入力できるセルの編集・移動キー・コピー・修飾キーつきのショートカット・`setRows`／`setData`・リモートの変更・変換中のキー。
+  選択式列の候補欄を開く操作（Alt+↓・検索つきの列の 1 回のクリック）を止めたときも届かない（印字キー・F2・ダブルクリックは届く）
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と

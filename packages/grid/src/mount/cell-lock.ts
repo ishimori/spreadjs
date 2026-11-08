@@ -6,6 +6,7 @@ import { createRowId } from '@nanairo-sheet/types';
 
 import type { ColumnTypeRegistry } from '../column-types';
 import type { DiagnosticSink } from '../diagnostics';
+import type { GridCellRef } from '../index';
 import type { GridBackend } from '../grid-backend';
 import type { IntegrationEditor } from '../integration-editor';
 import { partitionReadOnlyCellChanges, partitionReadOnlyColumnChanges, partitionReadOnlyRowChanges } from '../readonly-policy';
@@ -41,7 +42,8 @@ export interface CellLock {
   readOnlyEntryBlocked(what: string): ['info', string, string];
   validateReadOnlyRowsOnce(): void;
   syncCellLock(): void;
-  filterReadOnlyCells(op: SetCellsOperation, label: string): SetCellsOperation | null;
+  /** DD-069: `skipped` を渡すと、飛ばしたセル（RowId・ColumnId）を積む（consumer への cells-skipped）。 */
+  filterReadOnlyCells(op: SetCellsOperation, label: string, skipped?: GridCellRef[]): SetCellsOperation | null;
 }
 
 export function createCellLock(deps: CellLockDeps): CellLock {
@@ -190,11 +192,23 @@ export function createCellLock(deps: CellLockDeps): CellLock {
    * 範囲操作（貼り付け・範囲クリア・cut）の SetCells から readOnly 列への変更を除く（論点4: スキップして他列へ適用）。
    * 全件スキップなら null（呼び出し側は no-op）。上限/はみ出し検査は矩形全体で先に済んでいる（事後フィルタ）。
    */
-  function filterReadOnlyCells(op: SetCellsOperation, label: string): SetCellsOperation | null {
+  function filterReadOnlyCells(op: SetCellsOperation, label: string, skipped?: GridCellRef[]): SetCellsOperation | null {
     if (!hasReadOnlyCells() && !merges.any()) {
       return op;
     }
     let changes: readonly SetCellsChange[] = op.changes;
+    // DD-069: 各段で飛ばしたセルを積む（kept は元の順の部分列で、同じ変更のオブジェクトを持つ）。
+    const collect = (before: readonly SetCellsChange[], kept: readonly SetCellsChange[]): void => {
+      if (skipped === undefined || before.length === kept.length) {
+        return;
+      }
+      const keptSet = new Set(kept);
+      for (const change of before) {
+        if (!keptSet.has(change)) {
+          skipped.push({ rowId: String(change.rowId), columnId: String(change.columnId) });
+        }
+      }
+    };
     // DD-064: 結合範囲のセルは読むだけ（K3）。貼り付け・範囲の消去・cut は範囲のセルだけ飛ばす（readOnly 列・行と同じ）。
     if (merges.any()) {
       const kept = changes.filter((change) => !merges.isMergedCellId(change.rowId, change.columnId));
@@ -202,6 +216,7 @@ export function createCellLock(deps: CellLockDeps): CellLock {
       if (skipped > 0) {
         diag.emit('info', 'merged-cell-skipped', `${label}: 結合範囲のセル ${skipped} 件をスキップ（残り ${kept.length} 件）`);
       }
+      collect(changes, kept);
       changes = kept;
     }
     if (hasReadOnlyColumns()) {
@@ -213,6 +228,7 @@ export function createCellLock(deps: CellLockDeps): CellLock {
           `${label}: readOnly 列のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
         );
       }
+      collect(changes, partition.kept);
       changes = partition.kept;
     }
     // DD-036 C3: 行版を続けて適用する（和＝列 or 行のどちらかに該当するセルがスキップされる）。
@@ -225,6 +241,7 @@ export function createCellLock(deps: CellLockDeps): CellLock {
           `${label}: readOnly 行のセル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
         );
       }
+      collect(changes, partition.kept);
       changes = partition.kept;
     }
     // RC3（DD-052-3）: 行データ指定のセル単位 readOnly を続けて適用する（和・standalone 専用）。
@@ -237,6 +254,7 @@ export function createCellLock(deps: CellLockDeps): CellLock {
           `${label}: readOnly セル ${partition.skipped} 件をスキップ（残り ${partition.kept.length} 件）`,
         );
       }
+      collect(changes, partition.kept);
       changes = partition.kept;
     }
     return changes.length === 0 ? null : { ...op, changes: [...changes] };

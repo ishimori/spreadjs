@@ -11,12 +11,13 @@ import type { DiagnosticSink } from '../diagnostics';
 import type { GridConflictCode } from '../error-codes';
 import type { GridBackend } from '../grid-backend';
 import type { EditingDocumentPort } from '../ime-editing-session';
-import type { GridEvent } from '../index';
+import type { GridCellRef, GridEvent } from '../index';
 import type { IntegrationEditor } from '../integration-editor';
 import { buildRangeClear } from '../range-ops';
 import type { SelectionController } from '../selection-controller';
 import type { UndoController } from '../undo-stack';
 import type { CellLock } from './cell-lock';
+import type { EditBlocked } from './edit-blocked';
 import type { EditSubmit } from './edit-submit';
 
 export interface EditCommandsDeps {
@@ -28,6 +29,8 @@ export interface EditCommandsDeps {
   readonly cellLock: Pick<CellLock, 'filterReadOnlyCells'>;
   readonly editSubmit: Pick<EditSubmit, 'submitSetCells' | 'submitToBackend' | 'cellRevision' | 'rejectInvalidCells'>;
   readonly merges: { any(): boolean; current(): MergeIndex };
+  /** DD-069: 読むだけのセルへの編集を止めたときの consumer への通知。 */
+  readonly editBlocked: Pick<EditBlocked, 'atActive' | 'skipped'>;
   emit(event: GridEvent): void;
   editor(): IntegrationEditor | undefined;
   isReadOnly(): boolean;
@@ -87,6 +90,7 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     }
     if (deps.isReadOnly()) {
       diag.emit('info', 'readonly-blocked', 'readOnly: 範囲クリアを抑止（文書無変更）');
+      deps.editBlocked.atActive('clear');
       return;
     }
     const range = selectionCtrl.getRange();
@@ -106,13 +110,15 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
         return;
       case 'submit': {
         // DD-035 R4: readOnly 列のセルはスキップして他列だけクリアする（全件スキップなら no-op）。
-        const op = cellLock.filterReadOnlyCells(outcome.operation, '範囲クリア');
-        if (op === null) {
-          return;
+        const skipped: GridCellRef[] = [];
+        const op = cellLock.filterReadOnlyCells(outcome.operation, '範囲クリア', skipped);
+        if (op !== null) {
+          editSubmit.submitSetCells(op);
+          // 前段消費のため editor onChange（markViewportDirty）が走らない → 楽観適用の再描画をここで要求する。
+          backend.view.markCellDirty();
         }
-        editSubmit.submitSetCells(op);
-        // 前段消費のため editor onChange（markViewportDirty）が走らない → 楽観適用の再描画をここで要求する。
-        backend.view.markCellDirty();
+        // DD-069: 通知は書き込みの後（購読者が setActiveCell などを呼んでも、こちらが上書きしない）。
+        deps.editBlocked.skipped('clear', skipped);
         return;
       }
     }
@@ -147,6 +153,7 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     if (deps.isReadOnly()) {
       // cut は copy＋クリア＝文書変更系ゆえ全抑止（clipboard も変更しない・null=ブラウザ既定は readOnly textarea で no-op）。
       diag.emit('info', 'readonly-blocked', 'readOnly: cut を抑止（文書無変更・クリップボード不変）');
+      deps.editBlocked.atActive('cut');
       return null;
     }
     const editor = deps.editor();
@@ -166,11 +173,13 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     const tsv = serializeSelectionToTsv(copyPort, range);
     if (outcome.kind === 'submit') {
       // DD-035 R4: cut のクリアは readOnly 列をスキップ（copy＝TSV は全列そのまま＝閲覧系）。
-      const op = cellLock.filterReadOnlyCells(outcome.operation, 'cut');
+      const skipped: GridCellRef[] = [];
+      const op = cellLock.filterReadOnlyCells(outcome.operation, 'cut', skipped);
       if (op !== null) {
         editSubmit.submitSetCells(op);
         backend.view.markCellDirty();
       }
+      deps.editBlocked.skipped('cut', skipped); // DD-069: 書き込みの後に知らせる
     }
     return tsv;
   }
@@ -225,6 +234,7 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     if (deps.isReadOnly()) {
       // 消費（true=preventDefault）して readOnly textarea への流し込みも止める（文書無変更）。
       diag.emit('info', 'readonly-blocked', 'readOnly: paste を抑止（文書無変更）');
+      deps.editBlocked.atActive('paste');
       return true;
     }
     const editor = deps.editor();
@@ -253,8 +263,10 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
         return true;
       case 'submit': {
         // DD-035 R4 / DD-036 C3: readOnly 列・行のセルはスキップして他へ貼り付ける（TSV 位置不変・全件スキップなら消費のみ）。
-        const op = cellLock.filterReadOnlyCells(outcome.operation, '貼り付け');
+        const skipped: GridCellRef[] = [];
+        const op = cellLock.filterReadOnlyCells(outcome.operation, '貼り付け', skipped);
         if (op === null) {
+          deps.editBlocked.skipped('paste', skipped); // DD-069: 全部を飛ばした（文書は変わらない）
           return true; // DD-038 決定⑦: 文書無変更 → 選択も activeCell も動かさない（拒否・noop と同じ扱い）
         }
         // DD-063: 1 件でも validateCell が拒否したら全体を拒否する（全成功/全失敗・選択も動かさない＝決定⑦と同じ）。
@@ -268,6 +280,8 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
         selectPastedRect(outcome.rect); // 貼付範囲を選択レンジにする（Excel 準拠・書き込みが起きる経路でのみ）
         editSubmit.submitSetCells(op);
         backend.view.markCellDirty();
+        // DD-069: 一部を飛ばした通知は、選択の移動と書き込みの後（validateCell で全体を拒否したときは出さない）。
+        deps.editBlocked.skipped('paste', skipped);
         return true;
       }
     }

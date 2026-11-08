@@ -6,13 +6,16 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.20`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.23`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.23` | `alpha` | `0.1.0-experimental` | DD-069（広島 計画策定 K8・K11）。セルごとの背景色（`cellBackgrounds`・`setCellBackgrounds`）と読むだけのセルへの入力の通知（`edit-blocked`・`cells-skipped`） |
+| `0.1.0-alpha.22` | `alpha` | `0.1.0-experimental` | DD-068。見出しの下端を見出しの文字色の 3px の実線で区切る |
+| `0.1.0-alpha.21` | `alpha` | `0.1.0-experimental` | DD-067。列の縦罫線を見出しにも描く（0 行でも） |
 | `0.1.0-alpha.20` | `alpha` | `0.1.0-experimental` | DD-066。結合セルの二重の選択枠と固定帯へのはみ出しを修正。DD-065 の内部構造整理を同梱 |
 | `0.1.0-alpha.19` | `alpha` | `0.1.0-experimental` | DD-064（広島 計画策定 K1〜K4）。セルの結合（`mergedCells`・`setMergedCells`）と 2 段の見出し（`columnGroups`） |
 | `0.1.0-alpha.18` | `alpha` | `0.1.0-experimental` | nanairoware3 DD-243-10。選択式列に任意の検索入力（部分一致）を追加 |
@@ -34,6 +37,38 @@
 | `0.1.0-alpha.2` | `alpha` | `0.1.0-experimental` | DD-045。行単位の静的背景色 `rowBackgrounds` |
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
+
+## [0.1.0-alpha.23] - 2026-11-08
+
+### Added
+
+- **grid セルごとの背景色（行データの `cellBackgrounds`・`GridInstance.setCellBackgrounds`・DD-069）**: `GridStandaloneRow.cellBackgrounds`
+  （ColumnId → CSS の色）で、セル 1 つずつに背景色を付ける（hiroshima-keikaku の部署別シートの「白＝入力できる／灰＝読むだけ」）。
+  重なり順は 列の背景 → 行の背景 → **セルの背景** → 値に応じた書式・状態表示（`cellStatus`）で、結合したセルは左上のセルの色。
+  置き場の決まりは `cellStatus` と同じ（`setRows` は渡した行を丸ごと置き換え・省略は保つ・`{}` で消す、`setData`／`initialData` は
+  作り直す、未知列は静かに飛ばす）。両モード共通の `setCellBackgrounds([{ rowId, cellBackgrounds }])`（共同編集モードでは各クライアントの
+  画面だけ・boot 前に呼んでもよい）。**view-local**（文書・Operation・cell-commit・Undo は変わらない）。空・空白だけ・文字列でない色は
+  そのセルだけ捨てて診断 warn（`cell-background-invalid`。mount 時も例外にしない）。公開型 `GridCellBackgroundRow`。React の
+  ref handle にも `setCellBackgrounds`。
+- **grid 読むだけのセルへの入力の通知（イベント `edit-blocked`・`cells-skipped`・DD-069）**: 読むだけのセル（`readOnlyColumns`・
+  `readOnlyRows`・行データの `readOnlyColumns`・結合範囲・表全体の `readOnly`）で編集を止めたとき、
+  `{ type: 'edit-blocked', rowId, columnId, input, reason }` を出す（両モード共通・1 回の操作で 1 回）。`input` は `key`（印字キー・
+  日本語入力オンの打鍵）・`delete`（Delete・Backspace）・`f2`・`dblclick`・`paste`・`cut`・`clear`、`reason` は `grid-readonly`・
+  `merged`・`readonly-row`・`readonly-column`・`readonly-cell`（重なるときはこの順で先のもの）。結合範囲は左上のセルとして知らせる。
+  貼り付け・切り取り・範囲の消去で読むだけのセルを飛ばしたら `{ type: 'cells-skipped', operation, cells }`（書き込みの後に 1 回）。
+  止める動き・診断（`readonly-*-blocked`／`-skipped`・`merged-cell-*`）は従来どおり。公開型 `GridCellRef`・`GridEditBlockedInput`・
+  `GridEditBlockedReason`。React は `onEvent` でそのまま届く。
+
+### Changed
+
+- **`GridEvent` に `edit-blocked`・`cells-skipped` を追加**（union の拡張。`GridEvent` で網羅的に分岐している consumer は分岐を足す）。
+- **render の背景の描画を `background-bands` へ切り出した（DD-069）**: 列・行の背景の描き方は変わらない。
+
+### Notes
+
+- 実 IME（日本語入力オン）で読むだけのセルに打ったとき、通知が 1 打鍵で 1 回届き変換が始まらないことの確認は未実施（Manual Gate）。
+  synthetic の打鍵（`Process`）は単体テスト、印字キー・ダブルクリック・貼り付け・切り取り・範囲の消去は実ブラウザーの E2E で確認した。
+- 選択式列の候補欄を開く操作（Alt+↓・検索つきの列の 1 回のクリック）を止めたときは通知しない（印字キー・F2・ダブルクリックは通知する）。
 
 ## [0.1.0-alpha.20] - 2026-11-08
 

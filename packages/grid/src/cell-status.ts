@@ -9,8 +9,8 @@ import type { GridCellStatus, GridCellStatusColor, GridCellStatusColors } from '
 const STATUS_LEVELS = new Set(['error', 'warning']);
 const COLOR_FIELDS = new Set(['frame', 'background']);
 
-/** 列挙できる Record か（JS の consumer から来る null・文字列・配列で例外にしない・DD-060 Codex P2）。 */
-function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+/** 列挙できる Record か（JS の consumer から来る null・文字列・配列で例外にしない・DD-060 Codex P2）。DD-069 の背景色も使う。 */
+export function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 

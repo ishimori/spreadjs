@@ -22,6 +22,8 @@ import { decideNavigationIntercept } from '../selection-controller';
 import type { SelectionController } from '../selection-controller';
 import { decideUndoRedoKey } from '../undo-stack';
 import type { CellLock } from './cell-lock';
+import { blockedKeyInput } from './edit-blocked';
+import type { EditBlocked } from './edit-blocked';
 import type { DateWiring } from './date-wiring';
 import type { MountMerges } from './merges';
 import type { SelectWiring } from './select-wiring';
@@ -48,6 +50,8 @@ export interface KeyboardDeps {
   readonly selectionCtrl: Pick<SelectionController, 'getRange' | 'clear' | 'selectedRange' | 'extendByArrow'>;
   readonly cellLock: Pick<CellLock, 'hasReadOnlyCells' | 'isActiveCellReadOnly' | 'isReadOnlyRowIndex'>;
   readonly merges: Pick<MountMerges, 'any' | 'isMergedCellIndex' | 'current'>;
+  /** DD-069: 読むだけのセルで止めた編集キーの consumer への通知。 */
+  readonly editBlocked: Pick<EditBlocked, 'atActive'>;
   readonly date: Pick<
     DateWiring,
     'isAttached' | 'openOnOf' | 'isOpen' | 'open' | 'moveDays' | 'moveMonths' | 'highlightedValue' | 'confirm' | 'close'
@@ -127,14 +131,34 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
     };
   }
 
+  /**
+   * DD-069: 読むだけのセルで止めた編集キーを consumer へ知らせる。抑止したキー（F2・Delete・Backspace）は keydown で消費し、
+   * 印字キー（日本語入力オンの打鍵を含む）は素通しして textarea の readOnly で止まるので、どちらの経路かで知らせるキーを分ける
+   * （1 回の打鍵で 1 回）。変換中・Navigation でない位相では知らせない。
+   */
+  function notifyBlockedKey({ input, editor }: KeyEnv, suppressed: boolean): void {
+    if (input.isComposing || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
+      return;
+    }
+    const kind = blockedKeyInput(input);
+    if (kind !== undefined && (kind === 'key') !== suppressed) {
+      deps.editBlocked.atActive(kind);
+    }
+  }
+
   const handlers: Record<KeyHandlerName, (env: KeyEnv) => KeyOutcome> = {
     // DD-033-1: readOnly の入口抑止（最優先）。編集開始/セルクリアを起こすキー（F2/Delete/Backspace）を消費する。
     // 閲覧系（矢印・Shift+矢印・Ctrl+C・Escape・PageUp/Down）と composition/非 Navigation は素通し（純関数裁定・AC7）。
     readOnly(env) {
-      if (deps.isReadOnly() && shouldSuppressReadonlyKey(policyInput(env))) {
+      if (!deps.isReadOnly()) {
+        return 'continue';
+      }
+      if (shouldSuppressReadonlyKey(policyInput(env))) {
         diag.emit('info', 'readonly-blocked', `readOnly: 編集キー「${env.input.key}」を抑止（閲覧専用）`);
+        notifyBlockedKey(env, true);
         return 'consume';
       }
+      notifyBlockedKey(env, false); // DD-069: 印字キーは素通し（textarea の readOnly で止まる）
       return 'continue';
     },
 
@@ -154,6 +178,7 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
       ) {
         const active = editor.session.getActiveCell();
         // DD-064: 結合範囲（読むだけ）は専用の診断 code で区別する。
+        notifyBlockedKey(env, true);
         if (merges.isMergedCellIndex(active.row, active.col)) {
           diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲で編集キー「${input.key}」を抑止`);
           return 'consume';
@@ -164,6 +189,10 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
           `readOnlyColumns/readOnlyRows: 編集キー「${input.key}」を抑止`,
         );
         return 'consume';
+      }
+      // DD-069: 印字キーは素通しして textarea の読み取り専用で止まるので、ここで知らせるだけにする（表全体の readOnly は 1 で知らせ済み）。
+      if ((cellLock.hasReadOnlyCells() || merges.any()) && !deps.isReadOnly() && cellLock.isActiveCellReadOnly()) {
+        notifyBlockedKey(env, false);
       }
       return 'continue';
     },

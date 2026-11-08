@@ -12,6 +12,7 @@ export * from './data-gen';
 export * from './prng';
 export * from './presence-sim';
 export * from './base-layer';
+export * from './background-bands';
 export * from './overlay-layer';
 export * from './metrics';
 export * from './render-scheduler';

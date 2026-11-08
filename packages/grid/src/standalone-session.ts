@@ -16,6 +16,7 @@ import type { TextMetricsCache } from '@nanairo-sheet/render';
 
 import { DocumentView, cellScalarToDisplay } from './document-view';
 import type { GridBackend, GridBackendSession } from './grid-backend';
+import { cellBackgroundInvalidMessage, createCellBackgroundStore, type CellBackgroundStore } from './cell-background';
 import { cellStatusInvalidMessage, createCellStatusStore } from './cell-status';
 import type { CellStatusStore } from './cell-status';
 import type { GridCellCommitChange, GridStandaloneData, GridStandaloneRow } from './index';
@@ -70,6 +71,10 @@ export interface StandaloneSessionConfig {
    * 省略時は本セッション専用に作る（未知列は columnOrder で落とす）。
    */
   readonly cellStatusStore?: CellStatusStore;
+  /** DD-069: 色が不正で無視したセルがあれば、注入1回につき1回呼ぶ（mount-controller が診断 warn へ写す）。 */
+  readonly onCellBackgroundInvalid?: (message: string) => void;
+  /** DD-069: セルごとの背景色の置き場（`setCellBackgrounds` と共有する。省略時は本セッション専用に作る）。 */
+  readonly cellBackgroundStore?: CellBackgroundStore;
 }
 
 /** 単独モードの backend（GridBackend）＋ 再注入 API。 */
@@ -82,6 +87,8 @@ export interface StandaloneSession extends GridBackend {
   hasAnyCellReadOnly(): boolean;
   /** DD-060/062: セルの状態表示の置き場（行データの `cellStatus` をここへ書く。setData で作り直す）。 */
   readonly cellStatus: CellStatusStore;
+  /** DD-069: セルごとの背景色の置き場（行データの `cellBackgrounds` をここへ書く。setData で作り直す）。 */
+  readonly cellBackgrounds: CellBackgroundStore;
   /**
    * RC4（DD-052-4）: 行単位の部分更新（`setData` と違い、渡した行だけを置換・追加し他の行はそのまま）。
    * 既存行は `cells` に含まれる列だけを診断（値が変わらないセルは触れない＝Undo 対象に入れない）。
@@ -109,6 +116,9 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
   // DD-060: 行データのセルの状態表示。cellReadOnly と同じく setData で作り直し、setRows では明示した行だけ置き換える。
   // 文書（SheetDocument）には入れない＝値・Undo・cell-commit・コピーの対象外。DD-062: 置き場は setCellStatus と共有する。
   const cellStatus: CellStatusStore = config.cellStatusStore ?? createCellStatusStore((columnId) => knownColumns.has(columnId));
+  // DD-069: 行データのセルごとの背景色。cellStatus と同じ置き場の決まり（setData で作り直し、setRows では明示した行だけ置き換える）。
+  const cellBackgrounds: CellBackgroundStore =
+    config.cellBackgroundStore ?? createCellBackgroundStore((columnId) => knownColumns.has(columnId));
   // 適用ごとに単調増加する revision（cell 単位 lastChangedRevision の源。共同編集の server revision に相当）。
   let revision = 0;
   let doc: SheetDocument = buildDocument(config.initialData);
@@ -136,6 +146,7 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
     // RC3: 文書を丸ごと差し替えるたびに行単位 readOnly も丸ごと再構築する（古い行の指定を引きずらない）。
     cellReadOnly = new Map<string, ReadonlySet<string>>();
     cellStatus.clear();
+    cellBackgrounds.clear();
     const rows = data?.rows ?? [];
     if (rows.length === 0) {
       return next;
@@ -159,6 +170,7 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
 
     const changes: SetCellsChange[] = [];
     const invalidStatus: string[] = [];
+    const invalidBackgrounds: string[] = [];
     for (const row of uniqueRows) {
       // RC3: 行単位の読み取り専用列（未知列は静かにスキップ・cells と同じ扱い）。
       if (row.readOnlyColumns !== undefined && row.readOnlyColumns.length > 0) {
@@ -170,6 +182,10 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       // DD-060: セルの状態表示（未知列は静かにスキップ・不正な level と Record でない cellStatus はまとめて通知）。
       if (row.cellStatus !== undefined) {
         cellStatus.replaceRow(row.rowId, row.cellStatus, invalidStatus);
+      }
+      // DD-069: セルごとの背景色（cellStatus と同じく、未知列は静かにスキップ・不正な色はまとめて通知）。
+      if (row.cellBackgrounds !== undefined) {
+        cellBackgrounds.replaceRow(row.rowId, row.cellBackgrounds, invalidBackgrounds);
       }
       if (row.cells === undefined) {
         continue;
@@ -191,7 +207,15 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       next = applyOperation(next, { type: 'setCells', conflictPolicy: 'reject-overlap', changes }, { revision }).document;
     }
     reportInvalidStatus(invalidStatus);
+    reportInvalidBackgrounds(invalidBackgrounds);
     return next;
+  }
+
+  /** DD-069: 無視した不正な色を1回の通知にまとめる。 */
+  function reportInvalidBackgrounds(invalid: readonly string[]): void {
+    if (invalid.length > 0) {
+      config.onCellBackgroundInvalid?.(cellBackgroundInvalidMessage(invalid));
+    }
   }
 
   /** DD-060: 無視した不正な指定を1回の通知にまとめる。 */
@@ -271,6 +295,7 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       return cellReadOnly.size > 0;
     },
     cellStatus,
+    cellBackgrounds,
     setRows(rows: readonly GridStandaloneRow[]): StandaloneRowsResult {
       const existingRowIds = new Set<string>();
       // DD-052-4（Codex P1）: tombstone 済み（削除済み）の RowId は「未知」ではない。core の insertRows は
@@ -307,7 +332,9 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       const changes: UndoPatch[] = [];
       const setCellsChanges: SetCellsChange[] = [];
       const invalidStatus: string[] = [];
+      const invalidBackgrounds: string[] = [];
       let cellStatusUpdated = false;
+      let cellBackgroundUpdated = false;
       for (const row of rows) {
         if (deletedRowIds.has(row.rowId)) {
           continue; // 削除済み RowId の再利用（上記参照）: readOnlyColumns・cellStatus の更新もセル diff も行わない
@@ -325,6 +352,10 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
         // Record でない値（JS の consumer の null 等）は、その行の状態を保ったまま通知だけ行う（Codex P2）。
         if (row.cellStatus !== undefined && cellStatus.replaceRow(row.rowId, row.cellStatus, invalidStatus)) {
           cellStatusUpdated = true;
+        }
+        // DD-069: cellBackgrounds も明示した行だけ丸ごと置き換える（cellStatus と同じ決まり）。
+        if (row.cellBackgrounds !== undefined && cellBackgrounds.replaceRow(row.rowId, row.cellBackgrounds, invalidBackgrounds)) {
+          cellBackgroundUpdated = true;
         }
         if (row.cells === undefined) {
           continue;
@@ -352,10 +383,11 @@ export function createStandaloneSession(config: StandaloneSessionConfig): Standa
       }
       if (uniqueNewRows.length > 0 || setCellsChanges.length > 0) {
         view.markFullRebuild(); // 行の追加・値の変更をまとめて反映（部分 dirty より単純・呼び出し頻度は低い想定）
-      } else if (cellStatusUpdated) {
-        view.markCellDirty(); // DD-060: 状態だけの変更は行 Axis を作り直さず、可視セルの再描画だけを要求する
+      } else if (cellStatusUpdated || cellBackgroundUpdated) {
+        view.markCellDirty(); // DD-060・069: 状態・背景だけの変更は行 Axis を作り直さず、可視セルの再描画だけを要求する
       }
       reportInvalidStatus(invalidStatus);
+      reportInvalidBackgrounds(invalidBackgrounds);
       return { changes, insertedRowCount: uniqueNewRows.length, cellStatusUpdated };
     },
   };
