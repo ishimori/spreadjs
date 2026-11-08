@@ -115,6 +115,21 @@ describe('evaluate: 今の値を baseline に照らす', () => {
   it('version が違えば失敗', () => {
     expect(kinds(run(METRICS, { ...EXACT, version: 2 }))).toEqual(['bad-version']);
   });
+
+  it('手編集で数値を文字列・null・欠落・小数等へ壊しても、増加が比較をすり抜けない', () => {
+    for (const value of ['invalid', null, undefined, -1, 10.5, Infinity, Number.NaN]) {
+      const malformed = structuredClone(EXACT);
+      Object.assign(malformed.files['big.ts'] ?? {}, { lines: value });
+      Object.assign(malformed.functions['big.ts::f'] ?? {}, { complexity: value });
+      expect(kinds(run([metric('big.ts', 12, [['f', 7]])], malformed))).toEqual(['bad-entry', 'bad-entry']);
+    }
+  });
+
+  it('比較元の数値が不正な場合も、baseline の引き上げを通さない', () => {
+    const malformed = structuredClone(EXACT);
+    Object.assign(malformed.files['big.ts'] ?? {}, { lines: 'invalid' });
+    expect(kinds(run(METRICS, EXACT, malformed))).toEqual(['bad-entry']);
+  });
 });
 
 describe('evaluate: baseline 自体を比較元と比べる（手での書き換えも検出）', () => {
@@ -180,5 +195,12 @@ describe('tightenBaseline: 減った値を固定する（増やす・足すこ�
     const withEx = baselineOf({ 'big.ts': { lines: 12, exception } }, { 'big.ts::f': { complexity: 5 } });
     const { baseline } = tightenBaseline({ metrics: [metric('big.ts', 11, [['f', 5]])], baseline: withEx, thresholds: T });
     expect(baseline.files['big.ts']).toEqual({ lines: 11, exception });
+  });
+
+  it('数値が不正な baseline は update-baseline でも上書きせず、修正を求める', () => {
+    const malformed = structuredClone(EXACT);
+    Object.assign(malformed.files['big.ts'] ?? {}, { lines: 'invalid' });
+    const result = tightenBaseline({ metrics: [metric('big.ts', 12, [['f', 5]])], baseline: malformed, thresholds: T });
+    expect(result.refused.map((entry) => entry.id)).toEqual(['big.ts']);
   });
 });

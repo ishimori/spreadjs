@@ -9,10 +9,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { THRESHOLDS, measureSource } from './measure.mjs';
 import { evaluate, tightenBaseline } from './evaluate.mjs';
+import { readBaseBaseline } from './read-baseline.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASELINE_REL = 'scripts/size-guard/baseline.json';
@@ -40,20 +40,6 @@ function collectFiles() {
     walk(src);
   }
   return out.sort();
-}
-
-function readBaseBaseline(ref) {
-  if (ref === '' || /^0+$/.test(ref)) return null;
-  try {
-    const text = execFileSync('git', ['show', `${ref}:${BASELINE_REL}`], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 function ddExists(dd) {
@@ -87,7 +73,13 @@ if (baseline === null) {
 
 // CI の schedule・手動実行では空文字が渡る → ローカルと同じく HEAD と比べる。全桁 0（新しいブランチの push）は比較元なし。
 const baseRef = (process.env.SIZE_GUARD_BASE_REF ?? '').trim() || 'HEAD';
-const baseBaseline = readBaseBaseline(baseRef);
+let baseBaseline;
+try {
+  baseBaseline = readBaseBaseline(REPO_ROOT, baseRef, BASELINE_REL);
+} catch (error) {
+  console.error(`[size] NG — ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 const { errors, notices } = evaluate({
   metrics,
   baseline,

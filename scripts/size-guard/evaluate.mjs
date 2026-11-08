@@ -39,6 +39,29 @@ function fmt(n) {
   return Number(n).toLocaleString('en-US');
 }
 
+/** JSON の数値を壊しても、NaN との比較でガードをすり抜けさせない。 */
+function validMeasurement(entry, field) {
+  return entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+    && Number.isSafeInteger(entry[field]) && entry[field] >= 0;
+}
+
+function measurementErrors(baseline, label) {
+  const errors = [];
+  for (const section of SECTIONS) {
+    const recorded = baseline[section.name] ?? {};
+    if (typeof recorded !== 'object' || Array.isArray(recorded)) {
+      errors.push({ kind: 'bad-section', id: section.name, message: `${label}の ${section.name} はオブジェクトが必要です` });
+      continue;
+    }
+    for (const [id, entry] of Object.entries(recorded)) {
+      if (!validMeasurement(entry, section.field)) {
+        errors.push({ kind: 'bad-entry', id, message: `${id}: ${label}の ${section.field} は非負の安全な整数が必要です` });
+      }
+    }
+  }
+  return errors;
+}
+
 /** exception の不備を 1 つ返す（問題が無ければ null）。 */
 export function exceptionProblem(entry, ddExists) {
   const ex = entry?.exception;
@@ -67,6 +90,9 @@ export function evaluate({ metrics, baseline, baseBaseline, thresholds, ddExists
     errors.push({ kind: 'bad-version', id: 'baseline.json', message: `baseline.json の version が ${BASELINE_VERSION} ではありません` });
     return { errors, notices };
   }
+  errors.push(...measurementErrors(baseline, 'baseline'));
+  if (baseBaseline !== null) errors.push(...measurementErrors(baseBaseline, baseLabel));
+  if (errors.length > 0) return { errors, notices };
   const violations = collectViolations(metrics, thresholds);
   for (const section of SECTIONS) {
     const current = violations[section.name];
@@ -128,6 +154,10 @@ export function tightenBaseline({ metrics, baseline, thresholds, initial = false
       const entry = recorded[id];
       if (entry === undefined && !initial) {
         refused.push({ id, reason: `baseline に無い新しい超過（${fmt(value)}）。分けて上限以下にするか、baseline.json に exception つきで手で足してください` });
+        continue;
+      }
+      if (entry !== undefined && !validMeasurement(entry, section.field)) {
+        refused.push({ id, reason: `baseline の ${section.field} が不正です。非負の安全な整数へ修正してください` });
         continue;
       }
       if (entry !== undefined && value > entry[section.field]) {
