@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-08 | 2026-11-08 | 検討中 | 起票のみ。論点1〜3 は Human Spec Gate 待ち |
+| 2026-11-08 | 2026-11-08 | 保留 | Phase 0 の途中で中断（ユーザー指示）。論点1〜3 は推奨案で確定。Phase 1 は DD-065 の完了後 |
 
 > アプローチ: バグ修正・フルパス（画面の見た目の不具合で、consumer の画面で再現している）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない）
@@ -11,7 +11,7 @@
 ```text
 Risk Class: A（選んだセルの枠を兼ねる textarea の配置を変える。IME 状態機械・protocol・公開 API は変えない）
 Risk Triggers: textarea（配置の矩形）・selection（結合の左上を選んでいる間の見た目）
-Human Spec Gate: required（論点1〜3。起票時の推奨案あり）
+Human Spec Gate: passed（2026-11-08・ユーザー「論点は推奨案でOK」。着手の時期だけ「DD-065 の完了後」に変えた）
 Codex: high（textarea の配置だけで、状態機械は変えないため xhigh にしない）
 Manual Gate: 実 IME（Microsoft IME）で、結合から隣のセルへ矢印キーで移って日本語入力を始め、変換の窓が隣のセルの位置に出ること（クローズはブロックしない）
 External Review: なし
@@ -26,7 +26,7 @@ Evidence Level: standard
 
 - Excel では、結合したセルを選ぶと範囲全体を囲む枠が1つだけ出る（範囲の中に1セルぶんの枠は出ない）［判断。consumer のユーザーと確認］
 - 操作（選択・移動・貼り付け）は DD-064 の契約どおりで、見た目だけの問題
-- consumer の画面（hiroshima-keikaku の入力シート・alpha.19）: `C:/repo/hiroshima-keikaku/doc/DD/DD-001-16/sdk-merge-selected-inner-frame.png`。3行×1列の結合（内容の列）を選んだところで、外枠の中の1行目に枠が重なっている
+- consumer の画面（hiroshima-keikaku の入力シート・alpha.19）: `C:/repo/hiroshima-keikaku/doc/archived/DD/DD-001-16/sdk-merge-selected-inner-frame.png`（consumer の DD-001-16 はアーカイブ済み）。3行×1列の結合（内容の列）を選んだところで、外枠の中の1行目に枠が重なっている
 
 ## 原因分析
 
@@ -36,6 +36,8 @@ Evidence Level: standard
 - 選んだセル1つぶんの枠: 常駐の textarea の枠（`border: 2px solid`・背景は透明）。置き場所は `packages/grid/src/integration-editor.ts` の `refreshPlacement` が `computeEditorPlacement(transform, rowIndex, colIndex, …)`（`packages/grid/src/editor-placement.ts`）で求めた**セル1つの矩形**。結合を見ていない。高さは `applyHeight` でその矩形の高さになる
 
 このため、アクティブセルが結合の左上にある間、textarea の枠が左上のセル1つぶんの大きさで描かれる。表にフォーカスが無いと overlay の選択の塗り・外枠が出ないので、textarea の枠（1セルぶん）だけが見える［資料: alpha.19 のソースと consumer の画面。Phase 0 で確かめる］。
+
+> 2026-11-08 追記: コードを読んだ限りでは、mount 直後に範囲の枠が出ないのはフォーカスのせいではなく、overlay が描く選択が最初の onChange まで空のためと読める（ログ参照・ブラウザーでは未確認）。Phase 0 の再現で確かめてから、この段落を直す
 
 同じ層でも、他の参加者の枠（Presence）は結合を見ている（`overlay-layer.ts` の `frame.mergedRanges?.at(...)`）。自分の textarea だけが漏れている。
 
@@ -52,7 +54,8 @@ Evidence Level: standard
 ## 決定事項
 
 - 2026-11-08（ユーザー）: 見た目に違和感があるので直したい。spreadjs に DD を起票する
-- 論点1〜3 は Human Spec Gate で決める
+- 2026-11-08（ユーザー）: 論点1〜3 は推奨案で確定（「論点は推奨案でOK」）。ただし着手の時期は、論点3 の「DD-065 のその区画のコミットの後」ではなく **DD-065 の完了後**にする（「DD-065が終わるまで待ちましょう」）。DD-066 の配線を足す所（editor の生成と描き直し）を、DD-065 が `mount/` へ移している最中のため
+- 2026-11-08（ユーザー）: それまでは Phase 0 だけを進める。Phase 0 の成果物は Codex にレビューを依頼し、指摘は妥当性を判断して Claude が直す
 
 ## 受け入れ基準
 
@@ -68,10 +71,11 @@ Evidence Level: standard
 ## タスク一覧
 
 ### Phase 0: 調査・再現確認・修正前エビデンス
-- [ ] 論点1〜3 を決めて決定事項へ書く（Human Spec Gate）
+- [x] 論点1〜3 を決めて決定事項へ書く（Human Spec Gate）
 - [ ] 原因箇所を確かめ、`DD-066/cause-analysis.md` に書く（上の原因分析の裏付け。今の1セルのときに、一部だけ見えているセルの枠が見出し・固定の帯へはみ出すかも見る）
 - [ ] playground（`standalone.html` の結合の URL 指定）で再現し、📸 修正前のキャプチャ（クリック後・mount 直後・上の端が隠れたとき）を `DD-066/` に置く
 - [ ] 📝 `DD-066/bug-report.md` を書く
+- [ ] Codex レビュー（high。対象は Phase 0 の成果物＝DD 本文・cause-analysis.md・bug-report.md。2026-11-08 のユーザー指示）。指摘は妥当性を判断して直し、採否をログへ
 - [ ] 👀 ユーザーレビュー（再現と原因の合意。ゲート）
 
 ### Phase 1: コード修正・テスト
@@ -96,3 +100,10 @@ Evidence Level: standard
 ### 2026-11-08
 - DD作成（consumer 駆動。hiroshima-keikaku DD-001-16 のセッションから起票した）。consumer が alpha.19 を入力シートに取り込んで画面で確かめたところで見つけた（同 DD-001-16 のログ「表の部品（SDK）への所見」）。ユーザーの指示「見た目に違和感があるから修正したい」「DD-066 を起票してください」。実装は未着手
 - 起票時の状態: DD-065 が `mount-controller.ts` を分けている最中（7c68a45 の後に未コミットの変更と `packages/grid/src/mount/`）。このセッションは DD-065 のファイルに触れていない
+- 着手（ユーザー指示「DD-065が終わるまで待ちましょう。PH0だけやっておいて。論点は推奨案でOK。Codexにレビュー依頼してください」）。DD-065 と並行しない理由: DD-066 の修正は、editor へ結合を渡す配線を足さないと成り立たない（alpha.19 では `mount-controller.ts` の `placementConfig()`・`redraw()`・`createIntegrationEditor({...})`）。そこは DD-065 が今動かしている区画で、3f7254b で `placementConfig`・`redraw` は `mount/render.ts` へ移り、editor の生成まわりは `mount/editor-wiring.ts` を作成中（未コミット）。同じ作業ツリーで並行すると、DD-065 の編集・コミット・テストにこちらの途中の変更が混ざる
+- Phase 0 の途中の所見（コードを読んだだけ。ブラウザーでの再現はまだ）
+  - consumer のキャプチャはアーカイブ先へ移っていた（概要のパスを直した）。キャプチャでは No・科目の列も3行の結合に見え、mount 直後のアクティブセル (0,0) が結合の左上にあたる
+  - mount 直後に範囲の枠が出ないのは、フォーカスのせいではなく、overlay が描く選択（`selection` の shadow）が最初の onChange まで null のためと読める（alpha.19＝bd2985f の `mount-controller.ts` L301・L564〜576・L3741。`overlayFrame` にフォーカスの条件は無い。(0,0) が結合の左上なら、左上への寄せ〔`normalizeActiveIntoMerge`〕が動かず onChange が来ない）。原因分析の「フォーカスが無いと overlay が選択を描かない」と、論点1 で採らない案の理由（同じ前提）は、再現で確かめてから直す。直し方の結論（textarea を範囲の矩形に置く）は変わらない見込み
+- 再現の手順の判断: DD-065 が本体の作業ツリーの `packages/` を編集し続けるため、alpha.19（bd2985f）を git worktree でスクラッチパッドへ取り出し、そこで `npm ci` して Vite を起動する方針にした。`apps/playground/vite.config.ts` に alias が無く、SDK は node_modules のリンク経由で解決されるので、本体の node_modules を流用すると DD-065 の途中のコードを読んでしまう。ポートは DD-065 の E2E（5199 ほか）・dev-start（5885）と別にする
+- 中断（ユーザー指示「一旦ここで作業中止」）。後片付け: 再現用の worktree（スクラッチパッドの `dd066-repro`。中断の指示の時点で `npm ci` は最後まで終わっていた）を削除し、`git worktree prune`。npm が作ったリンクは worktree の中の `packages/` を指していて、本体の作業ツリーと DD-065 のファイルは変わっていない。Codex レビューは未実施
+- 再開の入口: Phase 0 の 2 つ目のタスク（`DD-066/cause-analysis.md`）から。上の所見を裏付け、再現とキャプチャは上の worktree の手順で取る。Codex レビューは Phase 0 の成果物が揃ってから依頼する（DD-065 の未コミットの変更がまだ同じ作業ツリーにあれば、`--uncommitted` の依頼書で対象を DD-066 のファイルに限り、コードは `git show bd2985f:<path>` で読ませる）。DD-065 の完了後は配線の置き場所が `mount/` の部品になるので、Phase 1 のタスクの「`mount-controller.ts` の行は増やさない」は再開時に読み替える
