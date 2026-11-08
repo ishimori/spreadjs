@@ -1,0 +1,326 @@
+{
+  "sourceBase": "7951231 plus DD-066 working changes",
+  "environment": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "devicePixelRatio": 1.2499999701976776,
+    "viewport": {
+      "width": 1100,
+      "height": 620
+    }
+  },
+  "mountUnfocused": {
+    "active": {
+      "row": 0,
+      "col": 0
+    },
+    "focused": false,
+    "anchor": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 0,
+        "rowEnd": 3,
+        "colStart": 0,
+        "colEnd": 1
+      }
+    ],
+    "scroll": {
+      "top": 0,
+      "left": 0
+    },
+    "textarea": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(0px)"
+    },
+    "overlayPixelAt72x35": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "errors": []
+  },
+  "clicked": {
+    "active": {
+      "row": 0,
+      "col": 0
+    },
+    "focused": true,
+    "anchor": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 0,
+        "rowEnd": 3,
+        "colStart": 0,
+        "colEnd": 1
+      }
+    ],
+    "scroll": {
+      "top": 0,
+      "left": 0
+    },
+    "textarea": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(0px)"
+    },
+    "overlayPixelAt72x35": [
+      25,
+      115,
+      230,
+      31
+    ],
+    "errors": []
+  },
+  "blurred": {
+    "active": {
+      "row": 0,
+      "col": 0
+    },
+    "focused": false,
+    "anchor": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 0,
+        "rowEnd": 3,
+        "colStart": 0,
+        "colEnd": 1
+      }
+    ],
+    "scroll": {
+      "top": 0,
+      "left": 0
+    },
+    "textarea": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(0px)"
+    },
+    "overlayPixelAt72x35": [
+      25,
+      115,
+      230,
+      31
+    ],
+    "errors": []
+  },
+  "singlePartialTop": {
+    "active": {
+      "row": 2,
+      "col": 1
+    },
+    "focused": true,
+    "anchor": {
+      "x": 132,
+      "y": 34.66666793823242,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 132,
+      "y": 34.66666793823242,
+      "width": 80,
+      "height": 22
+    },
+    "merges": [],
+    "scroll": {
+      "top": 33.33333206176758,
+      "left": 0
+    },
+    "textarea": {
+      "x": 132,
+      "y": 34.6667,
+      "width": 80,
+      "height": 22,
+      "display": "block",
+      "clipPath": ""
+    },
+    "overlayPixelAt72x35": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "errors": []
+  },
+  "mergedPartialTop": {
+    "active": {
+      "row": 2,
+      "col": 1
+    },
+    "focused": true,
+    "anchor": {
+      "x": 132,
+      "y": 34.66666793823242,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 132,
+      "y": 34.66666793823242,
+      "width": 80,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 2,
+        "rowEnd": 5,
+        "colStart": 1,
+        "colEnd": 2
+      }
+    ],
+    "scroll": {
+      "top": 33.33333206176758,
+      "left": 0
+    },
+    "textarea": {
+      "x": 132,
+      "y": 34.6667,
+      "width": 80,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(11.3333px 0px 0px)"
+    },
+    "overlayPixelAt72x35": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "errors": []
+  },
+  "anchorHidden": {
+    "active": {
+      "row": 2,
+      "col": 1
+    },
+    "focused": false,
+    "anchor": {
+      "x": 132,
+      "y": 18,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 132,
+      "y": 18,
+      "width": 80,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 2,
+        "rowEnd": 5,
+        "colStart": 1,
+        "colEnd": 2
+      }
+    ],
+    "scroll": {
+      "top": 50,
+      "left": 0
+    },
+    "textarea": {
+      "x": 132,
+      "y": 18,
+      "width": 80,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(28px 0px 0px)"
+    },
+    "overlayPixelAt72x35": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "errors": []
+  },
+  "frozenHorizontal": {
+    "active": {
+      "row": 0,
+      "col": 0
+    },
+    "focused": true,
+    "anchor": {
+      "x": 52,
+      "y": 24,
+      "width": 80,
+      "height": 22
+    },
+    "mergedRect": {
+      "x": 52,
+      "y": 24,
+      "width": 160,
+      "height": 66
+    },
+    "merges": [
+      {
+        "rowStart": 0,
+        "rowEnd": 3,
+        "colStart": 0,
+        "colEnd": 2
+      }
+    ],
+    "scroll": {
+      "top": 0,
+      "left": 120
+    },
+    "textarea": {
+      "x": 52,
+      "y": 24,
+      "width": 160,
+      "height": 66,
+      "display": "block",
+      "clipPath": "inset(0px)"
+    },
+    "overlayPixelAt72x35": [
+      25,
+      115,
+      230,
+      31
+    ],
+    "errors": []
+  }
+}
