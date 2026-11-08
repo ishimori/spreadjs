@@ -5,7 +5,7 @@
       "lines": 1046
     },
     "packages/grid/src/mount-controller.ts": {
-      "lines": 1523
+      "lines": 1131
     },
     "packages/render/src/base-layer.ts": {
       "lines": 1107
@@ -17,9 +17,6 @@
   "functions": {
     "packages/formula/src/tokenizer.ts::tokenize": {
       "complexity": 41
-    },
-    "packages/grid/src/mount-controller.ts::createGridController>attachBackendRendering>interceptKeydown": {
-      "complexity": 62
     }
   }
 }

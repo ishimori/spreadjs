@@ -7,18 +7,13 @@
 // （再mountで leak しない・AC2）④E2E 用 introspection は debugRegistry 経由（test-support）で露出する。
 
 import { displayRowOrder } from '@nanairo-sheet/core';
-import type { SetCellsOperation } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
-import type { ColumnId, OperationId } from '@nanairo-sheet/types';
-import type { ClientSession, Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
+import type { ColumnId } from '@nanairo-sheet/types';
+import type { ClientSession, Clock, IdGenerator, SessionEvent } from '@nanairo-sheet/collab';
 import { CELL_TEXT_LINE_HEIGHT, createTextMetricsCache } from '@nanairo-sheet/render';
 import type { TextMetricsCache } from '@nanairo-sheet/render';
-import { EMPTY_MERGE_INDEX, moveAcrossMerges, stepAcrossMerges } from '@nanairo-sheet/selection';
-import type { MergeMoveDirection } from '@nanairo-sheet/selection';
-import type { GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
-import { cellScalarToDisplay } from './document-view';
 import { ColumnTypeConfigError, createColumnTypeRegistry } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
 import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
@@ -29,19 +24,13 @@ import type { CompiledColumnDisplay } from './display-format';
 import { MergedCellsConfigError } from './merged-cell-spec';
 import { compileColumnGroups } from './column-groups';
 import type { CompiledColumnGroup } from './column-groups';
-import { decideSelectKey } from './select-editor';
-import { decideDateKey } from './date-editor';
-import { createIntegrationEditor } from './integration-editor';
 import { compileAppearance } from './appearance';
-import type { IntegrationEditor } from './integration-editor';
 import { createLoadMetrics } from './initial-load-metrics';
 import { toGridRemoteChange } from './remote-change';
 import { createSessionSync } from './session-sync';
 import { buildScaffold } from './dom-scaffold';
-import { createSelectionController, decideNavigationIntercept } from './selection-controller';
-import { shouldSuppressReadonlyKey } from './readonly-policy';
-import { decideRowStructureKey } from './row-operations';
-import { createUndoController, decideUndoRedoKey } from './undo-stack';
+import { createSelectionController } from './selection-controller';
+import { createUndoController } from './undo-stack';
 import { GridBootError, toCompensationConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
@@ -66,7 +55,7 @@ import type {
   GridStandaloneMountOptions,
   GridStandaloneRow,
 } from './index';
-import { COL_WIDTH, HEADER_HEIGHT, HEADER_WIDTH, ROW_HEIGHT, TICK_INTERVAL_MS, errorMessage } from './mount/constants';
+import { COL_WIDTH, HEADER_HEIGHT, ROW_HEIGHT, TICK_INTERVAL_MS, errorMessage } from './mount/constants';
 import { createDebugApi } from './mount/debug-api';
 import { createEvents, toGridEvent } from './mount/events';
 import { createCellLock } from './mount/cell-lock';
@@ -82,31 +71,13 @@ import { registerPointerInteraction } from './mount/pointer';
 import { createMountBaseLayer } from './mount/base-layer-options';
 import { createCommands } from './mount/commands';
 import { createRender } from './mount/render';
+import { createEditorWiring } from './mount/editor-wiring';
+import { createKeyboard } from './mount/keyboard';
 
 
 interface ResolvedConfig {
   documentId: string;
   columnOrder: string[];
-}
-
-/** DD-064: キー → 結合を 1 セルとして動く方向（状態機械の keyToDirection と同じ対応。Shift＋矢印は範囲の拡張なので対象外）。 */
-function mergeMoveDirectionOf(key: string, shiftKey: boolean): MergeMoveDirection | null {
-  switch (key) {
-    case 'ArrowUp':
-      return shiftKey ? null : 'up';
-    case 'ArrowDown':
-      return shiftKey ? null : 'down';
-    case 'ArrowLeft':
-      return shiftKey ? null : 'left';
-    case 'ArrowRight':
-      return shiftKey ? null : 'right';
-    case 'Enter':
-      return shiftKey ? 'up' : 'down';
-    case 'Tab':
-      return shiftKey ? 'left' : 'right';
-    default:
-      return null;
-  }
 }
 
 /** GridMountOptions を受けて grid を container へ配線し、GridInstance を返す（同期 return・boot は非同期進行）。 */
@@ -177,7 +148,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
       ? (columnId) => (standaloneColumnSet ??= new Set(Array.isArray(standaloneColumns) ? standaloneColumns : [])).has(columnId)
       : undefined,
   );
-  let editor: IntegrationEditor | undefined;
   let browserTransport: BrowserWebSocketTransport | undefined;
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
   let columnTypeRegistry: ColumnTypeRegistry | undefined;
@@ -229,11 +199,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const merges = createMerges({
     diag,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     frozenRowCount: () => frozenRowCount,
     frozenColCount: () => frozenColCount,
   });
-  const { current: currentMerges, any: hasMergedCells, isMergedCellIndex } = merges;
+  const { current: currentMerges } = merges;
 
   // DD-033-1・DD-056 H12: 読み取り専用の切り替え（setReadOnly・flush・変換の終わり待ち）は mount/readonly-switch.ts。
   // 生成時に mount オプションの readOnly を検査して診断を出す（readonly-invalid・readonly-mode）。
@@ -242,14 +212,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
     initialReadOnly: options.readOnly,
     isDestroyed: () => destroyed,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     closePopups: () => {
       select.close();
       date.close();
     },
     syncCellLock: () => cellLock.syncCellLock(),
   });
-  const { isDeferredLockIdle, scheduleEditStateCheck } = readonlySwitch;
+  const { scheduleEditStateCheck } = readonlySwitch;
   // 読み取り専用の判定（列・行・セル・結合範囲）と、常駐 textarea のロックは mount/cell-lock.ts。
   const cellLock = createCellLock({
     diag,
@@ -258,16 +228,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     merges,
     backend: () => sync,
     standalone: () => standalone,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     registry: () => columnTypeRegistry,
   });
-  const {
-    isReadOnlyRowIndex,
-    hasReadOnlyCells,
-    isActiveCellReadOnly,
-    validateReadOnlyRowsOnce,
-    syncCellLock,
-  } = cellLock;
+  const { validateReadOnlyRowsOnce, syncCellLock } = cellLock;
   // 送信の関所・Undo の記録・確定前の検証・行操作・再ベース（区画⑦の前半・mount/edit-submit.ts）。
   const editSubmit = createEditSubmit({
     diag,
@@ -281,7 +245,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     emit,
     isDestroyed: () => destroyed,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     isFirstDataDrawn: () => render.isFirstDataDrawn(),
   });
   const { submitSetCells, notifyRowReject, performInsertRows, performDeleteRows } = editSubmit;
@@ -296,7 +260,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     editSubmit,
     merges,
     emit,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     isReadOnly: () => readonlySwitch.isReadOnly(),
     closePopups: () => {
       select.close();
@@ -311,7 +275,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     stringColumnStrings,
     cellLock,
     merges,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     registry: () => columnTypeRegistry,
     appearance: () => appearance,
     isReadOnly: () => readonlySwitch.isReadOnly(),
@@ -328,7 +292,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     stringColumnStrings,
     cellLock,
     merges,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     registry: () => columnTypeRegistry,
     isReadOnly: () => readonlySwitch.isReadOnly(),
     closeSelect: () => select.close(),
@@ -372,7 +336,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     selectionCtrl,
     merges,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     isDestroyed: () => destroyed,
     createBaseLayer: (backend) =>
       createMountBaseLayer(backend, {
@@ -414,14 +378,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
     applyRebaseState: (state) => editSubmit.applyRebaseState(state),
     drainPendingCommands: () => commands.drain(),
   });
-  const { currentTransform, placementConfig, visibleArea, ensureCellVisible, ensureActiveCellVisible, syncSpacer, syncLayout } = render;
+  const { currentTransform, syncSpacer, syncLayout } = render;
   // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。
   const commands = createCommands({
     diag,
     selectionCtrl,
     isDestroyed: () => destroyed,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     isFirstDataDrawn: () => render.isFirstDataDrawn(),
     viewportWidth: () => render.viewportSize().width,
     currentMerges,
@@ -431,6 +395,54 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     flushStructural: (view) => render.flushStructural(view),
     ensureCellVisible: (cell, axes) => render.ensureCellVisible(cell, axes),
+  });
+  // キー入力の裁定（区画①・mount/keyboard.ts）。優先順位は KEY_HANDLER_ORDER の 1 か所。
+  const keyboard = createKeyboard({
+    diag,
+    rowOperationsEnabled,
+    selectionCtrl,
+    cellLock,
+    merges,
+    date,
+    select,
+    editor: () => editorWiring.get(),
+    backend: () => sync,
+    isReadOnly: () => readonlySwitch.isReadOnly(),
+    performUndo: () => editCommands.performUndo(),
+    performRedo: () => editCommands.performRedo(),
+    performInsertRows,
+    performDeleteRows,
+    performRangeClear: () => editCommands.performRangeClear(),
+    ensureCellVisible: (cell) => render.ensureCellVisible(cell),
+  });
+  // editor（常駐 textarea＋IME）の結線（区画①・mount/editor-wiring.ts）。editor の状態の持ち主。
+  const editorWiring = createEditorWiring({
+    host: stage,
+    diag,
+    isStandalone,
+    headerHeight,
+    wrapColumnStrings,
+    stringColumnStrings,
+    selectionCtrl,
+    keyboard,
+    editCommands,
+    select,
+    date,
+    events,
+    readonlySwitch,
+    cellLock,
+    merges,
+    emit,
+    registry: () => columnTypeRegistry,
+    appearance: () => appearance,
+    collabSession: () => collabSession,
+    hasPendingCommands: () => commands.hasPending(),
+    submitSetCells,
+    ensureActiveCellVisible: () => render.ensureActiveCellVisible(),
+    currentTransform: () => render.currentTransform(),
+    placementConfig: () => render.placementConfig(),
+    visibleArea: () => render.visibleArea(),
+    setActiveShadow: (cell) => render.setActiveShadow(cell),
   });
 
   // ---- ポインター（区画④・mount/pointer.ts・hover.ts・link-click.ts）----
@@ -446,7 +458,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     diag,
     emit,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     registry: () => columnTypeRegistry,
   });
 
@@ -497,7 +509,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     link,
     emit,
     backend: () => sync,
-    editor: () => editor,
+    editor: () => editorWiring.get(),
     registry: () => columnTypeRegistry,
     appearance: () => appearance,
     display: () => compiledDisplay,
@@ -733,7 +745,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       },
       onOperations: () => {
         metrics.mark('firstSync');
-        editor?.session.noteServerUpdate();
+        editorWiring.get()?.session.noteServerUpdate();
       },
       // DD-020-3: 自分の SetCells op が committed へ確定した（own echo）→ Undo の ownedRevision を正確な revision で更新。
       onOwnSetCellsCommitted: (operationId, revision) => {
@@ -769,417 +781,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
-    // 描画層（base-layer）を backend へ結線する（区画⑨）。
+    // 結線の順番（DOM を作る順も従来どおり）: 描画層 → 編集の命令のポート → 候補欄 → 日付カレンダー → editor。
     render.attach(backend);
-
-    // ---- 編集の命令（区画⑦・mount/edit-commands.ts）を backend へ結線する ----
     editCommands.attach(backend);
-    const docPort = editCommands.documentPort();
-    const { performRangeClear, performCopy, performCut, performPaste, performUndo, performRedo } = editCommands;
-
-    // ---- DD-027-1 選択式入力列（列タイプメタ・ドロップダウン・editor 経路 validator）----
-    /**
-     * editor 経路（IME/textarea 確定）の commit を validator でラップする（決定②・📐）。非候補（allowFreeText:false
-     * 選択式列）は **未 submit**（文書無変更）＋ `value-not-allowed` 通知（共同編集のみ・standalone は診断のみ）＋
-     * 診断（拒否値を含む＝サイレント失敗なし・AC4）。paste/範囲クリア/リモートは submitSetCells を直接呼ぶため
-     * 本ラップを通らない＝保持される（AC6）。ドロップダウン確定は候補一致が保証されるため素通しする。
-     */
-    const editorSubmit = (op: SetCellsOperation): OperationId | void => {
-      const registry = columnTypeRegistry;
-      if (registry !== undefined) {
-        for (const change of op.changes) {
-          const columnId = String(change.columnId);
-          const text = cellScalarToDisplay(change.value);
-          if (!registry.validateEditorCommit(columnId, text).allowed) {
-            // 既存の実行前拒否経路へ集約する（Fable 5 P3-8）: 診断＋公開 rejected（共同編集のみ・standalone は診断のみ）。
-            editCommands.notifyPreExecutionReject(
-              'value-not-allowed',
-              'value-not-allowed',
-              `選択式列 ${columnId} に非候補値「${text}」が入力されました（未 submit・文書無変更・DD-027-1）`,
-            );
-            return; // 未 submit（op を捨てる・ドラフト復元はしない＝📐）
-          }
-        }
-      }
-      // DD-056 H12: 変換の終わり待ちの間は「切り替えを頼まれた時点の編集」の確定だけを送信の関所で通す（1 回で消費する）。
-      return readonlySwitch.runEditorCommit(() => submitSetCells(op, 'edit'));
-    };
-
-    // 選択式の候補欄 → 日付カレンダーの順に backend へ結線する（どちらも該当する列があるときだけ DOM を作る）。
     select.attach(backend);
     date.attach(backend);
-
-    const editorLayout: GridLayout = {
-      get rowCount() {
-        return backend.view.rowAxis.count();
-      },
-      get columnCount() {
-        return backend.view.colAxis.count();
-      },
-      rowHeaderWidth: HEADER_WIDTH,
-      columnHeaderHeight: headerHeight,
-      cellWidth: COL_WIDTH,
-      cellHeight: ROW_HEIGHT,
-    };
-    editor = createIntegrationEditor({
-      fontForColumn: appearance.fontFor,
-      host: stage,
-      document: docPort,
-      submit: editorSubmit,
-      // DD-033-1: 表示専用モードは常駐 textarea へ readOnly 属性＋編集 DOM イベントの dispatch 抑止（分岐追加のみ）。
-      readOnly: readonlySwitch.isReadOnly(),
-      // DD-035 R4: アクティブセルが readOnly 列にある間、編集 DOM イベントの dispatch を論理遮断する（物理遮断＝readOnly 属性は
-      // onChange の syncColumnLock が同期）。DD-035 R6（Codex P1）: 命令 API が初回描画前で保留中の間も入力を遮断する
-      // （保留の適用先が確定する前の打鍵を旧セルへ確定させない）。readOnlyColumns 未指定かつ保留なしなら常に false。
-      // DD-056 H12（Codex 実装レビュー P1）: 変換の終わり待ちの間、切り替えを頼まれた時点の編集が終わったら新しい編集を始めさせない
-      // （textarea の readOnly 属性は次の判定で付く。それまでの論理遮断）。
-      isInputLocked: () => commands.hasPending() || isActiveCellReadOnly() || isDeferredLockIdle(),
-      // DD-056 H12（Codex 実装レビュー P2）: 変換の終わり待ちの間は textarea の既定の cut も止める（readOnly 属性をまだ付けられないため）。
-      isNativeEditBlocked: () => readonlySwitch.isDeferred(),
-      // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
-      isWrapColumn: (columnId) => wrapColumnStrings.has(columnId),
-      // RC12（DD-052-2）: 文字列として保つ列は編集確定時の型変換をスキップする。
-      isStringColumn: (columnId) => stringColumnStrings.has(columnId),
-      // DD-055（RC17）: wrap 列の編集欄を可視域（スクロールバーを除く）の下端で縮める。
-      visibleArea,
-      // DD-027-1（Fable 5 P3-9）: grid 外クリック等で常駐 textarea が blur したら選択式ドロップダウンを閉じる。
-      // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
-      // DD-035 R2: 日付カレンダーも同様に閉じる。
-      onBlur: (target) => {
-        if (!select.contains(target)) select.close();
-        date.close();
-      },
-      layout: editorLayout,
-      onPresenceChange: (update: PresenceUpdate) => {
-        backend.session.sendPresence(update);
-        // DD-049 H5: 自分のエントリは送った presence の activeCell を映す（単独モードは collabSession 無し＝一覧は常に空）。
-        // 発火は editor の処理が終わった後（マイクロタスク）に遅らせる（理由は schedulePresenceRefresh を参照）。
-        events.noteSelfActiveCell(update.activeCell);
-        if (collabSession !== undefined) {
-          events.schedulePresenceRefresh();
-        }
-      },
-      // K4（DD-021-2・Fable P2）: 削除行への commit で draft を退避したことを利用側へ可視化する。
-      // 公開語彙は既存 row-unavailable（=target-row-deleted の写像・error-codes.md）を使い、未 submit ゆえ
-      // operationId は空文字（DD-020 実行前拒否と同規約）。standalone は診断のみ（DD-024 契約＝実行前拒否と同型）。
-      onDivert: (draft) => {
-        diag.emit('warn', 'draft-diverted', `commit 対象行が削除済みのため draft を退避: row=${draft.rowId} col=${draft.columnId}`);
-        if (!isStandalone) {
-          emit({
-            type: 'rejected',
-            pendingCount: backend.session.pendingCount,
-            conflict: { operationId: '', reason: 'rejected', code: 'row-unavailable' },
-          });
-        }
-      },
-      onChange: () => {
-        if (editor === undefined) {
-          return;
-        }
-        // DD-064: 移動の結果（編集中の Enter・Tab・矢印での確定と移動を含む）が結合範囲の中なら左上へ寄せる。寄せた先の
-        // onChange（入れ子）が以下を済ませるので、ここでは何もしない。
-        if (merges.normalizeActiveCell()) {
-          return;
-        }
-        syncCellLock(); // DD-035 R4 / DD-036 C3: activeCell の列・行に応じて textarea の readOnly 属性を同期（非 composing 時のみ）
-        ensureActiveCellVisible(); // アクティブセルを可視域へ（scrollTop/Left を同期更新しうる）
-        // DD-020-1 AC4: activeCell 移動・編集開始で明示レンジを単一選択へ戻す（不変条件は controller が判定）。
-        selectionCtrl.syncWithEditor(editor.session.getActiveCell(), editor.session.getPhase());
-        render.setActiveShadow(editor.session.getActiveCell());
-        const transform = currentTransform(); // 上の scroll 反映後の transform で配置する
-        if (transform !== undefined) {
-          editor.refreshPlacement(transform, placementConfig());
-        }
-        backend.view.markViewportDirty();
-        // DD-056 H12: 変換の終わり待ちの切り替え・flush の待ち合わせを、編集の変化を受けて macrotask で判定し直す（無ければ無コスト）。
-        scheduleEditStateCheck();
-      },
-      // keydown 前段裁定（DD-020-1 案X）: Navigation 位相の Shift+矢印をレンジ拡張として消費する。
-      // composition 中・編集中は decideNavigationIntercept が必ず 'none' を返し従来経路のまま（CG-1 資産無変更）。
-      interceptKeydown: (input) => {
-        const current = editor;
-        const backendNow = sync;
-        if (current === undefined || backendNow === undefined) {
-          return false;
-        }
-        // DD-033-1: readOnly の入口抑止（最優先）。編集開始/セルクリアを起こすキー（F2/Delete/Backspace）を消費する。
-        // 閲覧系（矢印・Shift+矢印・Ctrl+C・Escape・PageUp/Down）と composition/非 Navigation は素通し（純関数裁定・AC7）。
-        if (
-          readonlySwitch.isReadOnly() &&
-          shouldSuppressReadonlyKey({
-            key: input.key,
-            ctrlKey: input.ctrlKey,
-            metaKey: input.metaKey,
-            altKey: input.altKey,
-            shiftKey: input.shiftKey,
-            eventComposing: input.isComposing,
-            sessionComposing: current.session.isComposing(),
-            phase: current.session.getPhase(),
-          })
-        ) {
-          diag.emit('info', 'readonly-blocked', `readOnly: 編集キー「${input.key}」を抑止（閲覧専用）`);
-          return true;
-        }
-        // DD-035 R4: readOnly 列の入口抑止（グリッド readOnly と同じ裁定・アクティブセルの列条件付き）。印字文字は
-        // keydown では編集を起こさない（BeginEdit は input 経路）ため pass し、integration-editor の列ロック
-        // （readOnly 属性＋dispatch 抑止）が編集開始を遮断する。
-        // Codex P2: 明示レンジがあるときの Delete は範囲クリア（readOnly 列だけスキップして他列へ適用）へ流す。
-        // アンカーが readOnly 列でも可編集列を含むレンジのクリアは契約どおり成立させる。
-        const rangeDelete = input.key === 'Delete' && selectionCtrl.getRange() !== null;
-        if (
-          (hasReadOnlyCells() || hasMergedCells()) &&
-          !rangeDelete &&
-          isActiveCellReadOnly() &&
-          shouldSuppressReadonlyKey({
-            key: input.key,
-            ctrlKey: input.ctrlKey,
-            metaKey: input.metaKey,
-            altKey: input.altKey,
-            shiftKey: input.shiftKey,
-            eventComposing: input.isComposing,
-            sessionComposing: current.session.isComposing(),
-            phase: current.session.getPhase(),
-          })
-        ) {
-          const active = current.session.getActiveCell();
-          // DD-064: 結合範囲（読むだけ）は専用の診断 code で区別する。
-          if (isMergedCellIndex(active.row, active.col)) {
-            diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲で編集キー「${input.key}」を抑止`);
-            return true;
-          }
-          diag.emit(
-            'info',
-            isReadOnlyRowIndex(active.row) ? 'readonly-row-blocked' : 'readonly-column-blocked',
-            `readOnlyColumns/readOnlyRows: 編集キー「${input.key}」を抑止`,
-          );
-          return true;
-        }
-        // DD-035 R2: 日付カレンダーの前段裁定。open 中は矢印/PageUp/Down/Enter/Esc/Tab を消費し他キーを握り潰す。
-        // 閉じている日付セルでは Alt+↓（常時）・F2/Enter（openOn='dblclick'）で開く。印字文字は 'none'＝手入力併存。
-        // composition 中・非 Navigation では decideDateKey が必ず 'none'（I-3）。readOnly/列 readOnly は openDate 側で抑止。
-        if (date.isAttached()) {
-          const active = current.session.getActiveCell();
-          const openOn = date.openOnOf(active.col);
-          const decision = decideDateKey({
-            key: input.key,
-            ctrlKey: input.ctrlKey,
-            metaKey: input.metaKey,
-            altKey: input.altKey,
-            shiftKey: input.shiftKey,
-            eventComposing: input.isComposing,
-            sessionComposing: current.session.isComposing(),
-            phase: current.session.getPhase(),
-            isOpen: date.isOpen(),
-            isDateCell: openOn !== undefined && !readonlySwitch.isReadOnly() && !isActiveCellReadOnly(),
-            openOn: openOn ?? 'dblclick',
-          });
-          switch (decision) {
-            case 'open':
-              date.open();
-              return true;
-            case 'move-left':
-              date.moveDays(-1);
-              return true;
-            case 'move-right':
-              date.moveDays(1);
-              return true;
-            case 'move-up':
-              date.moveDays(-7);
-              return true;
-            case 'move-down':
-              date.moveDays(7);
-              return true;
-            case 'prev-month':
-              date.moveMonths(-1);
-              return true;
-            case 'next-month':
-              date.moveMonths(1);
-              return true;
-            case 'confirm': {
-              const value = date.highlightedValue();
-              if (value === null) {
-                date.close();
-              } else {
-                date.confirm(value);
-              }
-              return true;
-            }
-            case 'cancel':
-              date.close();
-              return true;
-            case 'consume':
-              return true;
-            case 'none':
-              break;
-          }
-        }
-        // DD-027-1/057: 選択式ドロップダウンの前段裁定（最優先）。厳格モードは文字/Backspace で候補を選ぶ。
-        // 閉じている選択式セルでは編集開始キー（F2/Enter/Alt+↓）でドロップダウンを開く。印字文字も開くのは
-        // 厳格モード（allowFreeText:false）だけで、自由入力併存列では textarea 編集へ流す（DD-037 決定①）。
-        // composition 中・非 Navigation では decideSelectKey が必ず 'none'＝IME 経路無改変（I-3）。
-        if (select.isAttached()) {
-          const active = current.session.getActiveCell();
-          const decision = decideSelectKey({
-            key: input.key,
-            ctrlKey: input.ctrlKey,
-            metaKey: input.metaKey,
-            altKey: input.altKey,
-            shiftKey: input.shiftKey,
-            eventComposing: input.isComposing,
-            sessionComposing: current.session.isComposing(),
-            phase: current.session.getPhase(),
-            isOpen: select.isOpen(),
-            // DD-035 R4: readOnly 列の選択式セルは「非選択式」として裁定する（Enter=下移動等の閲覧系キーを奪わない。
-            // 編集開始キーは readonly 裁定/列ロックが遮断済み）。
-            isSelectCell: select.isSelectColumnIndex(active.col) && !isActiveCellReadOnly(),
-            // DD-037 決定①: 自由入力併存列では印字文字を奪わない（textarea 編集を開始させる）。
-            allowsFreeText: select.allowsFreeText(active.col),
-          });
-          switch (decision) {
-            case 'open':
-              select.open(input.key.length === 1 ? input.key : undefined);
-              return true;
-            case 'type':
-              select.typeCharacter(input.key);
-              backendNow.view.markViewportDirty();
-              return true;
-            case 'backspace':
-              select.backspace();
-              backendNow.view.markViewportDirty();
-              return true;
-            case 'move-down':
-              select.highlightNext();
-              backendNow.view.markViewportDirty();
-              return true;
-            case 'move-up':
-              select.highlightPrev();
-              backendNow.view.markViewportDirty();
-              return true;
-            case 'confirm':
-              select.confirm();
-              return true;
-            case 'cancel':
-              select.close();
-              return true;
-            case 'consume':
-              return true;
-            case 'none':
-              break;
-          }
-        }
-        // DD-020-3: Ctrl/Cmd+Z=Undo・Ctrl+Y/Ctrl+Shift+Z=Redo（Navigation 位相かつ非 composing のみ・親 (b)）。
-        // Editing/Composing 中は decideUndoRedoKey が 'none' を返しブラウザ既定（textarea 内テキスト undo）へ委譲する（I-3）。
-        const undoRedo = decideUndoRedoKey({
-          key: input.key,
-          ctrlKey: input.ctrlKey,
-          metaKey: input.metaKey,
-          shiftKey: input.shiftKey,
-          altKey: input.altKey,
-          eventComposing: input.isComposing,
-          sessionComposing: current.session.isComposing(),
-          phase: current.session.getPhase(),
-        });
-        if (undoRedo === 'undo') {
-          performUndo();
-          return true; // Navigation の Ctrl+Z は消費（空でも textarea 既定 undo にしない）
-        }
-        if (undoRedo === 'redo') {
-          performRedo();
-          return true;
-        }
-        // DD-021-1: Ctrl+Shift+'+'=アクティブ行の上へ挿入・Ctrl+'-'=選択行削除（Navigation 位相かつ非 composing のみ・親⑦）。
-        // Editing/Composing 中は decideRowStructureKey が 'none' を返しブラウザ既定へ委譲する（IME 不変条件・I-3）。
-        const rowKey = decideRowStructureKey({
-          key: input.key,
-          ctrlKey: input.ctrlKey,
-          metaKey: input.metaKey,
-          shiftKey: input.shiftKey,
-          altKey: input.altKey,
-          eventComposing: input.isComposing,
-          sessionComposing: current.session.isComposing(),
-          phase: current.session.getPhase(),
-          rowOperationsEnabled,
-        });
-        if (rowKey === 'insert') {
-          // アクティブ行の**上**へ挿入 → afterRowId=直上行（先頭行なら null）。消費（ブラウザのズームを止める）。
-          const active = current.session.getActiveCell();
-          const prevId = active.row <= 0 ? undefined : backendNow.view.rowIdAt(active.row - 1);
-          performInsertRows(prevId === undefined ? null : String(prevId), 1);
-          return true;
-        }
-        if (rowKey === 'delete') {
-          // 選択範囲（無ければ activeCell）の行帯 [rowStart,rowEnd) を RowId 列へ解決して削除。消費。
-          const range = selectionCtrl.selectedRange(current.session.getActiveCell());
-          const rowIds: string[] = [];
-          for (let r = range.rowStart; r < range.rowEnd; r += 1) {
-            const id = backendNow.view.rowIdAt(r);
-            if (id !== undefined) {
-              rowIds.push(String(id));
-            }
-          }
-          performDeleteRows(rowIds);
-          return true;
-        }
-        // DD-064: 結合を 1 つのセルとして動く（Navigation の矢印・Tab・Enter。Shift＋矢印は下の範囲の拡張）。状態機械が動かす先
-        // （1 セル先）と違うときだけ消費して、その先へ移す（結合の左上から下・右は範囲の外へ・結合の中へ入ったら左上）。
-        // 同じなら状態機械へ流す（結合が無ければ常に同じ＝従来経路のまま）。変換中・編集中は対象外（I-3・編集中の確定と
-        // 移動の先は onChange の正規化が左上へ寄せる）。
-        if (hasMergedCells() && !input.isComposing && !current.session.isComposing() && current.session.getPhase() === 'Navigation') {
-          const direction = mergeMoveDirectionOf(input.key, input.shiftKey);
-          if (direction !== null) {
-            const active = current.session.getActiveCell();
-            const bounds = { rowCount: backendNow.view.rowAxis.count(), colCount: backendNow.view.colAxis.count() };
-            const target = moveAcrossMerges(currentMerges(), active, direction, bounds);
-            const plain = stepAcrossMerges(EMPTY_MERGE_INDEX, active, direction, bounds);
-            if (target.row !== plain.row || target.col !== plain.col) {
-              // 動くときだけ明示レンジを解く（グリッドの端で結合の外へ出られないときは、端での通常の矢印と同じく何も変えない）。
-              if (target.row !== active.row || target.col !== active.col) {
-                selectionCtrl.clear();
-                current.pointerdownCell(target);
-              }
-              backendNow.view.markViewportDirty();
-              return true;
-            }
-          }
-        }
-        const decision = decideNavigationIntercept({
-          key: input.key,
-          shiftKey: input.shiftKey,
-          eventComposing: input.isComposing,
-          sessionComposing: current.session.isComposing(),
-          phase: current.session.getPhase(),
-          hasRange: selectionCtrl.getRange() !== null,
-        });
-        switch (decision.action) {
-          case 'none':
-            return false;
-          case 'clear-range':
-            // Escape: レンジ解除のみ。キー自体は状態機械へも流す（Navigation の Escape は no-op＝挙動保存）。
-            selectionCtrl.clear();
-            backendNow.view.markViewportDirty();
-            return false;
-          case 'delete-range':
-            // Delete（レンジあり）: 範囲クリア＝原子 SetCells（AC5/AC6）。消費して状態機械の単一セル
-            // Delete（S-A4）にしない。レンジ無しの Delete は 'none' で従来経路のまま。
-            performRangeClear();
-            return true;
-          case 'extend': {
-            const focus = selectionCtrl.extendByArrow(current.session.getActiveCell(), decision.direction, {
-              rowCount: backendNow.view.rowAxis.count(),
-              colCount: backendNow.view.colAxis.count(),
-            });
-            ensureCellVisible(focus); // focus 端を可視域へ（Excel 準拠の scroll-follow）
-            backendNow.view.markViewportDirty();
-            return true; // 消費（状態機械の Move にしない）
-          }
-        }
-      },
-      // DD-020-2 clipboard 裁定（Navigation 位相のみ）。composition/編集中は各 perform が null/false を返す。
-      onClipboardCopy: performCopy,
-      onClipboardCut: performCut,
-      onClipboardPaste: performPaste,
-    });
-
+    editorWiring.attach(backend);
     syncCellLock(); // DD-035 R4 / DD-036 C3: 初期 activeCell（0,0）のロックを同期
     syncLayout();
     backend.start();
@@ -1266,6 +873,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
 
   /** setData 直後に activeCell が新文書の範囲外なら範囲内へ寄せる（applyStandaloneData の上記コメント参照）。 */
   function clampActiveCellToDocument(backend: StandaloneSession): void {
+    const editor = editorWiring.get();
     if (editor === undefined || editor.session.isComposing()) {
       return;
     }
@@ -1457,7 +1065,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       window.clearInterval(intervalId);
       abort.abort(); // scroller listeners を解放
       render.disconnectLayout();
-      editor?.destroy(); // 常駐 textarea/badge・editor listeners を解放
+      editorWiring.dispose(); // 常駐 textarea/badge・editor listeners を解放
       select.dispose(); // DD-027-1: listbox・▼ インジケーターを除去
       date.dispose(); // DD-035 R2: ポップオーバー・📅 インジケーターを除去
       browserTransport?.close(); // WS を閉じ再接続タイマーを解放
@@ -1478,7 +1086,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       selectionCtrl,
       undoCtrl,
       backend: () => sync,
-      editor: () => editor,
+      editor: () => editorWiring.get(),
       lastSessionEventType: () => lastSessionEvent?.type ?? '',
       isFirstDataDrawn: () => render.isFirstDataDrawn(),
       isReadOnly: () => readonlySwitch.isReadOnly(),
