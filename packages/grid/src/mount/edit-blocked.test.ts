@@ -3,7 +3,7 @@
 // 検証: キーから通知の操作への写し方・止めた理由の優先順位・結合範囲は左上のセルとして知らせる・読むだけでないセルや
 // 行・列の ID が引けないときは出さない・cells-skipped は 0 件なら出さず、渡した配列を写して出す。
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMergeIndex, EMPTY_MERGE_INDEX } from '@nanairo-sheet/selection';
 import type { MergeIndex } from '@nanairo-sheet/selection';
 
@@ -21,6 +21,9 @@ interface Fixture {
   active?: { row: number; col: number };
   backend?: boolean;
   editor?: boolean;
+  deferred?: Array<() => void>;
+  composing?: boolean;
+  phase?: string;
 }
 
 function setup(fixture: Fixture = {}) {
@@ -33,7 +36,11 @@ function setup(fixture: Fixture = {}) {
     },
   } as unknown as GridBackend;
   const editor = {
-    session: { getActiveCell: () => fixture.active ?? { row: 1, col: 1 } },
+    session: {
+      getActiveCell: () => fixture.active ?? { row: 1, col: 1 },
+      isComposing: () => fixture.composing === true,
+      getPhase: () => fixture.phase ?? 'Navigation',
+    },
   } as unknown as IntegrationEditor;
   const blocked = createEditBlocked({
     emit: (event) => events.push(event),
@@ -49,6 +56,7 @@ function setup(fixture: Fixture = {}) {
       current: () => merges,
     },
     isReadOnly: () => fixture.readOnly === true,
+    ...(fixture.deferred !== undefined ? { defer: (run: () => void) => fixture.deferred!.push(run) } : {}),
   });
   return { blocked, events };
 }
@@ -138,6 +146,70 @@ describe('DD-069: edit-blocked の理由と位置', () => {
     const noEditor = setup({ readOnly: true, editor: false });
     noEditor.blocked.atActive('key');
     expect(noEditor.events).toEqual([]);
+  });
+
+  it('選択中のセルへの通知は、変換中・Navigation でない位相では出さない（変換中の setReadOnly(true) の後の貼り付け・Codex P2）', () => {
+    for (const fixture of [{ composing: true }, { phase: 'Composing' }, { phase: 'Editing' }]) {
+      const deferred: Array<() => void> = [];
+      const { blocked, events } = setup({ readOnly: true, deferred, ...fixture });
+      blocked.atActive('paste');
+      blocked.atActive('cut');
+      blocked.atActiveAfterKeystroke('key');
+      expect(deferred).toEqual([]);
+      expect(events).toEqual([]);
+    }
+  });
+});
+
+describe('DD-069: 素通しする印字キーの通知（打鍵の処理の後に出す）', () => {
+  it('位置と理由は呼んだ時点で決め、出すのは後で回したとき（その間に選択が動いても元のセル）', () => {
+    const deferred: Array<() => void> = [];
+    const fixture: Fixture = { columns: [2], active: { row: 3, col: 2 }, deferred };
+    const { blocked, events } = setup(fixture);
+    blocked.atActiveAfterKeystroke('key');
+    expect(events).toEqual([]);
+    fixture.active = { row: 3, col: 0 }; // 購読者が setActiveCell で入力できるセルへ動かした
+    expect(deferred).toHaveLength(1);
+    deferred[0]!();
+    expect(events).toEqual([{ type: 'edit-blocked', rowId: 'r3', columnId: 'c2', input: 'key', reason: 'readonly-column' }]);
+  });
+
+  it('読むだけでないセルでは後で回す処理も積まない。既定は setTimeout 0 で出す', () => {
+    const deferred: Array<() => void> = [];
+    setup({ deferred }).blocked.atActiveAfterKeystroke('key');
+    expect(deferred).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      const { blocked, events } = setup({ readOnly: true });
+      blocked.atActiveAfterKeystroke('key');
+      expect(events).toEqual([]);
+      vi.runAllTimers();
+      expect(events).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('DD-069: 控えの通知の順', () => {
+  const kinds = (events: GridEvent[]) => events.map((e) => (e.type === 'edit-blocked' ? e.input : e.type));
+
+  it('控えは、その場で出す通知の前と flushPending で届いた順に出し、二度は出さない', () => {
+    const deferred: Array<() => void> = [];
+    const { blocked, events } = setup({ readOnly: true, deferred });
+    blocked.atActiveAfterKeystroke('key');
+    blocked.atActiveAfterKeystroke('key');
+    expect(deferred).toHaveLength(1); // 控えが空から積み始めたときだけタイマーを積む
+    blocked.atActive('f2');
+    expect(kinds(events)).toEqual(['key', 'key', 'f2']);
+    deferred[0]!(); // 遅れて来たタイマーは何も出さない
+    expect(kinds(events)).toEqual(['key', 'key', 'f2']);
+    blocked.atActiveAfterKeystroke('key');
+    blocked.flushPending();
+    blocked.atCell(1, 1, 'dblclick');
+    blocked.atActiveAfterKeystroke('key');
+    blocked.skipped('paste', [{ rowId: 'r1', columnId: 'c1' }]);
+    expect(kinds(events)).toEqual(['key', 'key', 'f2', 'key', 'dblclick', 'key', 'cells-skipped']);
   });
 });
 

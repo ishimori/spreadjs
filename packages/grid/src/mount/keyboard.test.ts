@@ -22,6 +22,8 @@ interface Env {
   selectAttached: boolean;
   selectOpen: boolean;
   selectColumn: boolean;
+  /** DD-069: 通知を受けた購読者がその場で行う操作（例: setReadOnly(false)）。 */
+  onBlocked?: (env: Env) => void;
 }
 
 function setup(overrides: Partial<Env> = {}) {
@@ -42,6 +44,8 @@ function setup(overrides: Partial<Env> = {}) {
   const calls: string[] = [];
   const diagnostics: GridDiagnostic[] = [];
   const blocked: string[] = [];
+  const deferred: string[] = []; // 打鍵の処理の後に出す通知（素通しする印字キー）
+  const flushes = { count: 0 }; // 控えの通知を出した回数（キーの処理の始め）
   const editor = {
     session: {
       isComposing: () => env.composing,
@@ -80,7 +84,20 @@ function setup(overrides: Partial<Env> = {}) {
       isReadOnlyRowIndex: () => false,
     },
     merges: { any: () => false, isMergedCellIndex: () => false, current: () => EMPTY_MERGE_INDEX },
-    editBlocked: { atActive: (input) => blocked.push(input) },
+    editBlocked: {
+      atActive: (input) => {
+        blocked.push(input);
+        env.onBlocked?.(env);
+      },
+      atActiveAfterKeystroke: (input) => {
+        blocked.push(input);
+        deferred.push(input);
+        env.onBlocked?.(env); // 本物は打鍵の後に出すが、その場で出しても二度目が無いことを確かめる
+      },
+      flushPending: () => {
+        flushes.count += 1;
+      },
+    },
     date: {
       isAttached: () => env.dateAttached,
       openOnOf: () => (env.dateColumn ? 'dblclick' : undefined),
@@ -115,7 +132,7 @@ function setup(overrides: Partial<Env> = {}) {
     performRangeClear: () => calls.push('rangeClear'),
     ensureCellVisible: () => calls.push('ensureCellVisible'),
   });
-  return { keyboard, env, calls, blocked, codes: () => diagnostics.map((d) => d.code) };
+  return { keyboard, env, calls, blocked, deferred, flushes, codes: () => diagnostics.map((d) => d.code) };
 }
 
 function key(k: string, mods: Partial<KeydownInterceptInput> = {}): KeydownInterceptInput {
@@ -235,6 +252,45 @@ describe('DD-069: 読むだけのセルで止めた編集キーの通知（edit-
     expect(keyboard.dispatch(key('5')).outcome).not.toBe('consume');
     expect(keyboard.dispatch(key(' ')).outcome).not.toBe('consume');
     expect(blocked).toEqual(['f2', 'key', 'key']);
+  });
+
+  it('素通しする印字キーだけを打鍵の処理の後に出す経路へ回す（消費するキーはその場で出す）', () => {
+    const grid = setup({ readOnly: true });
+    grid.keyboard.dispatch(key('F2'));
+    grid.keyboard.dispatch(key('z'));
+    grid.keyboard.dispatch(key('Delete'));
+    grid.keyboard.dispatch(key('Process'));
+    expect(grid.deferred).toEqual(['key', 'key']);
+    const cell = setup({ activeReadOnly: true });
+    cell.keyboard.dispatch(key('F2'));
+    cell.keyboard.dispatch(key('5'));
+    expect(cell.deferred).toEqual(['key']);
+  });
+
+  it('購読者がその場で表全体の読み取り専用を解いても、同じ打鍵では二度知らせない（Codex P2）', () => {
+    const onBlocked = (env: Env) => {
+      env.readOnly = false;
+    };
+    const printable = setup({ readOnly: true, activeReadOnly: true, onBlocked });
+    printable.keyboard.dispatch(key('z'));
+    expect(printable.blocked).toEqual(['key']);
+    const f2 = setup({ readOnly: true, activeReadOnly: true, onBlocked });
+    expect(f2.keyboard.dispatch(key('F2')).outcome).toBe('consume');
+    expect(f2.blocked).toEqual(['f2']);
+    // 次の打鍵は改めて判断する（表全体は解けたので、読むだけのセルの段が知らせる）。
+    printable.keyboard.dispatch(key('x'));
+    expect(printable.blocked).toEqual(['key', 'key']);
+  });
+
+  it('キーの処理の始めに控えの通知を出す（前の打鍵の通知を、この打鍵の判断より先に届ける）。変換中は出さない', () => {
+    const { keyboard, flushes, env } = setup();
+    keyboard.dispatch(key('ArrowDown'));
+    keyboard.dispatch(key('a'));
+    expect(flushes.count).toBe(2);
+    keyboard.dispatch(key('a', { isComposing: true }));
+    env.composing = true;
+    keyboard.dispatch(key('b'));
+    expect(flushes.count).toBe(2);
   });
 
   it('表全体も選択中のセルも読み取り専用なら、表全体の段だけが 1 回知らせる', () => {

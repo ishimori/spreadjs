@@ -286,3 +286,32 @@ test('K11: 表全体が読み取り専用なら、キー・ダブルクリック
     await context.close();
   }
 });
+
+test('K11: 印字キーの通知を受けてその場で setActiveCell しても、打った文字は移った先のセルに入らない', async ({ browser }) => {
+  const { context, page } = await open(browser, QUERY);
+  try {
+    // consumer が「直す先」へ選択を動かす（受け取ったその場で同期的に呼ぶ）。
+    await page.evaluate(() => {
+      const grid = (window as unknown as { __gridInstance?: { subscribe(fn: (e: { type: string }) => void): () => void; setActiveCell(r: string, c: string): void } }).__gridInstance;
+      grid?.subscribe((event) => {
+        if (event.type === 'edit-blocked') {
+          grid.setActiveCell('r1', 'col-a');
+        }
+      });
+    });
+    const hash0 = await committedHash(page);
+    await sa.selectCell(page, 1, 1);
+    await expect.poll(async () => textareaReadOnly(page)).toBe(true);
+    const read = await since(page);
+    await page.keyboard.type('z');
+    await expect.poll(read).toEqual([blocked('r1', 'col-b', 'key', 'readonly-column')]);
+    // 選択は移ったが、z は入力されていない（編集が始まっていない・値も文書も変わらない）。
+    await expect.poll(async () => sa.activeCell(page)).toEqual({ row: 1, col: 0 });
+    await page.waitForTimeout(150);
+    expect(await sa.draft(page)).toBe('');
+    expect(await sa.displayCell(page, 'r1', 'col-a')).toBe('A1');
+    expect(await committedHash(page)).toBe(hash0);
+  } finally {
+    await context.close();
+  }
+});

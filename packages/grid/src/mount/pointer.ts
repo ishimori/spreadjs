@@ -43,7 +43,7 @@ export interface PointerDeps {
   readonly merges: Pick<MountMerges, 'current' | 'isMergedCellIndex'>;
   readonly cellLock: Pick<CellLock, 'isReadOnlyRowIndex' | 'isReadOnlyColumnIndex' | 'isReadOnlyCellIndex'>;
   /** DD-069: ダブルクリックで編集の開始を止めたセルの consumer への通知。 */
-  readonly editBlocked: Pick<EditBlocked, 'atCell'>;
+  readonly editBlocked: Pick<EditBlocked, 'atCell' | 'flushPending'>;
   readonly select: Pick<SelectWiring, 'isOpen' | 'close' | 'open' | 'isSelectColumnIndex' | 'isSearchableSelectColumnIndex'>;
   readonly date: Pick<DateWiring, 'isOpen' | 'close' | 'open' | 'isDblclickDateColumnIndex'>;
   readonly hover: CellHover;
@@ -541,6 +541,7 @@ export function registerPointerInteraction(deps: PointerDeps): void {
       if (event.button !== 0 || sync === undefined || editor === undefined) {
         return;
       }
+      deps.editBlocked.flushPending(); // DD-069: 前の打鍵の通知を、このクリックの処理より先に届ける
       if (resizeDrag !== null || selectionDrag !== null) {
         return; // ドラッグ中の追加 pointerdown は無視（capture 漏れ・状態上書き防止・Codex[P2]）
       }

@@ -51,7 +51,7 @@ export interface KeyboardDeps {
   readonly cellLock: Pick<CellLock, 'hasReadOnlyCells' | 'isActiveCellReadOnly' | 'isReadOnlyRowIndex'>;
   readonly merges: Pick<MountMerges, 'any' | 'isMergedCellIndex' | 'current'>;
   /** DD-069: 読むだけのセルで止めた編集キーの consumer への通知。 */
-  readonly editBlocked: Pick<EditBlocked, 'atActive'>;
+  readonly editBlocked: Pick<EditBlocked, 'atActive' | 'atActiveAfterKeystroke' | 'flushPending'>;
   readonly date: Pick<
     DateWiring,
     'isAttached' | 'openOnOf' | 'isOpen' | 'open' | 'moveDays' | 'moveMonths' | 'highlightedValue' | 'confirm' | 'close'
@@ -112,6 +112,8 @@ interface KeyEnv {
   readonly input: KeydownInterceptInput;
   readonly editor: IntegrationEditor;
   readonly backend: GridBackend;
+  /** DD-069: この打鍵で edit-blocked を知らせたか（購読者がその場で setReadOnly などを変えても、後の段が二度知らせない）。 */
+  readonly notice: { sent: boolean };
 }
 
 export function createKeyboard(deps: KeyboardDeps): Keyboard {
@@ -134,15 +136,22 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
   /**
    * DD-069: 読むだけのセルで止めた編集キーを consumer へ知らせる。抑止したキー（F2・Delete・Backspace）は keydown で消費し、
    * 印字キー（日本語入力オンの打鍵を含む）は素通しして textarea の readOnly で止まるので、どちらの経路かで知らせるキーを分ける
-   * （1 回の打鍵で 1 回）。変換中・Navigation でない位相では知らせない。
+   * （1 回の打鍵で 1 回）。変換中・Navigation でない位相では知らせない。素通しするキーの通知は打鍵の処理が済んだ後に出す
+   * （購読者が setActiveCell を呼んでも、同じ打鍵が移った先のセルに入らない・edit-blocked.ts）。
    */
-  function notifyBlockedKey({ input, editor }: KeyEnv, suppressed: boolean): void {
-    if (input.isComposing || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
+  function notifyBlockedKey({ input, editor, notice }: KeyEnv, suppressed: boolean): void {
+    if (notice.sent || input.isComposing || editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
       return;
     }
     const kind = blockedKeyInput(input);
-    if (kind !== undefined && (kind === 'key') !== suppressed) {
+    if (kind === undefined || (kind === 'key') === suppressed) {
+      return;
+    }
+    notice.sent = true; // 通知の前に立てる（購読者の中で状態が変わっても、この打鍵では二度出さない・DD-069 Codex P2）
+    if (suppressed) {
       deps.editBlocked.atActive(kind);
+    } else {
+      deps.editBlocked.atActiveAfterKeystroke(kind);
     }
   }
 
@@ -453,7 +462,11 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
     if (editor === undefined || backend === undefined) {
       return { handler: null, outcome: 'pass' };
     }
-    const env: KeyEnv = { input, editor, backend };
+    // DD-069: 前の打鍵で止めた印字キーの通知（控え）を、この打鍵の判断より先に届ける（変換中は触らずタイマーに任せる）。
+    if (!input.isComposing && !editor.session.isComposing()) {
+      deps.editBlocked.flushPending();
+    }
+    const env: KeyEnv = { input, editor, backend, notice: { sent: false } };
     for (const name of KEY_HANDLER_ORDER) {
       const outcome = handlers[name](env);
       if (outcome !== 'continue') {

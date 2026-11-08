@@ -55,7 +55,9 @@
   `{ type: 'edit-blocked', rowId, columnId, input, reason }` を出す（両モード共通・1 回の操作で 1 回）。`input` は `key`（印字キー・
   日本語入力オンの打鍵）・`delete`（Delete・Backspace）・`f2`・`dblclick`・`paste`・`cut`・`clear`、`reason` は `grid-readonly`・
   `merged`・`readonly-row`・`readonly-column`・`readonly-cell`（重なるときはこの順で先のもの）。結合範囲は左上のセルとして知らせる。
-  貼り付け・切り取り・範囲の消去で読むだけのセルを飛ばしたら `{ type: 'cells-skipped', operation, cells }`（書き込みの後に 1 回）。
+  印字キーの通知は打鍵の処理が済んだ後（次のキー・クリックの処理より前）に出すので、受け取ってすぐ `setActiveCell` などを呼んでよい。
+  変換中・編集中は出さない。貼り付け・切り取り・範囲の消去で読むだけのセルを飛ばしたら `{ type: 'cells-skipped', operation, cells }`
+  （書き込みの後に 1 回）。
   止める動き・診断（`readonly-*-blocked`／`-skipped`・`merged-cell-*`）は従来どおり。公開型 `GridCellRef`・`GridEditBlockedInput`・
   `GridEditBlockedReason`。React は `onEvent` でそのまま届く。
 
