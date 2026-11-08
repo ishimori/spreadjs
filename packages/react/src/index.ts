@@ -109,7 +109,7 @@ export interface NanairoSheetViewCommonProps {
   readonly cellStatusColors?: GridCellStatusColors;
   /** 行ID→上下の罫線。grid rowBordersと同じmount時固定の表示設定。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
-  /** 列ID→左右の罫線。grid columnBordersと同じ契約。 */
+  /** 列ID→左右の罫線。本文と列見出しへ同じ線を描く。grid columnBordersと同じ契約。 */
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
   /** 全データ行の下端へ共通罫線。個別指定優先・行増減へ追従。mount時固定。 */
   readonly defaultRowBorder?: GridBorder;

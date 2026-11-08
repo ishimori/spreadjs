@@ -19,6 +19,7 @@
 
 | DD | 件名 | 主な成果 |
 |----|------|---------|
+| DD-067 | 列見出しの縦罫線 | 見出しと本文の縦罫線を統一。unit1688件・consumerのPC4条件とビルド成功 |
 | DD-066 | 結合したセルを選んだときの二重の枠（consumer 駆動・DD-064 の取りこぼし） | 二重枠・固定帯へのはみ出しを修正。alpha.20を作成、unit1681・E2E303件成功。実IME・consumer確認は未保証境界へ |
 | DD-065 | grid の mount 配線の分割と再肥大の防止 | mount 4,567→605行・配線単体59件。全回帰成功、Codex P2 1件を修正。実IMEは未確認境界へ |
 | DD-064 | セルの結合（consumer 駆動・計画策定の入力シート） | セルの結合（mergedCells・setMergedCells）と2段の見出し（columnGroups）を追加。Codex high の4件を修正し alpha.19 で配布。実 IME と consumer の取り込みは未保証境界へ |

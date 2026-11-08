@@ -39,6 +39,7 @@ describe('DD-047 device geometry / overflow', () => {
     });
     expect(reads).toBeLessThan(50);
     expect(calls).toEqual([
+      { color: 'red', x: 451, y: 0, w: 2, h: 24 },
       { color: 'red', x: 451, y: 24, w: 2, h: 376 },
       { color: 'blue', x: 52, y: 45, w: 748, h: 2 },
     ]);

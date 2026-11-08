@@ -91,6 +91,7 @@
 | `doc/DD/` | アクティブな設計文書 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
 | `doc/archived/DD/DD-066/` | 結合セルの選択枠の再現・原因分析、Before/After・矩形の数値・Phase 0レビュー・alpha.20検証と引き渡し |
+| `doc/archived/DD/DD-067/` | 入力シートの見出し罫線のPCブラウザー検証画像と画素・リサイズの結果（alpha.21） |
 | `doc/archived/DD/DD-065/` | mount 配線の分割・サイズのガードの診断、状態の持ち主とテスト対応、実装レビュー・検証記録 |
 | `doc/archived/DD/DD-064/` | セルの結合（mergedCells・setMergedCells）と2段の見出し（columnGroups）の契約・Codex レビュー（依頼・結果）・alpha.19 引き渡し（hiroshima-keikaku K1〜K4） |
 | `doc/archived/DD/DD-057/` | 広島空港 H14 の文字選択契約・SDK検証・alpha.13引き渡しと、showcase F列での選択画面 |

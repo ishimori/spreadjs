@@ -543,7 +543,7 @@ export interface GridCommonMountOptions {
   readonly validateCell?: (cell: GridCellValidationInput) => string | null;
   /** 行ID→上下の罫線（CSS px、0超〜8以下）。未知行はwarn後に遅延解決。mount時固定・表示専用。 */
   readonly rowBorders?: Readonly<Record<string, GridRowBorders>>;
-  /** 列ID→左右の罫線。隣接指定は太い線、同幅は右列leftが勝つ。文字overflowは指定境界で止まる。 */
+  /** 列ID→左右の罫線。本文と列見出しへ同じ線を描く（2段見出しのグループ内は下段だけ）。隣接指定は太い線、同幅は右列leftが勝つ。文字overflowは指定境界で止まる。 */
   readonly columnBorders?: Readonly<Record<string, GridColumnBorders>>;
   /** 全データ行の下端（最終行を含む）へ共通罫線。個別top/bottom優先・行増減に追従。mount時固定。 */
   readonly defaultRowBorder?: GridBorder;

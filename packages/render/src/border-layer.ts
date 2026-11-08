@@ -3,7 +3,7 @@
 import type { MergeIndex } from '@nanairo-sheet/selection';
 
 import { normalizeDpr } from './dpi';
-import type { FrameViewport } from './base-layer';
+import type { ColumnGroupBand, FrameViewport } from './base-layer';
 import type { IndexRange } from './viewport';
 
 export interface BoundaryBorder {
@@ -19,6 +19,7 @@ export function isPatternBorder(border: BoundaryBorder | undefined): boolean {
 export interface BorderLayerDeps {
   readonly rowBorder?: (boundaryIndex: number) => BoundaryBorder | undefined;
   readonly columnBorder?: (boundaryIndex: number) => BoundaryBorder | undefined;
+  readonly columnGroupBand?: ColumnGroupBand;
   /** 結合範囲（DD-064・base-layer と同じもの）。範囲の中を通る区間を抜く。未指定・0 件なら現行と同じ。 */
   readonly mergedRanges?: () => MergeIndex | undefined;
 }
@@ -73,6 +74,72 @@ interface Line {
   readonly boundary: number;
 }
 
+/** DD-067: 本文と同じ列境界を見出しにも描く。グループの内側は下段だけ、外周は全高。 */
+function drawColumnHeaderBorders(ctx: CanvasRenderingContext2D, frame: FrameViewport, headerWidth: number, headerHeight: number, deps: BorderLayerDeps): void {
+  if (deps.columnBorder === undefined) return;
+  const { transform } = frame;
+  const panes = transform.panes();
+  const body = panes.find(p => p.pane === 'body');
+  const corner = panes.find(p => p.pane === 'corner');
+  if (body === undefined || corner === undefined) return;
+  const ranges = [corner.cols, body.cols];
+  const right = Math.min(frame.viewportWidth, Math.max(headerWidth, ...ranges.map(range => {
+    if (range.end <= range.start) return headerWidth;
+    const rect = transform.columnHeaderRect(range.end - 1);
+    return rect.x + rect.width;
+  })));
+  if (right <= headerWidth) return;
+  const frozenWidth = transform.frozenWidth();
+  const seam = headerWidth + frozenWidth;
+  const lines: Line[] = [];
+  for (const [pane, range] of ranges.entries()) {
+    const clipStart = pane === 0 ? headerWidth : seam;
+    const clipEnd = Math.min(pane === 0 ? seam : right, right);
+    if (range.end <= range.start || clipEnd <= clipStart) continue;
+    for (let boundary = range.start; boundary <= range.end; boundary++) {
+      if (frozenWidth > 0 && boundary === corner.cols.end) continue;
+      const border = deps.columnBorder(boundary);
+      if (border === undefined) continue;
+      const rect = transform.columnHeaderRect(boundary === range.end ? boundary - 1 : boundary);
+      const position = rect.x + (boundary === range.end ? rect.width : 0);
+      lines.push({ horizontal: false, boundary, position, clipStart, clipEnd, border });
+    }
+  }
+  const seamBorder = frozenWidth > 0 ? deps.columnBorder(corner.cols.end) : undefined;
+  if (seamBorder !== undefined && seam <= right) lines.push({ horizontal: false, boundary: corner.cols.end, position: seam, clipStart: headerWidth, clipEnd: right, border: seamBorder });
+  lines.sort((a, b) => a.border.width - b.border.width);
+  const d = normalizeDpr(frame.dpr);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(headerWidth, 0, right - headerWidth, headerHeight);
+  ctx.clip();
+  for (const line of lines) {
+    const band = borderBand(line.position, line.border.width, d);
+    const bandStart = line.position === right ? Math.min(band.start, (Math.floor(right * d) - 1) / d) : band.start;
+    const left = Math.max(bandStart, line.clipStart);
+    const end = Math.min(bandStart + band.size, line.clipEnd);
+    if (end <= left) continue;
+    const group = deps.columnGroupBand?.groups.find(g => g.colStart < line.boundary && line.boundary < g.colEnd);
+    const top = group === undefined ? 0 : (deps.columnGroupBand?.height ?? 0);
+    ctx.fillStyle = line.border.color;
+    if (!isPatternBorder(line.border)) {
+      ctx.fillRect(left, top, end - left, headerHeight - top);
+      continue;
+    }
+    // 本文の破線の原点（headerHeight）を共有し、上下の継ぎ目で位相を変えない。
+    const pixels = Math.max(1, Math.round(line.border.width * d));
+    const on = pixels * (line.border.style === 'dashed' ? 4 : 1);
+    const period = on + pixels * 2;
+    const origin = Math.round(headerHeight * d);
+    for (let position = origin + Math.floor((top * d - origin) / period) * period; position < headerHeight * d; position += period) {
+      const from = Math.max(position, top * d) / d;
+      const to = Math.min(position + on, headerHeight * d) / d;
+      if (to > from) ctx.fillRect(left, from, end - left, to - from);
+    }
+  }
+  ctx.restore();
+}
+
 export function drawBorders(
   ctx: CanvasRenderingContext2D,
   frame: FrameViewport,
@@ -81,6 +148,7 @@ export function drawBorders(
   deps: BorderLayerDeps,
 ): void {
   if (deps.rowBorder === undefined && deps.columnBorder === undefined) return;
+  drawColumnHeaderBorders(ctx, frame, headerWidth, headerHeight, deps);
   const { transform, dpr } = frame;
   const panes = transform.panes();
   const body = panes.find((p) => p.pane === 'body');
