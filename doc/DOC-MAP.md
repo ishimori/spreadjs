@@ -89,6 +89,7 @@
 | パス | 説明 |
 |------|------|
 | `doc/DD/` | アクティブな設計文書 |
+| `doc/archived/DD/DD-068/` | 見出し下端の太線のPCブラウザー画像と画素検証 |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
 | `doc/archived/DD/DD-066/` | 結合セルの選択枠の再現・原因分析、Before/After・矩形の数値・Phase 0レビュー・alpha.20検証と引き渡し |
 | `doc/archived/DD/DD-067/` | 入力シートの見出し罫線のPCブラウザー検証画像と画素・リサイズの結果（alpha.21） |

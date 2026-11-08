@@ -1,0 +1,414 @@
+[
+  {
+    "config": {
+      "width": 1920,
+      "dpr": 1
+    },
+    "initial": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "scrolled": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "dragging": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "resized": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "errors": []
+  },
+  {
+    "config": {
+      "width": 1920,
+      "dpr": 1.25
+    },
+    "initial": {
+      "dpr": 1.25,
+      "width": 2068,
+      "expected": 4,
+      "start": 58,
+      "lines": [
+        {
+          "y": 58,
+          "count": 2067
+        },
+        {
+          "y": 59,
+          "count": 2067
+        },
+        {
+          "y": 60,
+          "count": 2067
+        },
+        {
+          "y": 61,
+          "count": 2067
+        }
+      ]
+    },
+    "scrolled": {
+      "dpr": 1.25,
+      "width": 2068,
+      "expected": 4,
+      "start": 58,
+      "lines": [
+        {
+          "y": 58,
+          "count": 2067
+        },
+        {
+          "y": 59,
+          "count": 2067
+        },
+        {
+          "y": 60,
+          "count": 2067
+        },
+        {
+          "y": 61,
+          "count": 2067
+        }
+      ]
+    },
+    "dragging": {
+      "dpr": 1.25,
+      "width": 2068,
+      "expected": 4,
+      "start": 58,
+      "lines": [
+        {
+          "y": 58,
+          "count": 2067
+        },
+        {
+          "y": 59,
+          "count": 2067
+        },
+        {
+          "y": 60,
+          "count": 2067
+        },
+        {
+          "y": 61,
+          "count": 2067
+        }
+      ]
+    },
+    "resized": {
+      "dpr": 1.25,
+      "width": 2068,
+      "expected": 4,
+      "start": 58,
+      "lines": [
+        {
+          "y": 58,
+          "count": 2067
+        },
+        {
+          "y": 59,
+          "count": 2067
+        },
+        {
+          "y": 60,
+          "count": 2067
+        },
+        {
+          "y": 61,
+          "count": 2067
+        }
+      ]
+    },
+    "errors": []
+  },
+  {
+    "config": {
+      "width": 1920,
+      "dpr": 2
+    },
+    "initial": {
+      "dpr": 2,
+      "width": 3308,
+      "expected": 6,
+      "start": 93,
+      "lines": [
+        {
+          "y": 93,
+          "count": 3308
+        },
+        {
+          "y": 94,
+          "count": 3308
+        },
+        {
+          "y": 95,
+          "count": 3308
+        },
+        {
+          "y": 96,
+          "count": 3308
+        },
+        {
+          "y": 97,
+          "count": 3308
+        },
+        {
+          "y": 98,
+          "count": 3308
+        }
+      ]
+    },
+    "scrolled": {
+      "dpr": 2,
+      "width": 3308,
+      "expected": 6,
+      "start": 93,
+      "lines": [
+        {
+          "y": 93,
+          "count": 3308
+        },
+        {
+          "y": 94,
+          "count": 3308
+        },
+        {
+          "y": 95,
+          "count": 3308
+        },
+        {
+          "y": 96,
+          "count": 3308
+        },
+        {
+          "y": 97,
+          "count": 3308
+        },
+        {
+          "y": 98,
+          "count": 3308
+        }
+      ]
+    },
+    "dragging": {
+      "dpr": 2,
+      "width": 3308,
+      "expected": 6,
+      "start": 93,
+      "lines": [
+        {
+          "y": 93,
+          "count": 3308
+        },
+        {
+          "y": 94,
+          "count": 3308
+        },
+        {
+          "y": 95,
+          "count": 3308
+        },
+        {
+          "y": 96,
+          "count": 3308
+        },
+        {
+          "y": 97,
+          "count": 3308
+        },
+        {
+          "y": 98,
+          "count": 3308
+        }
+      ]
+    },
+    "resized": {
+      "dpr": 2,
+      "width": 3308,
+      "expected": 6,
+      "start": 93,
+      "lines": [
+        {
+          "y": 93,
+          "count": 3308
+        },
+        {
+          "y": 94,
+          "count": 3308
+        },
+        {
+          "y": 95,
+          "count": 3308
+        },
+        {
+          "y": 96,
+          "count": 3308
+        },
+        {
+          "y": 97,
+          "count": 3308
+        },
+        {
+          "y": 98,
+          "count": 3308
+        }
+      ]
+    },
+    "errors": []
+  },
+  {
+    "config": {
+      "width": 1366,
+      "dpr": 1
+    },
+    "initial": {
+      "dpr": 1,
+      "width": 1100,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1100
+        },
+        {
+          "y": 48,
+          "count": 1100
+        },
+        {
+          "y": 49,
+          "count": 1100
+        }
+      ]
+    },
+    "scrolled": {
+      "dpr": 1,
+      "width": 1100,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1100
+        },
+        {
+          "y": 48,
+          "count": 1100
+        },
+        {
+          "y": 49,
+          "count": 1100
+        }
+      ]
+    },
+    "dragging": {
+      "dpr": 1,
+      "width": 1100,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1100
+        },
+        {
+          "y": 48,
+          "count": 1100
+        },
+        {
+          "y": 49,
+          "count": 1100
+        }
+      ]
+    },
+    "resized": {
+      "dpr": 1,
+      "width": 1100,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1100
+        },
+        {
+          "y": 48,
+          "count": 1100
+        },
+        {
+          "y": 49,
+          "count": 1100
+        }
+      ]
+    },
+    "errors": []
+  }
+]

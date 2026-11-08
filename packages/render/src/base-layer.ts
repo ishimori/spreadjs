@@ -8,7 +8,7 @@
 import type { CellRange, MergeIndex } from '@nanairo-sheet/selection';
 
 import type { ChunkStore } from './chunk-store';
-import { drawBorders, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
+import { drawBorders, drawHeaderBottomBorder, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
 import { deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
 import { createTextMetricsCache, type TextMetricsCache } from './text-cache';
 import { MAX_LEFT_INFLOW_SCAN, nearestLeftNonEmpty, overflowRightExtent } from './text-overflow';
@@ -1082,11 +1082,8 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.lineWidth = deviceLineWidth(dpr);
     ctx.beginPath();
     const hx = snapToDevice(headerWidth, dpr);
-    const hy = snapToDevice(headerHeight, dpr);
     ctx.moveTo(hx, 0);
     ctx.lineTo(hx, frame.viewportHeight);
-    ctx.moveTo(0, hy);
-    ctx.lineTo(viewportWidth, hy);
     ctx.stroke();
   };
 
@@ -1102,6 +1099,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       drawPane(frame, findPane(panes, 'corner'));
       drawHeaders(frame);
       drawBorders(ctx, frame, headerWidth, headerHeight, deps);
+      drawHeaderBottomBorder(ctx, frame, headerHeight, colors.headerText);
     },
   };
 }

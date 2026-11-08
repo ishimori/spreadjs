@@ -31,6 +31,15 @@ export function borderBand(position: number, width: number, dpr: number): { star
   return { start: (Math.round(position * d) - Math.floor(pixels / 2)) / d, size: pixels / d };
 }
 
+/** DD-068: 見出しと本文の境界を最後に描き、縦罫線との交点でも太線を連続させる。 */
+export function drawHeaderBottomBorder(ctx: CanvasRenderingContext2D, frame: FrameViewport, headerHeight: number, color: string): void {
+  const band = borderBand(headerHeight, 3, frame.dpr);
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.fillRect(0, band.start, frame.viewportWidth, band.size);
+  ctx.restore();
+}
+
 /** [from, to) から skips（[start, end) の区間）を除いた残りの区間（DD-064・昇順）。skips が空なら [[from, to]]。 */
 export function subtractIntervals(
   from: number,

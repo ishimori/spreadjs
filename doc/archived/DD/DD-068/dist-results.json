@@ -1,0 +1,89 @@
+[
+  {
+    "config": {
+      "width": 1920,
+      "dpr": 1
+    },
+    "initial": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "scrolled": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "dragging": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "resized": {
+      "dpr": 1,
+      "width": 1654,
+      "expected": 3,
+      "start": 47,
+      "lines": [
+        {
+          "y": 47,
+          "count": 1654
+        },
+        {
+          "y": 48,
+          "count": 1654
+        },
+        {
+          "y": 49,
+          "count": 1654
+        }
+      ]
+    },
+    "errors": []
+  }
+]
