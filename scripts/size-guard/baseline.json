@@ -5,7 +5,7 @@
       "lines": 1046
     },
     "packages/grid/src/mount-controller.ts": {
-      "lines": 2725
+      "lines": 2046
     },
     "packages/render/src/base-layer.ts": {
       "lines": 1107
@@ -17,12 +17,6 @@
   "functions": {
     "packages/formula/src/tokenizer.ts::tokenize": {
       "complexity": 41
-    },
-    "packages/grid/src/mount-controller.ts::createGridController>addEventListener:pointerdown": {
-      "complexity": 31
-    },
-    "packages/grid/src/mount-controller.ts::createGridController>addEventListener:pointermove": {
-      "complexity": 38
     },
     "packages/grid/src/mount-controller.ts::createGridController>attachBackendRendering>interceptKeydown": {
       "complexity": 62

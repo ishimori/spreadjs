@@ -9,12 +9,10 @@
 import { displayRowOrder } from '@nanairo-sheet/core';
 import type { SetCellsOperation } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
-import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
+import type { ColumnId, OperationId } from '@nanairo-sheet/types';
 import type { ClientSession, Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
 import {
-  BADGE_TEXT_PADDING,
   CELL_TEXT_LINE_HEIGHT,
-  CELL_TEXT_PADDING,
   backingSize,
   captureAnchor,
   columnLabel,
@@ -42,7 +40,7 @@ import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 import { BrowserWebSocketTransport } from './browser-transport';
 import { cellScalarToDisplay } from './document-view';
 import type { PlacementConfig } from './editor-placement';
-import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } from './column-types';
+import { ColumnTypeConfigError, createColumnTypeRegistry } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
 import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
 import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackgrounds } from './format-rules';
@@ -52,7 +50,6 @@ import type { CompiledColumnDisplay } from './display-format';
 import { MergedCellsConfigError } from './merged-cell-spec';
 import { compileColumnGroups } from './column-groups';
 import type { CompiledColumnGroup } from './column-groups';
-import { shouldArmLinkCandidate } from './link-column';
 import { decideSelectKey } from './select-editor';
 import { decideDateKey } from './date-editor';
 import { createIntegrationEditor } from './integration-editor';
@@ -65,8 +62,6 @@ import { toGridRemoteChange } from './remote-change';
 import { createSessionSync } from './session-sync';
 import { buildScaffold } from './dom-scaffold';
 import { createCanvasLayout } from './canvas-layout';
-import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from './resize-interaction';
-import type { ResizeTarget } from './resize-interaction';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
 import { shouldSuppressReadonlyKey } from './readonly-policy';
 import { decideRowStructureKey } from './row-operations';
@@ -81,13 +76,10 @@ import type { StandaloneSession } from './standalone-session';
 import { validateStandaloneOptions } from './standalone-options';
 import type { GridBackend } from './grid-backend';
 import type {
-  GridCellRect,
-  GridCellStatus,
   GridCellStatusColors,
   GridCellStatusRow,
   GridCollaborationMountOptions,
   GridConnectionState,
-  GridEvent,
   GridFlushOptions,
   GridFlushResult,
   GridInstance,
@@ -100,11 +92,9 @@ import type {
   GridStandaloneRow,
 } from './index';
 import {
-  AUTO_FIT_MAX_SCAN,
   COL_WIDTH,
   HEADER_HEIGHT,
   HEADER_WIDTH,
-  LINK_DBLCLICK_MS,
   PENDING_COMMANDS_MAX,
   ROW_HEIGHT,
   TICK_INTERVAL_MS,
@@ -119,6 +109,9 @@ import { createDateWiring } from './mount/date-wiring';
 import { createSelectWiring } from './mount/select-wiring';
 import { createEditCommands } from './mount/edit-commands';
 import { createEditSubmit } from './mount/edit-submit';
+import { createCellHover } from './mount/hover';
+import { createLinkClick } from './mount/link-click';
+import { registerPointerInteraction } from './mount/pointer';
 
 
 interface ResolvedConfig {
@@ -235,8 +228,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledDisplay: CompiledColumnDisplay | undefined;
   // DD-064 K4: 2段の見出しのまとまり（列 index に解決済み・columnOrder 解決後に生成・fail-fast）。空なら 1 段。
   let compiledColumnGroups: readonly CompiledColumnGroup[] = [];
-  // DD-057: 検索付きの候補欄をクリックで開く候補（pointerdown で武装し、同じセルの pointerup で開く）。
-  let searchSelectCandidate: { pointerId: number; row: number; col: number } | null = null;
   let baseLayer: ReturnType<typeof createBaseLayer> | undefined;
   let dpr = normalizeDpr(window.devicePixelRatio);
   let viewportWidth = 0;
@@ -314,9 +305,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     registry: () => columnTypeRegistry,
   });
   const {
-    isReadOnlyColumnIndex,
     isReadOnlyRowIndex,
-    isReadOnlyCellIndex,
     hasReadOnlyCells,
     isActiveCellReadOnly,
     validateReadOnlyRowsOnce,
@@ -845,129 +834,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
   }
 
-  // ---- ポインター（選択・ダブルクリックで編集・ヘッダー境界リサイズ）----
-  function stageLocal(event: PointerEvent): { x: number; y: number } {
-    const rect = stage.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
-  }
-
-  // 列幅・行高リサイズのドラッグ状態（DD-012-4）。null=非リサイズ。対象は index ではなく Id で保持し、
-  // ドラッグ中に他クライアントの構造Op で Axis が作り直されても正しい列/行を追い続ける（Codex[P2]）。
-  // originalSize は pointercancel/capture 喪失時に開始時サイズへ戻すため（D2 は pointerup のみ確定・Codex[P2]）。
-  type ResizeDrag =
-    | { readonly axis: 'column'; readonly columnId: ColumnId; readonly pointerId: number; readonly originalSize: number }
-    | {
-        readonly axis: 'row';
-        readonly rowId: RowId;
-        readonly pointerId: number;
-        readonly originalSize: number;
-        // 開始時の手動 override 状態（DD-012-5 Codex P2）。取消時に実効 px でなくこの状態へ戻す
-        // （自動高を誤って手動化しない＝以後の自動縮小を殺さない）。undefined=開始時は手動 override 無し。
-        readonly originalManual: number | undefined;
-      };
-  let resizeDrag: ResizeDrag | null = null;
-
-  // 範囲選択ドラッグの追跡（DD-020-1）。null=非ドラッグ。矩形自体は selectionCtrl が持ち、ここは
-  // 「どの pointer のドラッグか」だけを持つ（マルチタッチの誤更新防止・resizeDrag と同型）。
-  let selectionDrag: { readonly pointerId: number } | null = null;
-
-  // DD-027-2: ハイパーリンク列のクリック候補追跡（候補追跡方式・📐）。pointerdown で武装（arm）→ ドラッグで開始セルを
-  // 離れたら破棄 → pointerup で生存していれば link-open を発火する。既存経路（activeCell 移動・ドラッグ選択・編集確定）は
-  // 無変更のまま上乗せする（T1 非該当）。value は pointerdown 時点で捕捉（pointerup 時に行が消えていてもその値で発火してよい）。
-  let linkCandidate:
-    | { readonly pointerId: number; readonly rowId: RowId; readonly columnId: ColumnId; readonly value: string; readonly cell: CellPosition }
-    | null = null;
-  // dblclick 2打目の抑止（📐「detail===1」の実ブラウザー/synthetic 両対応）。直近 link-open 発火の論理セル（rowId/columnId）と
-  // 時刻を記録し、同一セルで既定間隔内の連打は「2打目」と見なして武装しない。実ブラウザーは detail>=2 が主判定で、
-  // 本 time-guard は detail 非供給（synthetic）環境の補完に**限定**する（Fable P2: detail>=1 の正当な2回目クリックを握り潰さない）。
-  // キーは行 index でなく rowId/columnId（Fable P2: 発火直後のリモート行挿入/削除で index がずれても別セルを誤抑止しない）。
-  let lastLinkFire: { rowId: RowId; columnId: ColumnId; time: number } | null = null;
-
-  /** 列 index がリンク列か（列単位・hover cursor と候補武装で共有・DD-027-2）。registry 未生成/列消失は false。 */
-  function isLinkColumnIndex(colIndex: number): boolean {
-    if (columnTypeRegistry === undefined || sync === undefined) {
-      return false;
-    }
-    const colId = sync.view.columnIdAt(colIndex);
-    return colId !== undefined && columnTypeRegistry.isLinkColumn(String(colId));
-  }
-
-  // ---- RC6（DD-052-5）: セルホバー通知（出入りで発火・同一セル内の移動は再発火しない）----
-  let hoveredCell: { readonly rowId: string; readonly columnId: string } | null = null;
-  // DD-060: 直近の cell-hover に載せた状態表示（ホバー中のセルの状態が変わったら出し直すために比べる）。
-  let hoveredStatus: GridCellStatus | undefined;
-  /** DD-060: セルの cell-hover イベントを作る（状態表示があれば status を載せ、無ければキー自体を付けない）。 */
-  function cellHoverEvent(rowId: string, columnId: string, rect: GridCellRect): GridEvent {
-    const status = cellStatusStore.statusOf(rowId, columnId);
-    hoveredStatus = status;
-    return status === undefined
-      ? { type: 'cell-hover', rowId, columnId, rect }
-      : { type: 'cell-hover', rowId, columnId, rect, status };
-  }
-  /** DD-060: このセルの今の状態表示が、直近の cell-hover に載せたもの（level・message）と違うか。 */
-  function hoverStatusChanged(cell: { readonly rowId: string; readonly columnId: string }): boolean {
-    const status = cellStatusStore.statusOf(cell.rowId, cell.columnId);
-    return status?.level !== hoveredStatus?.level || status?.message !== hoveredStatus?.message;
-  }
-  /**
-   * DD-060: ホバー中のセルの状態表示が setRows/setData で変わっていれば、同じセルのまま cell-hover を出し直す
-   * （確定直後に consumer が検証して印を付けたとき、マウスを動かさなくてもメッセージを出せるように）。
-   * 行 Axis の再構築待ち（setData 直後）は runOrDefer で構造 flush 後の矩形を使う。行が消えていれば出さない。
-   */
-  function refreshHoverStatus(): void {
-    const hovered = hoveredCell;
-    if (hovered === null || !hoverStatusChanged(hovered)) {
-      return;
-    }
-    runOrDefer(() => {
-      const transform = currentTransform();
-      if (hoveredCell !== hovered || transform === undefined || sync === undefined) {
-        return; // その間にポインタが別のセルへ移った（そちらの cell-hover が最新の状態を載せている）
-      }
-      // 保留中に setRows が重なると要求も重なる。実行時にも比べ、先に出した通知と同じなら出さない（Codex P2）。
-      if (!hoverStatusChanged(hovered)) {
-        return;
-      }
-      const row = sync.view.rowIndexOf(createRowId(hovered.rowId));
-      const col = sync.view.colIndexOf(createColumnId(hovered.columnId));
-      if (row < 0 || col < 0) {
-        return;
-      }
-      emit(cellHoverEvent(hovered.rowId, hovered.columnId, hoverRect(transform, row, col)));
-    });
-  }
-  /** DD-064: ホバーの矩形（結合の左上なら範囲全体）。 */
-  function hoverRect(transform: ViewportTransform, row: number, col: number): GridCellRect {
-    const merge = hasMergedCells() ? currentMerges().at(row, col) : undefined;
-    return merge !== undefined ? mergedCellRect(transform, merge) : transform.cellRect(row, col);
-  }
-  /** hit（cell 以外は null）を見てホバー中セルが変わっていれば cell-hover を発火する。 */
-  function updateCellHover(hit: { readonly rowIndex: number; readonly colIndex: number } | null): void {
-    if (sync === undefined) {
-      return;
-    }
-    const transform = currentTransform();
-    let next: { rowId: string; columnId: string; rect: GridCellRect } | null = null;
-    if (hit !== null && transform !== undefined) {
-      // DD-064: 結合範囲の中は左上のセルとして通知する（範囲の中を動いても出し直さない・rect は範囲全体）。
-      const cell = mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex });
-      const rowId = sync.view.rowIdAt(cell.row);
-      const columnId = sync.view.columnIdAt(cell.col);
-      if (rowId !== undefined && columnId !== undefined) {
-        next = { rowId: String(rowId), columnId: String(columnId), rect: hoverRect(transform, cell.row, cell.col) };
-      }
-    }
-    if (next?.rowId === hoveredCell?.rowId && next?.columnId === hoveredCell?.columnId) {
-      return; // 同一セル（or 両方 null）のまま → 再発火しない
-    }
-    hoveredCell = next === null ? null : { rowId: next.rowId, columnId: next.columnId };
-    if (next === null) {
-      hoveredStatus = undefined;
-      emit({ type: 'cell-hover', rowId: null, columnId: null, rect: null });
-      return;
-    }
-    emit(cellHoverEvent(next.rowId, next.columnId, next.rect));
-  }
+  // ---- ポインター（区画④・mount/pointer.ts・hover.ts・link-click.ts）----
+  const hover = createCellHover({
+    cellStatusStore,
+    merges,
+    emit,
+    backend: () => sync,
+    currentTransform,
+    runOrDefer,
+  });
+  const link = createLinkClick({
+    diag,
+    emit,
+    backend: () => sync,
+    editor: () => editor,
+    registry: () => columnTypeRegistry,
+  });
 
   // DD-045: 行 ID は初期データ到着前に検証できないため、初回描画後に一度だけ未知 RowId を診断する。
   const rowBackgroundRowSet = new Set<string>(Object.keys(options.rowBackgrounds ?? {}));
@@ -987,598 +869,37 @@ export function createGridController(target: GridMountTarget, options: GridMount
       );
     }
   }
-  /**
-   * pointerdown 時点の状態でリンク候補を武装（arm）できるか判定して候補を組む（純関数 shouldArmLinkCandidate に委譲）。
-   * **pointerdownCell を呼ぶ前の位相**で評価する（編集中クリックは従来経路＝発火なし・AC8）。値/行ID/列IDは
-   * pointerdown 時点で捕捉する（pointerup 時に行が消えていてもその値で発火してよい＝navigate しない通知のみ・📐）。
-   */
-  function computeLinkArm(
-    cell: CellPosition,
-    event: PointerEvent,
-  ): { pointerId: number; rowId: RowId; columnId: ColumnId; value: string; cell: CellPosition } | null {
-    if (columnTypeRegistry === undefined || sync === undefined || editor === undefined) {
-      return null;
-    }
-    const rowId = sync.view.rowIdAt(cell.row);
-    const columnId = sync.view.columnIdAt(cell.col);
-    if (rowId === undefined || columnId === undefined) {
-      return null;
-    }
-    const value = sync.view.cellDisplay(rowId, columnId);
-    const armed = shouldArmLinkCandidate({
-      button: event.button,
-      pointerType: event.pointerType,
-      isPrimaryClick: isPrimaryClickPress(rowId, columnId, event),
-      isLinkColumn: columnTypeRegistry.isLinkColumn(String(columnId)),
-      valueNonEmpty: value !== '',
-      phase: editor.session.getPhase(),
-      composing: editor.session.isComposing(),
-      shiftKey: event.shiftKey,
-    });
-    return armed ? { pointerId: event.pointerId, rowId, columnId, value, cell } : null;
-  }
 
-  /**
-   * 単クリック/連打の1打目か（dblclick の2打目以降を除外・📐 の detail===1 相当）。実ブラウザーは
-   * `PointerEvent.detail`（1打目=1・2打目=2+）が権威判定＝そのまま通す。`detail===0`（synthetic・Playwright は
-   * detail 非供給）のときだけ直近 link-open 発火セル（rowId/columnId）＋既定間隔（LINK_DBLCLICK_MS）で dblclick 2打目を
-   * 補完判定する（Fable P2: detail>=1 の正当な2回目クリックを time-guard で握り潰さない）。
-   */
-  function isPrimaryClickPress(rowId: RowId, columnId: ColumnId, event: PointerEvent): boolean {
-    if (event.detail >= 2) {
-      return false; // 実ブラウザーの dblclick 2打目
-    }
-    if (
-      event.detail === 0 &&
-      lastLinkFire !== null &&
-      lastLinkFire.rowId === rowId &&
-      lastLinkFire.columnId === columnId &&
-      performance.now() - lastLinkFire.time < LINK_DBLCLICK_MS
-    ) {
-      return false; // detail 非供給環境（synthetic）の連打2打目（同一論理セル・既定間隔内）
-    }
-    return true;
-  }
-
-  /** pointercancel/capture 喪失で候補を破棄する（同一 pointer のときだけ）。 */
-  function discardLinkCandidate(pointerId: number): void {
-    if (linkCandidate !== null && linkCandidate.pointerId === pointerId) {
-      linkCandidate = null;
-    }
-  }
-
-  /**
-   * pointerup（finishSelectionDrag(confirm=true) の直後）で候補が生きていれば link-open を発火する（📐）。
-   * SDK は navigate しない（通知のみ）。列 `defaultOpen:true` のときだけ絶対 http/https URL を window.open で開く
-   * （不正 URL は open せず診断 warn・link-open は常に発火）。
-   */
-  function maybeEmitLinkOpen(pointerId: number): void {
-    if (linkCandidate === null || linkCandidate.pointerId !== pointerId) {
-      return;
-    }
-    const candidate = linkCandidate;
-    linkCandidate = null;
-    lastLinkFire = { rowId: candidate.rowId, columnId: candidate.columnId, time: performance.now() }; // dblclick 2打目抑止の基準（📐・Fable P2）
-    const rowId = String(candidate.rowId);
-    const columnId = String(candidate.columnId);
-    diag.emit('info', 'link-open', `link-open row=${rowId} col=${columnId}`);
-    emit({ type: 'link-open', rowId, columnId, value: candidate.value });
-    const linkType = columnTypeRegistry?.getLinkType(columnId);
-    if (linkType?.defaultOpen === true) {
-      if (isAbsoluteHttpUrl(candidate.value)) {
-        window.open(candidate.value, '_blank', 'noopener,noreferrer');
-      } else {
-        diag.emit(
-          'warn',
-          'link-open-blocked',
-          `defaultOpen: http/https の絶対 URL でないため open しない（link-open は発火済み）: 「${candidate.value}」`,
-        );
-      }
-    }
-  }
-
-  /**
-   * 範囲選択ドラッグ終了。confirm=true（pointerup）は矩形を明示レンジへ確定する（同一セルなら単一選択のまま）。
-   * confirm=false（pointercancel/capture 喪失）はドラッグを破棄する（確定済みレンジは変更しない）。
-   */
-  function finishSelectionDrag(pointerId: number, confirm: boolean): void {
-    if (selectionDrag === null || selectionDrag.pointerId !== pointerId) {
-      return;
-    }
-    searchSelectCandidate = null;
-    selectionDrag = null; // release より先に null 化（release が誘発する lostpointercapture の二重処理を無効化）
-    if (scroller.hasPointerCapture(pointerId)) {
-      scroller.releasePointerCapture(pointerId);
-    }
-    if (confirm) {
-      selectionCtrl.endDrag();
-    } else {
-      selectionCtrl.cancelDrag();
-    }
-    sync?.view.markViewportDirty();
-  }
-
-  /** DD-064 K4: 列 index を含むまとまり（無ければ undefined）。 */
-  function columnGroupAt(colIndex: number): CompiledColumnGroup | undefined {
-    return compiledColumnGroups.find((group) => colIndex >= group.colStart && colIndex < group.colEnd);
-  }
-  /** DD-064 K4: (列, y) が 2段の見出しの上の段の、まとまりの名前の上か（まとめていない列は 2 段ぶんが列の見出し）。 */
-  function isGroupBandHit(colIndex: number, y: number): boolean {
-    return groupBandHeight > 0 && y < groupBandHeight && columnGroupAt(colIndex) !== undefined;
-  }
-
-  function resizeHit(transform: ViewportTransform, x: number, y: number): ResizeTarget | null {
-    if (sync === undefined) {
-      return null;
-    }
-    const target = resizeHitTest(transform, x, y, {
-      headerWidth: HEADER_WIDTH,
-      headerHeight,
-      rowCount: sync.view.rowAxis.count(),
-      colCount: sync.view.colAxis.count(),
-    });
-    // DD-064 K4: 上の段では、まとまりの中の列の境界（列 index とその右の列が同じまとまり）では列幅を変えない
-    // （境界の線が描かれていない所で掴めないように）。まとまりの端の境界・下の段は従来どおり。
-    if (target !== null && target.axis === 'column' && groupBandHeight > 0 && y < groupBandHeight) {
-      const group = columnGroupAt(target.index);
-      if (group !== undefined && target.index + 1 < group.colEnd) {
-        return null;
-      }
-    }
-    return target;
-  }
-
-  /**
-   * リサイズ終了。emitLayout=true（pointerup）は override のみを含む layout を 1 度だけ発火する（D2）。
-   * emitLayout=false（pointercancel/capture 喪失）は確定せず開始時サイズへ戻す（途中状態を保存しない）。
-   */
-  function finishResize(pointerId: number, emitLayout: boolean): void {
-    if (resizeDrag === null || resizeDrag.pointerId !== pointerId) {
-      return;
-    }
-    const drag = resizeDrag;
-    resizeDrag = null; // release より先に null 化（release が誘発する lostpointercapture の二重処理を無効化）
-    if (scroller.hasPointerCapture(pointerId)) {
-      scroller.releasePointerCapture(pointerId);
-    }
-    scroller.style.cursor = '';
-    if (sync === undefined) {
-      return;
-    }
-    if (emitLayout) {
-      // 列幅変更の確定で、wrap 列の折り返し行数が変わりうる → 自動行高を一括再計算する（D5 トリガー③）。
-      // ドラッグ中（live）は再計算せず確定時のみ（batch を毎 move 走らせない・perf）。
-      if (wrapEnabled && drag.axis === 'column') {
-        sync.view.recomputeAllAutoRowHeights();
-        syncSpacer();
-      }
-      emit({
-        type: 'layout',
-        columnWidths: sync.view.columnWidthOverrideRecord(),
-        rowHeights: sync.view.rowHeightOverrideRecord(),
-      });
-    } else {
-      // 途中状態を破棄して開始時サイズへ戻す（cancel/capture 喪失は確定ではない）。
-      if (drag.axis === 'column') {
-        sync.view.setColumnWidth(drag.columnId, drag.originalSize);
-      } else {
-        // 行は「開始時の手動 override 状態」へ戻す（自動高を手動化しない・Codex P2）。
-        sync.view.restoreRowHeight(drag.rowId, drag.originalManual);
-      }
-      syncSpacer();
-    }
-  }
-
-  /**
-   * ダブルクリック auto-fit（DD-027-3・C級・AC6/AC7）。対象列の非空セルを走査し、text-cache 最大幅＋列ヘッダー
-   * ラベル幅から clamp 内の列幅を求めて setColumnWidth → layout イベント発火（DD-012-4 D2 の保存契約を維持）。
-   * **wrap 列は対象外**（折り返し前提の列に内容 fit は無意味＝診断 info・無変更）。走査は 10,000 非空セルで打ち切り
-   * （それまでの最大値を採用＋診断 info・50k 行列の単発操作でも予算内）。バッジ指定値はチップ幅で見積もる。
-   */
-  function performAutoFitColumn(colIndex: number): void {
-    const backend = sync;
-    if (backend === undefined) {
-      return;
-    }
-    const columnId = backend.view.columnIdAt(colIndex);
-    if (columnId === undefined) {
-      return;
-    }
-    if (wrapColumnStrings.has(String(columnId))) {
-      diag.emit('info', 'auto-fit-skip-wrap', `auto-fit: wrap 列 ${String(columnId)} は対象外（無変更・DD-027-3）`);
-      return;
-    }
-    const rowCount = backend.view.rowAxis.count();
-    // 非空セル値を **AUTO_FIT_MAX_SCAN+1 件まで**収集して打ち切る（visitor が false を返すと queryRange が中断＝
-    // 50k 行列でも定数コスト・予算保護・Fable P2）。measure と truncated 判定は純関数 computeAutoFitContentWidth が担う。
-    const values: string[] = [];
-    const merges = currentMerges();
-    backend.view.store.queryRange(0, rowCount, colIndex, colIndex + 1, (row, col, value) => {
-      // DD-064: 結合範囲の左上以外（描かない値）と、2 列以上にまたがる結合の値（この列 1 本の幅で測る意味が無い）は測らない。
-      const merge = merges.size > 0 ? merges.at(row, col) : undefined;
-      if (merge !== undefined && (merge.rowStart !== row || merge.colStart !== col || merge.colEnd - merge.colStart > 1)) {
-        return;
-      }
-      values.push(value);
-      if (values.length > AUTO_FIT_MAX_SCAN) {
-        return false; // 打ち切り判定に十分な件数を確保したら即中断
-      }
-    });
-    const scan = computeAutoFitContentWidth(
-      values,
-      // DD-033-2: 内容幅は **display**（描画テキスト）で測る（描画と測定の一致・DD-027-3 Fable P3 の教訓踏襲）。
-      // 判定（バッジ match）は raw のまま。書式のない列は formatText が raw を返すため現行と一致（AC9）。
-      // DD-059: 括弧表記の列の正の数と 0 は描画で右に `)` 1文字分をあける＝その幅も足す（バッジは余白なしで描く）。
-      (value) => {
-        const id = String(columnId);
-        const width = cellTextCache.measureWidth(compiledDisplay?.formatText(id, value) ?? value, appearance.fontFor(id));
-        const pad = compiledDisplay?.decorationFor(id, value)?.trailingPad;
-        if (pad === undefined || compiledFormats?.getStyle(id, value)?.badge === true) {
-          return width;
-        }
-        return width + cellTextCache.measureWidth(pad, appearance.fontFor(id));
-      },
-      // バッジ指定値は丸角チップ幅（テキスト＋左右パディング）で見積もる（描画の drawBadgeCell と整合）。match は raw。
-      (value) => (compiledFormats?.getStyle(String(columnId), value)?.badge === true ? BADGE_TEXT_PADDING * 2 : 0),
-      AUTO_FIT_MAX_SCAN,
-    );
-    const width = autoFitColumnWidth({
-      maxContentWidth: scan.maxContentWidth,
-      // DD-033-2: ヘッダー幅はキャプション（指定時）で測る（未指定は列記号 A/B/…）。base-layer と同じ headerFont・描画と一致。
-      headerLabelWidth: cellTextCache.measureWidth(
-        compiledDisplay?.captionFor(String(columnId)) ?? columnLabel(colIndex),
-        appearance.headerFont,
-      ),
-      padding: CELL_TEXT_PADDING * 2,
-    });
-    backend.view.setColumnWidth(columnId, width);
-    // 列幅変更で wrap 列の折り返し行数が変わりうる（他の wrap 列は本列に依存しないが finishResize と同経路で保守的に再計算）。
-    if (wrapEnabled) {
-      backend.view.recomputeAllAutoRowHeights();
-    }
-    syncSpacer();
-    // DD-012-4 D2: override のみを含む layout を発火（利用側保存契約を維持＝F5 復元に載る）。
-    emit({
-      type: 'layout',
-      columnWidths: backend.view.columnWidthOverrideRecord(),
-      rowHeights: backend.view.rowHeightOverrideRecord(),
-    });
-    diag.emit(
-      'info',
-      'auto-fit',
-      `auto-fit col=${String(columnId)} width=${width} scanned=${scan.scanned}${scan.truncated ? ` (打ち切り>${AUTO_FIT_MAX_SCAN})` : ''}`,
-    );
-  }
-
-  scroller.addEventListener(
-    'pointermove',
-    (event) => {
-      if (sync === undefined) {
-        return;
-      }
-      const { x, y } = stageLocal(event);
-      if (resizeDrag !== null) {
-        if (event.pointerId !== resizeDrag.pointerId) {
-          return; // active pointer 以外の move は無視（マルチタッチでの誤リサイズ防止・Codex[P2]）
-        }
-        // 新サイズを Axis へ反映（markViewportDirty → rAF でライブ再描画）。editor へは流さない（D5）。
-        // 対象の左端/上端は現在 transform から毎回再解決する（scroll・構造Op に追従・Codex[P2]）。
-        const transform = currentTransform();
-        if (transform === undefined) {
-          return;
-        }
-        if (resizeDrag.axis === 'column') {
-          const idx = sync.view.colIndexOf(resizeDrag.columnId);
-          if (idx < 0) {
-            return; // 対象列が消えた（防御）
-          }
-          const edge = transform.columnHeaderRect(idx).x;
-          sync.view.setColumnWidth(resizeDrag.columnId, computeResizeSize('column', x, edge));
-        } else {
-          const idx = sync.view.rowIndexOf(resizeDrag.rowId);
-          if (idx < 0) {
-            return;
-          }
-          const edge = transform.rowHeaderRect(idx).y;
-          sync.view.setRowHeight(resizeDrag.rowId, computeResizeSize('row', y, edge));
-        }
-        syncSpacer(); // 総サイズが変わる → spacer を同期（末尾までスクロール可能に・Codex[P1]）
-        return;
-      }
-      if (selectionDrag !== null) {
-        if (event.pointerId !== selectionDrag.pointerId) {
-          return; // active pointer 以外の move は無視（マルチタッチでの誤更新防止）
-        }
-        const transform = currentTransform();
-        if (transform === undefined) {
-          return;
-        }
-        // viewport 外は直近 focus を保持する（autoscroll 対象外=既定案・Codex[P1]）。pointer capture 中は
-        // 外へ出ても move が届き、hitTest は右/下端の**外側**も Axis 上のセルへ解決してしまうため、
-        // 境界内のときだけ hit を解決する（不可視セルへ範囲が伸び、Delete で画面外の値を消す事故を防ぐ）。
-        const inViewport = x >= 0 && y >= 0 && x < viewportWidth && y < viewportHeight;
-        const hit = inViewport ? transform.hitTest(x, y) : null;
-        // DD-064: 候補（リンク・検索付き候補）は結合の左上で持つので、ポインタのセルも左上へ寄せて比べる（範囲の中の移動は
-        // 別のセルへの移動と見なさない）。
-        const hitCell = hit?.area === 'cell' ? mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex }) : null;
-        // DD-027-2[Fable P1]: ドラッグで pointer が開始セルの外（別セル・ヘッダー・viewport 外）へ動いたらリンク候補を
-        // 破棄する（=ドラッグ選択・発火なし・AC3）。selection の viewport 境界ガードより前で判定するため、
-        // ヘッダーへの離脱や高速フリックでの格子外離脱でも確実に破棄される（旧実装は cell hit ブロック内でのみ破棄し
-        // ヘッダー/viewport 外離脱が抜けていた）。
-        if (
-          linkCandidate !== null &&
-          (hitCell === null || hitCell.row !== linkCandidate.cell.row || hitCell.col !== linkCandidate.cell.col)
-        ) {
-          linkCandidate = null;
-        }
-        if (searchSelectCandidate !== null && (hitCell === null || hitCell.row !== searchSelectCandidate.row || hitCell.col !== searchSelectCandidate.col)) searchSelectCandidate = null;
-        // セル領域のみ focus を更新する（ヘッダー上・viewport 外は直近セルを保持）。
-        if (hit !== null && hit.area === 'cell') {
-          selectionCtrl.updateDrag({ row: hit.rowIndex, col: hit.colIndex });
-          sync.view.markViewportDirty();
-        }
-        return;
-      }
-      // 非ドラッグ: ヘッダー境界上でのみ resize カーソルへ切替（セル領域は cheap に既定へ戻す）。
-      if (x >= HEADER_WIDTH && y >= headerHeight) {
-        const hasLinkColumns = columnTypeRegistry?.hasAnyLinkColumn() === true;
-        // RC6（DD-052-5）: セルホバー通知。既存の link 列 cursor 判定と hitTest を共有する（二重計算しない）。
-        const transformForHover = currentTransform();
-        const hoverHit = transformForHover?.hitTest(x, y);
-        updateCellHover(hoverHit?.area === 'cell' ? hoverHit : null);
-        // DD-027-2: リンク列が 1 つでもあるときだけ列単位で cursor:pointer 判定（無ければ cheap path 不変・予算保護・AC9）。
-        if (hasLinkColumns) {
-          const desired = hoverHit !== undefined && hoverHit.area === 'cell' && isLinkColumnIndex(hoverHit.colIndex) ? 'pointer' : '';
-          if (scroller.style.cursor !== desired) {
-            scroller.style.cursor = desired;
-          }
-          return;
-        }
-        if (scroller.style.cursor !== '') {
-          scroller.style.cursor = '';
-        }
-        return;
-      }
-      updateCellHover(null); // RC6: ヘッダー/コーナー領域はホバー対象外
-      const transform = currentTransform();
-      if (transform === undefined) {
-        return;
-      }
-      const rz = resizeHit(transform, x, y);
-      scroller.style.cursor = rz === null ? '' : rz.axis === 'column' ? 'col-resize' : 'row-resize';
-    },
-    { signal },
-  );
-
-  // RC6（DD-052-5）: ポインタがグリッド外へ出たらホバーを終了する（出しっぱなしを防ぐ）。
-  scroller.addEventListener('pointerleave', () => updateCellHover(null), { signal });
-
-  scroller.addEventListener(
-    'pointerup',
-    (event) => {
-      const candidate = searchSelectCandidate;
-      const point = stageLocal(event);
-      const hit = currentTransform()?.hitTest(point.x, point.y);
-      // DD-064: 候補は結合の左上で持つ（ポインタのセルも左上へ寄せて比べる）。
-      const upCell = hit?.area === 'cell' ? mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex }) : undefined;
-      const openSearch = candidate?.pointerId === event.pointerId && upCell !== undefined
-        && upCell.row === candidate.row && upCell.col === candidate.col;
-      finishResize(event.pointerId, true);
-      finishSelectionDrag(event.pointerId, true);
-      if (openSearch) select.open();
-      // DD-027-2: 選択ドラッグ確定の直後に、リンク候補が生きていれば link-open を発火する（同一セルクリック＝📐）。
-      maybeEmitLinkOpen(event.pointerId);
-    },
-    { signal },
-  );
-  scroller.addEventListener(
-    'pointercancel',
-    (event) => {
-      finishResize(event.pointerId, false);
-      finishSelectionDrag(event.pointerId, false);
-      discardLinkCandidate(event.pointerId); // DD-027-2: 取消はリンク候補も破棄（発火しない）
-    },
-    { signal },
-  );
-  scroller.addEventListener(
-    'lostpointercapture',
-    (event) => {
-      finishResize(event.pointerId, false);
-      finishSelectionDrag(event.pointerId, false);
-      discardLinkCandidate(event.pointerId); // DD-027-2: capture 喪失はリンク候補も破棄
-    },
-    { signal },
-  );
-
-  scroller.addEventListener(
-    'pointerdown',
-    (event) => {
-      if (event.button !== 0 || sync === undefined || editor === undefined) {
-        return;
-      }
-      if (resizeDrag !== null || selectionDrag !== null) {
-        return; // ドラッグ中の追加 pointerdown は無視（capture 漏れ・状態上書き防止・Codex[P2]）
-      }
-      // DD-027-1: 選択式ドロップダウン表示中の外クリック（候補は自前 pointerdown で処理済み＝ここへ来ない）は
-      // 取消（文書無変更・focus は textarea のまま・AC3）。続けて通常のセル選択も行う（Excel 風）。
-      // Fable P3: この dismiss クリックがリンクセルに当たっても link-open は発火させない（ポップアップの打ち消しと
-      // リンク起動を1クリックで兼ねさせない）。close する前に open 状態を捕捉し、後段の候補武装を抑止する。
-      const selectDropdownWasOpen = select.isOpen();
-      if (selectDropdownWasOpen) {
-        select.close();
-      }
-      // DD-035 R2: 日付カレンダー表示中の外クリックも取消（日クリックはポップオーバー側の pointerdown で処理済み＝ここへ来ない）。
-      const datePickerWasOpen = date.isOpen();
-      if (datePickerWasOpen) {
-        date.close();
-      }
-      const transform = currentTransform();
-      if (transform === undefined) {
-        return;
-      }
-      const { x, y } = stageLocal(event);
-      // ヘッダー境界のリサイズを先取りする（editor へイベントを流さない＝D5・IME 不変）。
-      const rz = resizeHit(transform, x, y);
-      if (rz !== null) {
-        event.preventDefault();
-        if (rz.axis === 'column') {
-          const columnId = sync.view.columnIdAt(rz.index);
-          if (columnId === undefined) {
-            return;
-          }
-          resizeDrag = { axis: 'column', columnId, pointerId: event.pointerId, originalSize: sync.view.colAxis.size(rz.index) };
-        } else {
-          const rowId = sync.view.rowIdAt(rz.index);
-          if (rowId === undefined) {
-            return;
-          }
-          resizeDrag = {
-            axis: 'row',
-            rowId,
-            pointerId: event.pointerId,
-            originalSize: sync.view.rowAxis.size(rz.index),
-            // 取消復元用に開始時の手動 override 値（無ければ undefined）を捕捉する（Codex P2）。
-            originalManual: sync.view.rowHeightOverrideRecord()[String(rowId)],
-          };
-        }
-        scroller.setPointerCapture(event.pointerId);
-        scroller.style.cursor = rz.axis === 'column' ? 'col-resize' : 'row-resize';
-        return;
-      }
-      const hit = transform.hitTest(x, y);
-      if (hit.area !== 'cell') {
-        // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
-        // DD-064 K4: 2段の見出しの上の段（まとまりの名前）のクリックは通知しない（列の見出しではない）。
-        if (hit.area === 'column-header' && !isGroupBandHit(hit.colIndex, y)) {
-          const columnId = sync.view.columnIdAt(hit.colIndex);
-          if (columnId !== undefined) {
-            emit({ type: 'header-click', columnId: String(columnId) });
-          }
-        }
-        editor.pointerdownCell(null);
-        return;
-      }
-      // 常駐 textarea をキーボード入力の受け口として保持する。scroller は非フォーカサブルなため、
-      // mousedown 既定挙動が focus を body へ奪い、直後の pointerdownCell の textarea.focus() を打ち消す。
-      // これを止めないとクリック後の矢印キーが scroller のネイティブスクロールへ流れ、カレントセルが動かない。
-      event.preventDefault();
-      const hitCell = { row: hit.rowIndex, col: hit.colIndex };
-      // DD-064: 結合範囲の中のクリックは左上のセルとして扱う（アクティブセル・ドラッグの起点・リンク候補）。
-      const cell = mergeAnchorOf(currentMerges(), hitCell);
-      // Shift+クリック（Navigation・非 composition 限定）: anchor=activeCell 固定でレンジ拡張（DD-020-1 AC2）。
-      // activeCell は動かさない（editor.pointerdownCell を呼ばない）。編集中/変換中は前段消費せず従来経路
-      // （確定して移動 / pendingNavigation）のまま＝IME・編集の挙動保存（案X）。
-      if (event.shiftKey && !editor.session.isComposing() && editor.session.getPhase() === 'Navigation') {
-        // DD-064: 範囲は selection-controller が結合を含むまで広げる（焦点はクリックしたセルのまま）。
-        selectionCtrl.extendTo(editor.session.getActiveCell(), hitCell);
-        editor.focus(); // 入力受け口（常駐 textarea）を保持（以降の Shift+矢印を受けられるように）
-        sync.view.markViewportDirty();
-        return;
-      }
-      // DD-027-2: リンク候補の武装判定は pointerdownCell を呼ぶ前の位相で行う（編集中クリックは従来経路＝発火なし・AC8）。
-      // Fable P3: 選択式ドロップダウンの dismiss クリック（selectDropdownWasOpen）はリンク武装しない。
-      const linkArm = selectDropdownWasOpen || datePickerWasOpen ? null : computeLinkArm(cell, event);
-      // 通常クリック: 明示レンジを解除（同一セル再クリックでも単一選択へ戻す・AC4）→ activeCell 移動。
-      selectionCtrl.clear();
-      editor.pointerdownCell(cell);
-      // pointerdownCell 処理後に Navigation なら（元から Navigation / 編集は確定済み）ドラッグ選択を開始する。
-      // composition 中は開始しない（クリックは pendingNavigation 経路のまま・composition を乱さない・AC7）。
-      if (!editor.session.isComposing() && editor.session.getPhase() === 'Navigation') {
-        searchSelectCandidate = !selectDropdownWasOpen && !datePickerWasOpen && !event.ctrlKey && !event.metaKey && !event.altKey
-          && select.isSearchableSelectColumnIndex(cell.col)
-          ? { pointerId: event.pointerId, row: cell.row, col: cell.col } : null;
-        selectionDrag = { pointerId: event.pointerId };
-        selectionCtrl.beginDrag(cell);
-        scroller.setPointerCapture(event.pointerId);
-        // RC6（DD-052-5・Codex P2）: 範囲選択ドラッグ中は pointermove 中の hover 更新（updateCellHover）を
-        // 呼ばない分岐へ入るため、ドラッグ開始時点で明示的にホバーを終了させる（consumer のツールチップが
-        // 開始セルに残り続けるのを防ぐ）。
-        updateCellHover(null);
-      }
-      // 候補は既存処理の後に記録する（既存経路は無変更のまま上乗せ・pointerup で発火）。編集中クリックは linkArm=null。
-      linkCandidate = linkArm;
-      sync.view.markViewportDirty();
-    },
-    { signal },
-  );
-
-  scroller.addEventListener(
-    'dblclick',
-    (event) => {
-      if (sync === undefined || editor === undefined) {
-        return;
-      }
-      const transform = currentTransform();
-      if (transform === undefined) {
-        return;
-      }
-      const rect = stage.getBoundingClientRect();
-      const localX = event.clientX - rect.left;
-      const localY = event.clientY - rect.top;
-      // DD-027-3: 列境界のダブルクリック → auto-fit（現状ヘッダー境界 dblclick は未使用＝既存 doubleClickCell と衝突しない）。
-      // resizeHitTest を先取りし、列境界なら auto-fit して return（セル編集 dblclick へ流さない）。行境界は対象外（無処理）。
-      const rz = resizeHit(transform, localX, localY);
-      if (rz !== null && rz.axis === 'column') {
-        event.preventDefault();
-        performAutoFitColumn(rz.index);
-        return;
-      }
-      const hit = transform.hitTest(localX, localY);
-      if (hit.area === 'cell') {
-        // DD-033-1: readOnly はセル編集（doubleClickCell）・選択式ドロップダウンを開かない（入口抑止）。
-        // 列境界 dblclick の auto-fit（上の分岐）は閲覧系ゆえ維持する（要確認4・view-local layout）。
-        if (readonlySwitch.isReadOnly()) {
-          diag.emit('info', 'readonly-blocked', 'readOnly: ダブルクリック編集を抑止（閲覧専用）');
-          return;
-        }
-        // DD-035 R4: readOnly 列のセルは編集 UI（textarea・ドロップダウン・カレンダー）を一切開かない（入口抑止）。
-        if (isReadOnlyRowIndex(hit.rowIndex)) {
-          diag.emit('info', 'readonly-row-blocked', `readOnlyRows: 行 ${String(sync.view.rowIdAt(hit.rowIndex))} のダブルクリック編集を抑止`);
-          return;
-        }
-        if (isReadOnlyColumnIndex(hit.colIndex)) {
-          diag.emit('info', 'readonly-column-blocked', `readOnlyColumns: 列 ${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
-          return;
-        }
-        // RC3（DD-052-3・Codex P2）: 行データ指定のセル単位 readOnly も同じ入口抑止に含める（列/行版のみ判定
-        // していたため、行データで readOnly にしたセルを dblclick で開けてしまっていた）。
-        if (isReadOnlyCellIndex(hit.rowIndex, hit.colIndex)) {
-          diag.emit('info', 'readonly-cell-blocked', `readOnlyColumns（行データ指定）: セル row=${String(sync.view.rowIdAt(hit.rowIndex))} col=${String(sync.view.columnIdAt(hit.colIndex))} のダブルクリック編集を抑止`);
-          return;
-        }
-        // DD-064: 結合範囲は読むだけ（K3）。編集 UI（textarea・候補欄・カレンダー）を開かない。
-        if (isMergedCellIndex(hit.rowIndex, hit.colIndex)) {
-          const anchor = mergeAnchorOf(currentMerges(), { row: hit.rowIndex, col: hit.colIndex });
-          diag.emit('info', 'merged-cell-blocked', `mergedCells: 結合範囲（左上 row=${String(sync.view.rowIdAt(anchor.row))} col=${String(sync.view.columnIdAt(anchor.col))}）のダブルクリック編集を抑止`);
-          return;
-        }
-        // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列
-        // （allowFreeText:true）も対象＝候補は明示操作で開き、自由入力は印字文字から始める（DD-037 決定①）。
-        // 先に activeCell を対象セルへ合わせてから開く（openSelectForActive は activeCell を読む）。
-        if (select.isSelectColumnIndex(hit.colIndex)) {
-          editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
-          select.open();
-          return;
-        }
-        // DD-035 R2: 日付列（openOn='dblclick'）は textarea 編集ではなくカレンダーを開く。openOn='icon' は従来どおり。
-        if (date.isDblclickDateColumnIndex(hit.colIndex)) {
-          editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
-          date.open();
-          return;
-        }
-        editor.doubleClickCell({ row: hit.rowIndex, col: hit.colIndex });
-      }
-    },
-    { signal },
-  );
-
-  scroller.addEventListener(
-    'scroll',
-    () => {
-      sync?.view.markViewportDirty();
-    },
-    { signal },
-  );
+  registerPointerInteraction({
+    stage,
+    scroller,
+    signal,
+    diag,
+    headerHeight,
+    groupBandHeight,
+    wrapEnabled,
+    wrapColumnStrings,
+    cellTextCache,
+    selectionCtrl,
+    merges,
+    cellLock,
+    select,
+    date,
+    hover,
+    link,
+    emit,
+    backend: () => sync,
+    editor: () => editor,
+    registry: () => columnTypeRegistry,
+    appearance: () => appearance,
+    display: () => compiledDisplay,
+    formats: () => compiledFormats,
+    columnGroups: () => compiledColumnGroups,
+    isReadOnly: () => readonlySwitch.isReadOnly(),
+    currentTransform,
+    syncSpacer,
+    viewportSize: () => ({ width: viewportWidth, height: viewportHeight }),
+  });
 
   const canvasLayout = createCanvasLayout(stage, [baseCanvas, overlayCanvas], syncLayout);
   const resizeObserver = new ResizeObserver(() => {
@@ -1875,7 +1196,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return id !== undefined && wrapColumnStrings.has(String(id));
       },
       // DD-027-2: リンク列はリンク色＋下線・自セル内クリップで描く（列単位・registry 判定）。リンク列が無ければ常に false。
-      isLinkColumn: (colIndex) => isLinkColumnIndex(colIndex),
+      isLinkColumn: (colIndex) => link.isLinkColumnIndex(colIndex),
       // DD-027-3: セル書式の解決フック。書式が 1 つも無ければ束縛せず描画コスト増ゼロ（可視非空セルの O(1) lookup）。
       ...(compiledFormats?.hasAny() === true
         ? {
@@ -2434,7 +1755,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     clampActiveCellToDocument(standalone);
     // DD-060: 状態表示も作り直されたので、ホバー中のセルの状態が変わっていれば cell-hover を出し直す
     // （クランプの後に呼ぶ: 出し直しは構造 flush を同期で走らせうるため、クランプとの順序を従来どおりに保つ）。
-    refreshHoverStatus();
+    hover.refreshStatus();
   }
 
   /** setData 直後に activeCell が新文書の範囲外なら範囲内へ寄せる（applyStandaloneData の上記コメント参照）。 */
@@ -2473,7 +1794,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     // DD-060: 状態表示だけの変更は Undo に記録しない（文書のデータではない）。ホバー中のセルが変わっていれば出し直す。
     if (result.cellStatusUpdated) {
-      refreshHoverStatus();
+      hover.refreshStatus();
     }
   }
 
@@ -2511,7 +1832,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     if (updated) {
       sync?.view.markCellDirty();
-      refreshHoverStatus();
+      hover.refreshStatus();
     }
   }
 
