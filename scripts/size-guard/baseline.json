@@ -4,9 +4,6 @@
     "packages/collab/src/session.ts": {
       "lines": 1046
     },
-    "packages/grid/src/mount-controller.ts": {
-      "lines": 1131
-    },
     "packages/render/src/base-layer.ts": {
       "lines": 1107
     },
