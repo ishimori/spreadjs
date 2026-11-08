@@ -11,35 +11,14 @@ import type { SetCellsOperation } from '@nanairo-sheet/core';
 import { createColumnId, createDocumentId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId } from '@nanairo-sheet/types';
 import type { ClientSession, Clock, IdGenerator, PresenceUpdate, SessionEvent } from '@nanairo-sheet/collab';
-import {
-  CELL_TEXT_LINE_HEIGHT,
-  backingSize,
-  captureAnchor,
-  columnLabel,
-  correctScroll,
-  createBaseLayer,
-  DEFAULT_BASE_COLORS,
-  createOverlayLayer,
-  createTextMetricsCache,
-  createViewportTransform,
-  mergedCellRect,
-  normalizeDpr,
-} from '@nanairo-sheet/render';
-import type { CellStatusMark, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
-import {
-  EMPTY_MERGE_INDEX,
-  expandRangeToMerges,
-  mergeAnchorOf,
-  moveAcrossMerges,
-  singleCell,
-  stepAcrossMerges,
-} from '@nanairo-sheet/selection';
-import type { CellRange, MergeMoveDirection } from '@nanairo-sheet/selection';
-import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
+import { CELL_TEXT_LINE_HEIGHT, createTextMetricsCache } from '@nanairo-sheet/render';
+import type { TextMetricsCache } from '@nanairo-sheet/render';
+import { EMPTY_MERGE_INDEX, moveAcrossMerges, stepAcrossMerges } from '@nanairo-sheet/selection';
+import type { MergeMoveDirection } from '@nanairo-sheet/selection';
+import type { GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
 import { cellScalarToDisplay } from './document-view';
-import type { PlacementConfig } from './editor-placement';
 import { ColumnTypeConfigError, createColumnTypeRegistry } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
 import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
@@ -56,12 +35,9 @@ import { createIntegrationEditor } from './integration-editor';
 import { compileAppearance } from './appearance';
 import type { IntegrationEditor } from './integration-editor';
 import { createLoadMetrics } from './initial-load-metrics';
-import type { VisibleArea } from './popup-placement';
-import { toPresenceUsers } from './presence-adapter';
 import { toGridRemoteChange } from './remote-change';
 import { createSessionSync } from './session-sync';
 import { buildScaffold } from './dom-scaffold';
-import { createCanvasLayout } from './canvas-layout';
 import { createSelectionController, decideNavigationIntercept } from './selection-controller';
 import { shouldSuppressReadonlyKey } from './readonly-policy';
 import { decideRowStructureKey } from './row-operations';
@@ -70,7 +46,6 @@ import { GridBootError, toCompensationConflictCode } from './error-codes';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
 import { cellStatusInvalidMessage, createCellStatusStore, validateCellStatusColors } from './cell-status';
-import type { CellStatusStore } from './cell-status';
 import { createStandaloneSession } from './standalone-session';
 import type { StandaloneSession } from './standalone-session';
 import { validateStandaloneOptions } from './standalone-options';
@@ -91,15 +66,7 @@ import type {
   GridStandaloneMountOptions,
   GridStandaloneRow,
 } from './index';
-import {
-  COL_WIDTH,
-  HEADER_HEIGHT,
-  HEADER_WIDTH,
-  PENDING_COMMANDS_MAX,
-  ROW_HEIGHT,
-  TICK_INTERVAL_MS,
-  errorMessage,
-} from './mount/constants';
+import { COL_WIDTH, HEADER_HEIGHT, HEADER_WIDTH, ROW_HEIGHT, TICK_INTERVAL_MS, errorMessage } from './mount/constants';
 import { createDebugApi } from './mount/debug-api';
 import { createEvents, toGridEvent } from './mount/events';
 import { createCellLock } from './mount/cell-lock';
@@ -112,6 +79,9 @@ import { createEditSubmit } from './mount/edit-submit';
 import { createCellHover } from './mount/hover';
 import { createLinkClick } from './mount/link-click';
 import { registerPointerInteraction } from './mount/pointer';
+import { createMountBaseLayer } from './mount/base-layer-options';
+import { createCommands } from './mount/commands';
+import { createRender } from './mount/render';
 
 
 interface ResolvedConfig {
@@ -143,7 +113,7 @@ function mergeMoveDirectionOf(key: string, shiftKey: boolean): MergeMoveDirectio
 export function createGridController(target: GridMountTarget, options: GridMountOptions): GridInstance {
   let appearance = compileAppearance(undefined, [], () => true, () => undefined);
   const scaffold = buildScaffold(target.container);
-  const { stage, baseCanvas, overlayCanvas, scroller, spacer, baseCtx, overlayCtx } = scaffold;
+  const { stage, scroller, baseCtx } = scaffold;
 
   // モード判別（DD-024・決定①）。標準は共同編集（mode 省略時）。単独モードは serverUrl/WS を使わない。
   const isStandalone = options.mode === 'standalone';
@@ -228,26 +198,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledDisplay: CompiledColumnDisplay | undefined;
   // DD-064 K4: 2段の見出しのまとまり（列 index に解決済み・columnOrder 解決後に生成・fail-fast）。空なら 1 段。
   let compiledColumnGroups: readonly CompiledColumnGroup[] = [];
-  let baseLayer: ReturnType<typeof createBaseLayer> | undefined;
-  let dpr = normalizeDpr(window.devicePixelRatio);
-  let viewportWidth = 0;
-  let viewportHeight = 0;
-  let selection: CellRange | null = null;
   // 矩形範囲選択の所有者（DD-020-1 案X）。activeCell の所有は editor-state-machine のまま・レンジのみここが持つ。
   // DD-064: 直前に描いた結合範囲で範囲を広げる（mergeRegistry は下で生成。呼ばれるのは配線後なので前方参照で足りる）。
   const selectionCtrl = createSelectionController({ merges: () => merges.current() });
   // Undo/Redo スタックの所有者（DD-020-3）。確定単位（1 op）ごとに逆値を保持し補償 SetCells を生成する。
   const undoCtrl = createUndoController();
-  let firstDataDrawn = false;
   let lastSessionEvent: SessionEvent | undefined;
   let resolvedDocumentId = options.documentId;
   let hasEverConnected = false; // 一度でも接続確立したか（初回接続失敗のみ connect error として通知・P1-2）
-  let focusRequested = false; // boot 完了前の focus() 要求（初回配置後に適用・P2-3）
-  // DD-035 R6: 命令 API（scrollToRow/setActiveCell）の保留キュー。boot 未完了・初回描画前・構造 dirty 中
-  // （setData／行挿入削除の直後で rowAxis が未再構築）は RowId→index が旧 Axis を指し、しかも masterLoop の
-  // scroll anchor 補正が直後に scrollTop を上書きするため、次の構造 flush（補正の後）まで保留して適用する。
-  // これにより `setData(...)` → 直後の `scrollToRow(newId)` が成立する（松下 DD-012-1 の実測課題）。
-  let pendingCommands: Array<() => void> = [];
   // DD-049 H4/H5: 共同編集モードの ClientSession（参加者一覧の join 判定・他者 presence の読取に使う）。単独モードは undefined。
   let collabSession: ClientSession | undefined;
 
@@ -262,7 +220,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const emit = events.emit;
   const abort = new AbortController();
   const { signal } = abort;
-  let rafId = 0;
   let intervalId = 0;
   let destroyed = false;
 
@@ -276,7 +233,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     frozenRowCount: () => frozenRowCount,
     frozenColCount: () => frozenColCount,
   });
-  const { current: currentMerges, any: hasMergedCells, isMergedCellIndex, isMergedCellId } = merges;
+  const { current: currentMerges, any: hasMergedCells, isMergedCellIndex } = merges;
 
   // DD-033-1・DD-056 H12: 読み取り専用の切り替え（setReadOnly・flush・変換の終わり待ち）は mount/readonly-switch.ts。
   // 生成時に mount オプションの readOnly を検査して診断を出す（readonly-invalid・readonly-mode）。
@@ -325,7 +282,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     isDestroyed: () => destroyed,
     backend: () => sync,
     editor: () => editor,
-    isFirstDataDrawn: () => firstDataDrawn,
+    isFirstDataDrawn: () => render.isFirstDataDrawn(),
   });
   const { submitSetCells, notifyRowReject, performInsertRows, performDeleteRows } = editSubmit;
   // 範囲クリア・clipboard・Undo/Redo・実行前拒否の通知（区画⑦の後半・mount/edit-commands.ts）。結線は attachBackendRendering。
@@ -358,10 +315,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     registry: () => columnTypeRegistry,
     appearance: () => appearance,
     isReadOnly: () => readonlySwitch.isReadOnly(),
-    ensureActiveCellVisible,
-    currentTransform,
-    placementConfig,
-    visibleArea,
+    ensureActiveCellVisible: () => render.ensureActiveCellVisible(),
+    currentTransform: () => render.currentTransform(),
+    placementConfig: () => render.placementConfig(),
+    visibleArea: () => render.visibleArea(),
     submitSetCells,
     notifyRowReject,
   });
@@ -375,10 +332,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     registry: () => columnTypeRegistry,
     isReadOnly: () => readonlySwitch.isReadOnly(),
     closeSelect: () => select.close(),
-    ensureActiveCellVisible,
-    currentTransform,
-    placementConfig,
-    visibleArea,
+    ensureActiveCellVisible: () => render.ensureActiveCellVisible(),
+    currentTransform: () => render.currentTransform(),
+    placementConfig: () => render.placementConfig(),
+    visibleArea: () => render.visibleArea(),
     submitSetCells,
     notifyRowReject,
   });
@@ -404,435 +361,77 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const frozenRowCount = resolveFrozenCount(options.frozenRowCount, 'frozenRowCount');
   const frozenColCount = resolveFrozenCount(options.frozenColumnCount, 'frozenColumnCount');
 
-  // ---- 描画層（overlay は即時・base は接続後の DocumentView へ束縛するため遅延生成）----
-  const overlayLayer = createOverlayLayer({
-    ctx: overlayCtx,
-    headerWidth: HEADER_WIDTH,
+  // ---- 描画（区画⑨・mount/render.ts・base-layer-options.ts）----
+  const render = createRender({
+    scaffold,
     headerHeight,
-  });
-
-  function overscanY(): number {
-    return viewportHeight * 0.6;
-  }
-  function overscanX(): number {
-    return COL_WIDTH * 3;
-  }
-
-  function currentTransform(): ViewportTransform | undefined {
-    if (sync === undefined) {
-      return undefined;
-    }
-    return createViewportTransform({
-      rowAxis: sync.view.rowAxis,
-      colAxis: sync.view.colAxis,
-      headerWidth: HEADER_WIDTH,
-      headerHeight,
-      frozenRowCount,
-      frozenColCount,
-      viewportWidth,
-      viewportHeight,
-      scrollLeft: scroller.scrollLeft,
-      scrollTop: scroller.scrollTop,
-      overscanX: overscanX(),
-      overscanY: overscanY(),
-    });
-  }
-
-  function placementConfig(): PlacementConfig {
-    return {
-      headerWidth: HEADER_WIDTH,
-      headerHeight,
-      viewportWidth,
-      viewportHeight,
-      frozenRowCount,
-      frozenColCount,
-    };
-  }
-
-  function frameViewport(transform: ViewportTransform): FrameViewport {
-    return { transform, viewportWidth, viewportHeight, dpr };
-  }
-
-  function overlayFrame(transform: ViewportTransform): OverlayFrame {
-    const merges = currentMerges();
-    return {
-      transform,
-      viewportWidth,
-      viewportHeight,
-      dpr,
-      // 明示レンジ（DD-020-1）があればそれを、無ければ activeCell の単一セル（onChange が更新する shadow）を描く。
-      // DD-064: 単一セルが結合の左上なら枠は結合範囲全体（明示レンジ・ドラッグは selection-controller が広げ済み）。
-      selection: selectionCtrl.getRange() ?? (selection === null ? null : expandRangeToMerges(merges, selection)),
-      dragRange: selectionCtrl.getDragRange(),
-      presences: sync !== undefined ? toPresenceUsers(sync.session.knownPresences(), sync.view) : [],
-      ...(merges.size > 0 ? { mergedRanges: merges } : {}),
-    };
-  }
-
-  /**
-   * DD-064: 結合を今の行の並びに張り直す（描画の直前にだけ呼ぶ＝setData・setMergedCells の呼ぶ順によらない・contract §1.2）。
-   * 張った結合が変わったら、wrap 列の自動行高を測り直し（結合範囲のセルは測らない）、アクティブセルを結合の左上へ寄せ、
-   * textarea のロックを取り直す。
-   */
-  function refreshMerges(): void {
-    if (merges.resolve()) {
-      afterMergesChanged();
-    }
-  }
-
-  /** DD-064: 張った結合が変わった後の追従（wrap 列の自動行高・アクティブセルの左上への正規化・textarea のロック）。 */
-  function afterMergesChanged(): void {
-    if (wrapEnabled && sync !== undefined) {
-      sync.view.recomputeAllAutoRowHeights();
-      syncSpacer();
-    }
-    // Codex P2: 開いている候補欄・カレンダーのセルが結合範囲になったら閉じる（開いたままだと確定で読むだけのセルへ書ける）。
-    // どちらもアクティブセル（編集中は編集セル）に開くので、アクティブセルで判定する。確定の時にも対象を確かめる（二重の防御）。
-    const active = editor?.session.getActiveCell();
-    if (active !== undefined && isMergedCellIndex(active.row, active.col)) {
+    frozenRowCount,
+    frozenColCount,
+    wrapEnabled,
+    metrics,
+    selectionCtrl,
+    merges,
+    backend: () => sync,
+    editor: () => editor,
+    isDestroyed: () => destroyed,
+    createBaseLayer: (backend) =>
+      createMountBaseLayer(backend, {
+        ctx: baseCtx,
+        headerHeight,
+        groupBandHeight,
+        frozenColCount,
+        wrapEnabled,
+        wrapColumnStrings,
+        cellTextCache,
+        cellStatusStore,
+        currentMerges,
+        isLinkColumnIndex: (colIndex) => link.isLinkColumnIndex(colIndex),
+        appearance: () => appearance,
+        formats: () => compiledFormats,
+        backgrounds: () => compiledBackgrounds,
+        rowBackgrounds: () => compiledRowBackgrounds,
+        statusColors: () => compiledStatusColors,
+        borders: () => compiledBorders,
+        display: () => compiledDisplay,
+        columnGroups: () => compiledColumnGroups,
+      }),
+    refreshPopupPlacement: (transform) => {
+      select.refreshPlacement(transform);
+      date.refreshPlacement(transform);
+    },
+    closePopups: () => {
       select.close();
       date.close();
-    }
-    merges.normalizeActiveCell();
-    syncCellLock();
-  }
-
-  function redraw(): void {
-    if (sync === undefined || baseLayer === undefined) {
-      return;
-    }
-    refreshMerges(); // DD-064: 描く前に結合を今の行に張る（アクティブセルの正規化で scroll が動きうるので transform より先）
-    const transform = currentTransform();
-    if (transform === undefined) {
-      return;
-    }
-    baseLayer.draw(frameViewport(transform));
-    overlayLayer.draw(overlayFrame(transform));
-    editor?.refreshPlacement(transform, placementConfig());
-    // DD-027-1: 選択式ドロップダウン（listbox）と ▼ インジケーターを scroll/構造Op に追従させる。
-    select.refreshPlacement(transform);
-    // DD-035 R2: 日付カレンダー（ポップオーバー）と 📅 インジケーターも同様に追従させる。
-    date.refreshPlacement(transform);
-  }
-
-  /**
-   * 指定セルが body viewport の外にあれば最小スクロールで可視域へ入れる（Excel 準拠の scroll-follow）。
-   * activeCell 移動（onChange）と Shift+矢印の focus 端拡張（DD-020-1）で呼ぶ。可視セルなら何もしない
-   * （クリックで勝手にスクロールしない）。scroller.scrollTop/Left への代入は同期反映され、scroll イベント→
-   * 再描画で追従する。
-   */
-  function ensureCellVisible(cell: CellPosition, axes: 'both' | 'vertical' | 'horizontal' = 'both'): void {
-    const transform = currentTransform();
-    if (transform === undefined) {
-      return;
-    }
-    // DD-064: 結合の左上なら範囲全体を見せる（範囲が可視域より大きければ上端・左端を優先する）。
-    const merge = hasMergedCells() ? currentMerges().at(cell.row, cell.col) : undefined;
-    const rect = merge !== undefined ? mergedCellRect(transform, merge) : transform.cellRect(cell.row, cell.col);
-    const bodyOriginX = HEADER_WIDTH + transform.frozenWidth();
-    const bodyOriginY = headerHeight + transform.frozenHeight();
-    // 固定行/列のセルはスクロール非依存ゆえ追従不要（body セルのみ）。
-    // DD-036 C4: 軸指定（scrollToRow=縦のみ / scrollToColumn=横のみ）。既定 'both' は従来と同一挙動。
-    // DD-046: stageにはネイティブスクロールバーも含まれる。文字が隠れない可視域へ収める。
-    const { width: visibleWidth, height: visibleHeight } = visibleArea();
-    if (axes !== 'horizontal' && cell.row >= frozenRowCount) {
-      if (rect.y < bodyOriginY) {
-        scroller.scrollTop += rect.y - bodyOriginY; // 上へはみ出し → スクロールアップ（負）
-      } else if (rect.y + rect.height > visibleHeight) {
-        const down = rect.y + rect.height - visibleHeight;
-        scroller.scrollTop += merge === undefined ? down : Math.min(down, rect.y - bodyOriginY);
-      }
-    }
-    if (axes !== 'vertical' && cell.col >= frozenColCount) {
-      if (rect.x < bodyOriginX) {
-        scroller.scrollLeft += rect.x - bodyOriginX;
-      } else if (rect.x + rect.width > visibleWidth) {
-        const right = rect.x + rect.width - visibleWidth;
-        scroller.scrollLeft += merge === undefined ? right : Math.min(right, rect.x - bodyOriginX);
-      }
-    }
-  }
-
-  function ensureActiveCellVisible(): void {
-    if (editor === undefined) {
-      return;
-    }
-    ensureCellVisible(editor.session.getActiveCell());
-  }
-
-  /**
-   * DD-046・DD-055: 本体の可視域（stage 座標の幅・高さ）。stage にはネイティブスクロールバーも含まれるため scroller の
-   * client 寸法で制限する（初期レイアウトで 0 なら stage の寸法）。セルの追従と、候補欄・wrap 列の編集欄を収める先に使う。
-   */
-  function visibleArea(): VisibleArea {
-    return {
-      width: Math.min(viewportWidth, scroller.clientWidth || viewportWidth),
-      height: Math.min(viewportHeight, scroller.clientHeight || viewportHeight),
-    };
-  }
-
-  // ---- DD-035 R6: 命令 API（scrollToRow / setActiveCell）----
-  /** 命令を即時実行できる状態か（backend 配線済み・初回描画済み・構造 dirty なし）。 */
-  function canRunCommandsNow(): boolean {
-    return sync !== undefined && firstDataDrawn && !sync.view.hasStructuralDirty();
-  }
-
-  /**
-   * 列方向の命令（scrollToColumn）を即時実行できる状態か（DD-036・Codex P2）。
-   * 行方向と違い**初回描画（firstDataDrawn）を条件にしない**: 行が 0 件の文書では `markFirstDataDraw` が永遠に
-   * 立たず、列だけを持つ空シートで `scrollToColumn` がキューに残り続けるため。列 Axis と viewport の寸法が
-   * 揃っていれば横スクロールは成立する。
-   */
-  function canRunColumnCommandsNow(): boolean {
-    return (
-      sync !== undefined &&
-      !sync.view.hasStructuralDirty() &&
-      sync.view.colAxis.count() > 0 &&
-      viewportWidth > 0
-    );
-  }
-
-  /**
-   * 命令を即時実行するか、次の構造 flush 後まで保留する（保留中の複数命令は呼び出し順に適用する）。
-   * 保留は上限（PENDING_COMMANDS_MAX）で古い順に捨てる: 空文書（初回描画が起きない）や boot 失敗のまま利用側が
-   * 呼び続けても無限に溜めない（最後の要求だけ意味を持つ操作なので古いものは安全に捨てられる）。
-   */
-  function runOrDefer(command: () => void, canRunNow: () => boolean = canRunCommandsNow): void {
-    if (destroyed) {
-      return;
-    }
-    // Codex P1: 構造 dirty（setData／行挿入削除の直後）なら次 rAF を待たず**同期的に**構造 flush してから適用する。
-    // 保留のままだと、その間に届いた利用者入力（ボタン→insertRows→setActiveCell 直後の打鍵）が旧アクティブセルで
-    // BeginEdit し、保留命令の pointerdownCell がそれを旧セルへ確定してしまう（誤セル確定）。
-    if (sync !== undefined && firstDataDrawn && sync.view.hasStructuralDirty()) {
-      flushStructural(sync.view);
-    }
-    if (canRunNow()) {
-      command();
-      return;
-    }
-    if (pendingCommands.length >= PENDING_COMMANDS_MAX) {
-      pendingCommands.shift();
-      diag.emit('warn', 'command-queue-overflow', `命令 API の保留が上限 ${PENDING_COMMANDS_MAX} を超えたため最古の要求を破棄`);
-    }
-    pendingCommands.push(command);
-  }
-
-  /**
-   * masterLoop が構造 flush（scroll anchor 補正含む）の後に呼ぶ: 保留命令を新 Axis で適用する。
-   * DD-036（Codex P2）: 行が 0 件のままでも列命令は成立するため、行 ready・列 ready のどちらかで drain する
-   * （個々の命令は自分の前提が崩れていれば内部で no-op＋診断する）。
-   */
-  function drainPendingCommands(): void {
-    if (pendingCommands.length === 0 || !(canRunCommandsNow() || canRunColumnCommandsNow())) {
-      return;
-    }
-    const commands = pendingCommands;
-    pendingCommands = [];
-    for (const command of commands) {
-      command();
-    }
-  }
-
-  /**
-   * scrollToRow の実体（可視化のみ・横スクロールは動かさない）。
-   * DD-036 C4: 軸指定 'vertical' で明示する（従来の「col: 0 は固定列だから横が動かない」という暗黙前提を廃止＝
-   * `frozenColumnCount: 0` でも横スクロールが動かない）。
-   */
-  function performScrollToRow(rowId: string): void {
-    const backend = sync;
-    if (backend === undefined) {
-      return;
-    }
-    const row = backend.view.rowIndexOf(createRowId(rowId));
-    if (row < 0) {
-      diag.emit('warn', 'scroll-row-unknown', `scrollToRow: 未知の行 rowId=${rowId}（tombstone/未注入）→ 無視`);
-      return;
-    }
-    ensureCellVisible({ row, col: 0 }, 'vertical');
-    backend.view.markViewportDirty();
-    diag.emit('info', 'scroll-to-row', `scrollToRow: rowId=${rowId} index=${row}`);
-  }
-
-  /** scrollToColumn の実体（DD-036 C4・performScrollToRow の鏡像。縦スクロールは動かさない）。 */
-  function performScrollToColumn(columnId: string): void {
-    const backend = sync;
-    if (backend === undefined) {
-      return;
-    }
-    const col = backend.view.colIndexOf(createColumnId(columnId));
-    if (col < 0) {
-      diag.emit('warn', 'scroll-column-unknown', `scrollToColumn: 未知の列 columnId=${columnId} → 無視`);
-      return;
-    }
-    ensureCellVisible({ row: 0, col }, 'horizontal');
-    backend.view.markViewportDirty();
-    diag.emit('info', 'scroll-to-column', `scrollToColumn: columnId=${columnId} index=${col}`);
-  }
-
-  /**
-   * setActiveCell の実体。セルクリック（scroller pointerdown）と同じ経路: 開いている選択式/日付ポップアップを閉じ、
-   * 明示レンジを解除し、editor.pointerdownCell（編集中は確定して移動・composition 中は pendingNavigation・常駐 textarea へ
-   * focus）→ 可視化。activeCell の所有は editor-state-machine のまま（無改変・I-3）。
-   */
-  function performSetActiveCell(rowId: string, columnId: string): void {
-    const backend = sync;
-    if (backend === undefined || editor === undefined) {
-      return;
-    }
-    const row = backend.view.rowIndexOf(createRowId(rowId));
-    const col = backend.view.colIndexOf(createColumnId(columnId));
-    if (row < 0 || col < 0) {
-      diag.emit(
-        'warn',
-        'active-cell-unknown',
-        `setActiveCell: 未知のセル rowId=${rowId} columnId=${columnId}（row=${row} col=${col}）→ 無視`,
-      );
-      return;
-    }
-    select.close();
-    date.close();
-    selectionCtrl.clear();
-    // DD-064: 結合範囲の中を指したら左上へ（範囲の中は左上のセルとして選ぶ）。
-    const target = mergeAnchorOf(currentMerges(), { row, col });
-    editor.pointerdownCell(target);
-    ensureCellVisible(target); // composition 中は activeCell が動かない（pendingNavigation）が可視化はしておく
-    backend.view.markViewportDirty();
-    diag.emit('info', 'set-active-cell', `setActiveCell: rowId=${rowId} columnId=${columnId} → (${target.row},${target.col})`);
-  }
-
-  function provisionCanvas(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
-    const backing = backingSize({ width: viewportWidth, height: viewportHeight }, dpr);
-    // DD-058: 表示サイズも実画素の整数にそろえ、bitmap を 1:1 で合成する。
-    canvas.style.width = `${backing.width / dpr}px`;
-    canvas.style.height = `${backing.height / dpr}px`;
-    canvas.width = backing.width;
-    canvas.height = backing.height;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  function syncSpacer(): void {
-    const transform = currentTransform();
-    if (transform === undefined) {
-      return;
-    }
-    spacer.style.width = `${transform.scrollableWidth()}px`;
-    spacer.style.height = `${transform.scrollableHeight()}px`;
-  }
-
-  function syncLayout(): void {
-    dpr = normalizeDpr(window.devicePixelRatio);
-    viewportWidth = Math.max(0, Math.floor(stage.clientWidth));
-    viewportHeight = Math.max(0, Math.floor(stage.clientHeight));
-    provisionCanvas(baseCanvas, baseCtx);
-    provisionCanvas(overlayCanvas, overlayCtx);
-    baseLayer?.textCache.clear();
-    // DPR・Web font 変更で行分割キャッシュが消える → 折り返し行数が変わりうるため自動行高を再計算する（D5 ③相当）。
-    if (wrapEnabled) {
-      sync?.view.onTextMetricsChanged();
-    }
-    syncSpacer(); // 自動行高変化で総サイズが変わる → spacer を更新
-
-    sync?.view.markViewportDirty();
-  }
-
-  function markFirstDataDraw(): void {
-    if (!firstDataDrawn && sync !== undefined && sync.view.rowAxis.count() > 0) {
-      firstDataDrawn = true;
-      metrics.mark('firstDraw');
-      metrics.mark('firstOperable');
+    },
+    syncCellLock,
+    onFirstDataDrawn: () => {
       validateReadOnlyRowsOnce(); // DD-036 C3: 未知 rowId の診断 warn（初回描画後に 1 回だけ）
       validateRowBackgroundsOnce(); // DD-045: 未知 RowId の診断 warn（初回描画後に 1 回だけ）
-      if (!rowBordersChecked && compiledBorders !== undefined && sync !== undefined) {
-        rowBordersChecked = true;
-        const unknown = compiledBorders.rowIds.filter((id) => sync?.view.rowIndexOf(createRowId(id)) === -1);
-        if (unknown.length > 0) diag.emit('warn', 'row-border-unknown', `rowBorders: 未知の行 ${unknown.join(', ')} → 到着後に適用`);
-      }
+      validateRowBordersOnce();
       syncCellLock(); // DD-036（Codex P2）: 初回データ描画時点の activeCell（0,0）のロックを確定させる
-      if (focusRequested) {
-        focusRequested = false;
-        editor?.focus(); // boot 前に要求された focus を初回配置後に適用する（P2-3）
-      }
-    }
-  }
-
-  /**
-   * 構造Op の flush: scroll anchor 捕捉 → rowAxis 再構築 → K3 再ベース → scroll 補正（画面が跳ばないように・§13.4）。
-   * masterLoop（rAF）が呼ぶほか、DD-035 R6 の命令 API（scrollToRow/setActiveCell）が構造 dirty 中に呼ばれたとき
-   * **同期的に**呼ぶ（次 rAF まで保留すると、その間の利用者入力が旧アクティブセルへ届き誤セル確定になる＝Codex P1）。
-   */
-  function flushStructural(view: NonNullable<typeof sync>['view']): void {
-    const hasBodyRows = view.rowAxis.count() > frozenRowCount;
-    const anchor = hasBodyRows
-      ? captureAnchor({
-          rowAxis: view.rowAxis,
-          colAxis: view.colAxis,
-          frozenRowCount,
-          frozenColCount,
-          scrollTop: scroller.scrollTop,
-          scrollLeft: scroller.scrollLeft,
-        })
-      : null;
-    // K3（DD-021-3）: 再構築の**前**に「今どの RowId を指しているか」を旧 Axis から採取する（activeCell・選択端）。
-    const rebase = editSubmit.captureRebaseState();
-    const result = view.flush();
-    if (result.structuralRebuilt) {
-      metrics.mark('axisBuilt');
-    }
-    // DD-064: 再ベースの前に結合を新しい行 Axis へ張り直す（古い索引のままだと、再ベース先の正規化が古い行 index で左上を
-    // 選び、挿入された別の行へ寄せてしまう）。追従（正規化・ロック）は再ベースの後に行う。
-    const mergesChanged = merges.resolve();
-    // rowAxis 再構築後に activeCell/選択レンジを RowId で新 index へ引き直す（表示 index ずれの是正）。
-    editSubmit.applyRebaseState(rebase);
-    if (mergesChanged) {
-      afterMergesChanged();
-    }
-    syncSpacer();
-    if (anchor !== null) {
-      const corrected = correctScroll({
-        rowAxis: view.rowAxis,
-        colAxis: view.colAxis,
-        frozenRowCount,
-        frozenColCount,
-        anchor,
-      });
-      scroller.scrollTop = corrected.scrollTop;
-      scroller.scrollLeft = corrected.scrollLeft;
-    }
-    if (result.needsRedraw) {
-      redraw();
-      markFirstDataDraw();
-    }
-    // DD-036（Codex P2）: 構造変更で activeCell の**行 index が変わらないまま指す行が入れ替わる**ことがある
-    // （readOnly 行を削除して下の可編集行が同じ index に来る等）。この経路は applyRebaseState が editor を触らない
-    // ＝onChange が起きないため、ここで必ずロックを取り直す（未指定なら即 return・同値なら DOM を書かない）。
-    syncCellLock();
-  }
-
-  function masterLoop(): void {
-    canvasLayout.sync();
-    const view = sync?.view;
-    if (view !== undefined) {
-      if (view.hasStructuralDirty()) {
-        flushStructural(view);
-      } else {
-        const result = view.flush();
-        if (result.needsRedraw) {
-          // 自動行高が変わると総サイズ（totalSize）が変わるため spacer を同期する（末尾まで scroll 可能に維持）。
-          if (wrapEnabled) {
-            syncSpacer();
-          }
-          redraw();
-          markFirstDataDraw();
-        }
-      }
-      // DD-035 R6: 構造 flush（scroll anchor 補正・再ベース）の**後**に保留命令を適用する（新 Axis で RowId を解決）。
-      drainPendingCommands();
-    }
-    if (!destroyed) {
-      rafId = requestAnimationFrame(masterLoop);
-    }
-  }
+    },
+    captureRebaseState: () => editSubmit.captureRebaseState(),
+    applyRebaseState: (state) => editSubmit.applyRebaseState(state),
+    drainPendingCommands: () => commands.drain(),
+  });
+  const { currentTransform, placementConfig, visibleArea, ensureCellVisible, ensureActiveCellVisible, syncSpacer, syncLayout } = render;
+  // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。
+  const commands = createCommands({
+    diag,
+    selectionCtrl,
+    isDestroyed: () => destroyed,
+    backend: () => sync,
+    editor: () => editor,
+    isFirstDataDrawn: () => render.isFirstDataDrawn(),
+    viewportWidth: () => render.viewportSize().width,
+    currentMerges,
+    closePopups: () => {
+      select.close();
+      date.close();
+    },
+    flushStructural: (view) => render.flushStructural(view),
+    ensureCellVisible: (cell, axes) => render.ensureCellVisible(cell, axes),
+  });
 
   // ---- ポインター（区画④・mount/pointer.ts・hover.ts・link-click.ts）----
   const hover = createCellHover({
@@ -841,7 +440,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     emit,
     backend: () => sync,
     currentTransform,
-    runOrDefer,
+    runOrDefer: commands.runOrDefer,
   });
   const link = createLinkClick({
     diag,
@@ -867,6 +466,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
         'row-background-unknown',
         `rowBackgrounds: 未知の行 ${unknown.join(', ')}（初回描画時点の文書に存在しない）→ 該当 RowId が現れれば背景色を適用`,
       );
+    }
+  }
+
+  // DD-045: rowBorders の未知 RowId も、初回描画後に一度だけ診断する。
+  function validateRowBordersOnce(): void {
+    if (!rowBordersChecked && compiledBorders !== undefined && sync !== undefined) {
+      rowBordersChecked = true;
+      const unknown = compiledBorders.rowIds.filter((id) => sync?.view.rowIndexOf(createRowId(id)) === -1);
+      if (unknown.length > 0) diag.emit('warn', 'row-border-unknown', `rowBorders: 未知の行 ${unknown.join(', ')} → 到着後に適用`);
     }
   }
 
@@ -898,15 +506,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
     isReadOnly: () => readonlySwitch.isReadOnly(),
     currentTransform,
     syncSpacer,
-    viewportSize: () => ({ width: viewportWidth, height: viewportHeight }),
+    viewportSize: () => render.viewportSize(),
   });
 
-  const canvasLayout = createCanvasLayout(stage, [baseCanvas, overlayCanvas], syncLayout);
-  const resizeObserver = new ResizeObserver(() => {
-    syncLayout();
-    canvasLayout.sync();
-  });
-  resizeObserver.observe(stage);
+  // canvas のレイアウト追従（DPR の変化・ResizeObserver。ポインターのリスナーの後に始めるのは従来どおり）。
+  render.observeLayout();
 
   // ---- 起動 ----
   async function fetchConfig(): Promise<ResolvedConfig> {
@@ -1165,106 +769,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     if (backend === undefined) {
       return;
     }
-    // DD-064: wrap 列の自動行高から結合範囲のセルを外す（範囲の文字で行の高さを伸ばさない＝Excel と同じ）。結合が変わるたびに
-    // refreshMerges が全行を測り直す。wrap 列が無ければ自動行高そのものが無いので何もしない。
-    if (wrapEnabled) {
-      backend.view.setAutoHeightSkip((rowId, columnId) => isMergedCellId(rowId, columnId));
-    }
-    baseLayer = createBaseLayer({
-      ctx: baseCtx,
-      store: backend.view.store,
-      headerWidth: HEADER_WIDTH,
-      headerHeight,
-      // DD-064: 結合範囲（直前の描画の前に張ったもの）と 2段の見出し。どちらも無ければ追加の描画ゼロ。
-      mergedRanges: currentMerges,
-      ...(compiledColumnGroups.length > 0
-        ? { columnGroupBand: { height: groupBandHeight, groups: compiledColumnGroups } }
-        : {}),
-      // DD-012-5: 共有キャッシュ・wrap 判定・pane 境界・折り返し行高を渡す（オーバーフロー／折り返し描画）。
-      cellFont: appearance.cellFont,
-      headerFont: appearance.headerFont,
-      columnFont: (index) => appearance.fontFor(String(backend.view.columnIdAt(index))),
-      colors: { ...DEFAULT_BASE_COLORS, gridLine: appearance.gridLineColor ?? DEFAULT_BASE_COLORS.gridLine },
-      textCache: cellTextCache,
-      frozenColCount,
-      lineHeight: CELL_TEXT_LINE_HEIGHT,
-      isWrapColumn: (colIndex) => {
-        if (!wrapEnabled) {
-          return false;
-        }
-        const id = backend.view.columnIdAt(colIndex);
-        return id !== undefined && wrapColumnStrings.has(String(id));
-      },
-      // DD-027-2: リンク列はリンク色＋下線・自セル内クリップで描く（列単位・registry 判定）。リンク列が無ければ常に false。
-      isLinkColumn: (colIndex) => link.isLinkColumnIndex(colIndex),
-      // DD-027-3: セル書式の解決フック。書式が 1 つも無ければ束縛せず描画コスト増ゼロ（可視非空セルの O(1) lookup）。
-      ...(compiledFormats?.hasAny() === true
-        ? {
-            getCellStyle: (colIndex: number, value: string) => {
-              const id = backend.view.columnIdAt(colIndex);
-              return id === undefined ? undefined : compiledFormats?.getStyle(String(id), value);
-            },
-          }
-        : {}),
-      // DD-036 C2: 静的列背景のフック（列単位・値を見ない）。指定が 1 列も無ければ束縛せず列バンド描画を行わない。
-      ...(compiledBackgrounds?.hasAny() === true
-        ? {
-            columnBackground: (colIndex: number) => {
-              const id = backend.view.columnIdAt(colIndex);
-              return id === undefined ? undefined : compiledBackgrounds?.getBackground(String(id));
-            },
-          }
-        : {}),
-      // DD-045: row index から現在の RowId を毎描画時に解決し、行挿入・削除後も同じ行実体へ追従する。
-      ...(compiledBorders?.hasRows === true ? {
-        rowBorder: (index: number) => compiledBorders?.row(
-          index > 0 ? backend.view.rowIdAt(index - 1) : undefined,
-          backend.view.rowIdAt(index),
-        ),
-      } : {}),
-      ...(compiledBorders?.hasColumns === true ? {
-        columnBorder: (index: number) => compiledBorders?.column(
-          index > 0 ? backend.view.columnIdAt(index - 1) : undefined,
-          backend.view.columnIdAt(index),
-        ),
-      } : {}),
-      ...(compiledRowBackgrounds?.hasAny() === true
-        ? {
-            rowBackground: (rowIndex: number) => {
-              const id = backend.view.rowIdAt(rowIndex);
-              return id === undefined ? undefined : compiledRowBackgrounds?.getBackground(String(id));
-            },
-          }
-        : {}),
-      // DD-060/062: セルの状態表示。後から付くため両モードで常に束縛し、0 件なら即 undefined を返す。
-      // RowId→ColumnId を描画のたびに index へ解決する（行の挿入・削除・列の並びに追従。解決できない列は描かない）。
-      cellStatusesInRow: (rowIndex: number) => cellStatusMarksAt(cellStatusStore, backend, rowIndex),
-      ...(compiledStatusColors !== undefined ? { cellStatusColors: compiledStatusColors } : {}),
-      // DD-033-2: 列見出しキャプション＋表示書式のフック。両オプション未指定（hasAny()=false）なら束縛せず現行描画と
-      // 完全一致（AC9）。判定は raw・描画は display（columnHeaderLabel=ヘッダー・formatCellText=セル）。
-      ...(compiledDisplay?.hasAny() === true
-        ? {
-            columnHeaderLabel: (colIndex: number) => {
-              const id = backend.view.columnIdAt(colIndex);
-              const caption = id === undefined ? undefined : compiledDisplay?.captionFor(String(id));
-              return caption ?? columnLabel(colIndex);
-            },
-            formatCellText: (colIndex: number, rawValue: string) => {
-              const id = backend.view.columnIdAt(colIndex);
-              return id === undefined ? rawValue : (compiledDisplay?.formatText(String(id), rawValue) ?? rawValue);
-            },
-          }
-        : {}),
-      // DD-059: 負の数の色・括弧表記の右余白のフック。該当する列が無ければ束縛せず描画コスト増ゼロ（判定は raw）。
-      ...(compiledDisplay?.hasDecorations() === true
-        ? {
-            cellTextDecoration: (colIndex: number, rawValue: string) => {
-              const id = backend.view.columnIdAt(colIndex);
-              return id === undefined ? undefined : compiledDisplay?.decorationFor(String(id), rawValue);
-            },
-          }
-        : {}),
-    });
+    // 描画層（base-layer）を backend へ結線する（区画⑨）。
+    render.attach(backend);
 
     // ---- 編集の命令（区画⑦・mount/edit-commands.ts）を backend へ結線する ----
     editCommands.attach(backend);
@@ -1327,7 +833,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // （保留の適用先が確定する前の打鍵を旧セルへ確定させない）。readOnlyColumns 未指定かつ保留なしなら常に false。
       // DD-056 H12（Codex 実装レビュー P1）: 変換の終わり待ちの間、切り替えを頼まれた時点の編集が終わったら新しい編集を始めさせない
       // （textarea の readOnly 属性は次の判定で付く。それまでの論理遮断）。
-      isInputLocked: () => pendingCommands.length > 0 || isActiveCellReadOnly() || isDeferredLockIdle(),
+      isInputLocked: () => commands.hasPending() || isActiveCellReadOnly() || isDeferredLockIdle(),
       // DD-056 H12（Codex 実装レビュー P2）: 変換の終わり待ちの間は textarea の既定の cut も止める（readOnly 属性をまだ付けられないため）。
       isNativeEditBlocked: () => readonlySwitch.isDeferred(),
       // RC1・RC2（DD-052-1）: 折り返し（wrap）列は Alt+Enter でセル内改行・textarea が内容に応じて伸びる。
@@ -1379,7 +885,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         ensureActiveCellVisible(); // アクティブセルを可視域へ（scrollTop/Left を同期更新しうる）
         // DD-020-1 AC4: activeCell 移動・編集開始で明示レンジを単一選択へ戻す（不変条件は controller が判定）。
         selectionCtrl.syncWithEditor(editor.session.getActiveCell(), editor.session.getPhase());
-        selection = singleCell(editor.session.getActiveCell());
+        render.setActiveShadow(editor.session.getActiveCell());
         const transform = currentTransform(); // 上の scroll 反映後の transform で配置する
         if (transform !== undefined) {
           editor.refreshPlacement(transform, placementConfig());
@@ -1856,11 +1362,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     focus() {
       // boot 完了前（editor 未生成 or 初回配置前）の focus 要求は保持し、初回描画後に適用する（P2-3）。
-      if (firstDataDrawn && editor !== undefined) {
-        editor.focus();
-      } else {
-        focusRequested = true;
-      }
+      render.focusOrDefer();
     },
     setData(data: GridStandaloneData) {
       // 単独モード専用（DD-024・決定③）。
@@ -1916,14 +1418,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       performDeleteRows(rowIds);
     },
     scrollToRow(rowId: string) {
-      runOrDefer(() => performScrollToRow(rowId));
+      commands.scrollToRow(rowId);
     },
     scrollToColumn(columnId: string) {
-      // DD-036（Codex P2）: 行 0 件でも成立するよう列用の ready 条件で判定する（保留キューは行命令と共有）。
-      runOrDefer(() => performScrollToColumn(columnId), canRunColumnCommandsNow);
+      commands.scrollToColumn(columnId);
     },
     setActiveCell(rowId: string, columnId: string) {
-      runOrDefer(() => performSetActiveCell(rowId, columnId));
+      commands.setActiveCell(rowId, columnId);
     },
     presences(): readonly GridPresenceUser[] {
       return events.currentPresenceUsers(); // DD-049 H5（単独モード・初回 join 前・destroy 後は空）
@@ -1949,13 +1450,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       destroyed = true;
       // DD-056 H12: 判定の予約を取り消し、待っている flush を解決する（送り切っていれば flushed・残っていれば stopped）。
       readonlySwitch.dispose();
-      pendingCommands = []; // DD-035 R6: 保留中の命令は破棄（rAF ループ停止後に走らせない）
+      commands.discard(); // DD-035 R6: 保留中の命令は破棄（rAF ループ停止後に走らせない）
       events.discardQueuedRemoteChanges(); // DD-049 H4: 未配布の remote-change は破棄（listener も下で解除する）
       diag.emit('info', 'destroy', 'grid を破棄しリソースを解放');
-      cancelAnimationFrame(rafId);
+      render.stopLoop();
       window.clearInterval(intervalId);
       abort.abort(); // scroller listeners を解放
-      resizeObserver.disconnect();
+      render.disconnectLayout();
       editor?.destroy(); // 常駐 textarea/badge・editor listeners を解放
       select.dispose(); // DD-027-1: listbox・▼ インジケーターを除去
       date.dispose(); // DD-035 R2: ポップオーバー・📅 インジケーターを除去
@@ -1979,7 +1480,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       backend: () => sync,
       editor: () => editor,
       lastSessionEventType: () => lastSessionEvent?.type ?? '',
-      isFirstDataDrawn: () => firstDataDrawn,
+      isFirstDataDrawn: () => render.isFirstDataDrawn(),
       isReadOnly: () => readonlySwitch.isReadOnly(),
       currentTransform,
       display: () => compiledDisplay,
@@ -1991,9 +1492,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   );
 
   // ---- 起動（rAF ループ・tick interval・boot）----
-  syncLayout();
-  canvasLayout.sync();
-  rafId = requestAnimationFrame(masterLoop);
+  render.start();
   if (isStandalone) {
     // 単独モード（DD-024）: WS/tick interval は不要（transport 無し）。backend 構築は microtask で行い、
     // mount() の同期 return 契約（イベントは return 後に届く）を共同編集経路と揃える。destroy 済みなら配線しない。
@@ -2022,25 +1521,3 @@ export function createGridController(target: GridMountTarget, options: GridMount
   return instance;
 }
 
-/**
- * DD-060: 行 index → その行の状態表示セル（base-layer の cellStatusesInRow フック）。状態が 0 件なら RowId の解決もせず
- * 即 undefined（状態を使わない画面の描画コストを増やさない）。列が見つからない状態は描かない。
- */
-function cellStatusMarksAt(store: CellStatusStore, backend: GridBackend, rowIndex: number): readonly CellStatusMark[] | undefined {
-  if (!store.hasAny()) {
-    return undefined;
-  }
-  const rowId = backend.view.rowIdAt(rowIndex);
-  const statuses = rowId === undefined ? undefined : store.row(String(rowId));
-  if (statuses === undefined) {
-    return undefined;
-  }
-  const marks: CellStatusMark[] = [];
-  for (const [columnId, status] of statuses) {
-    const colIndex = backend.view.colIndexOf(createColumnId(columnId));
-    if (colIndex >= 0) {
-      marks.push({ colIndex, level: status.level });
-    }
-  }
-  return marks;
-}
