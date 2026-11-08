@@ -34,6 +34,12 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [Unreleased]
+
+### Changed
+
+- **grid 内部構造の変更（DD-065）**: mount の配線を機能ごとの部品へ分割し、キー入力の優先順位を明示。公開 API・挙動の変更なし。単独の配布は行わず、次回配布へ含める。
+
 ## [0.1.0-alpha.19] - 2026-11-08
 
 ### Added

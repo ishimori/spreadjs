@@ -171,3 +171,73 @@ DD-064 だけで +314 行、`interceptKeydown` の複雑度 51→62、直下の 
 | 無くす（持ち主の操作に置き換える） | `openSelectForActive`・`isSelectColumnIndex`・`isSearchableSelectColumnIndex`・`closeSelectDropdown`・`refreshSelectPlacement`・`openDateForActive`・`closeDatePicker`・`isDblclickDateColumnIndex`・`refreshDatePlacement` |
 
 合計 65（`let` 62・可変コンテナ 3）。
+
+## 11. 分割後の計測（2026-11-08）
+
+計測器は `scripts/size-guard/measure.mjs`。分割開始前は DD-064 のレビュー修正後（6968e66）の 4,567 行を使用。§2 の 85018dc の 4,533 行とは比較元が異なる。
+
+| 指標 | 分割開始前 | 分割後 |
+|---|---|---|
+| mount-controller.ts | 4,567 行 | 605 行 |
+| 組み立て直下の可変状態（`let`） | 62 | 2（`destroyed`・`standaloneColumnSet`） |
+| 後から代入する関数の入れ物 | 9 | 0（生成済み部品の操作と getter へ置換） |
+| mount 配線の循環的複雑度の最大 | 62 | 20（`select-wiring.ts`） |
+| mount 配線で複雑度 30 超の関数 | 3 | 0 |
+| サイズの baseline | ファイル 4・関数 4 | ファイル 3・関数 1（いずれも本 DD 対象外） |
+
+| 切り出した部品（`packages/grid/src/mount/`） | 行数 | 最大複雑度 |
+|---|---:|---:|
+| `keyboard.ts`・`editor-wiring.ts` | 441・205 | 17・4 |
+| `select-wiring.ts`・`date-wiring.ts` | 418・266 | 20・18 |
+| `pointer.ts`・`hover.ts`・`link-click.ts` | 642・114・162 | 14・10・7 |
+| `readonly-switch.ts`・`cell-lock.ts` | 328・263 | 12・12 |
+| `config.ts`・`lifecycle.ts` | 176・554 | 7・12 |
+| `edit-submit.ts`・`edit-commands.ts` | 463・405 | 14・12 |
+| `debug-api.ts`・`events.ts` | 216・162 | 5・5 |
+| `render.ts`・`base-layer-options.ts` | 449・172 | 14・11 |
+| `commands.ts`・`merges.ts`・`constants.ts` | 188・137・26 | 7・7・2 |
+
+605 行には部品への依存の受け渡しを含む。全状態を共有オブジェクトへ移す方式は使っていない。生成時は getter だけを渡し、backend の生成後に `attachBackendRendering()` の 1 か所で描画 → 編集の命令 → 候補欄 → 日付 → editor → ロック → レイアウト → `backend.start()` の順に結線する。
+
+## 12. 分割後の状態の持ち主（実装と照合）
+
+下記の状態を直接代入・更新するのは、その行の部品内だけ。他の部品は操作・getter を通す。backend や描画層など部品への参照は受け入れ基準 4 の規則に従い重複して数えない。§10 は組み立て直下の状態だけを数えた分割前の一覧であり、下表は各部品のクロージャ内にある状態も含む。
+
+| 持ち主 | 状態 |
+|---|---|
+| 組み立て（`mount-controller.ts`） | `destroyed`・`standaloneColumnSet` |
+| `lifecycle.ts` | `sync`・`standalone`・`collabSession`・`browserTransport`・`lastSessionEvent`・`resolvedDocumentId`・`hasEverConnected`・`intervalId`・`pendingStandaloneCalls`（配列）。backend の別名参照はこの持ち主への getter を通す |
+| `config.ts` | `appearance`・`columnTypeRegistry`・`compiledFormats`・`compiledBackgrounds`・`compiledRowBackgrounds`・`compiledStatusColors`・`compiledBorders`・`rowBordersChecked`・`compiledDisplay`・`compiledColumnGroups`・`rowBackgroundsChecked` |
+| `merges.ts` | `columnOrderForCommands`・`pendingCommand`（旧 `mergeColumnOrder`・`pendingMergedCells`）。結合レジストリは既存 `createMergeRegistry()` の操作を通す |
+| `events.ts` | `listeners`（Set）・`remoteChangeQueue`・`selfActiveCell`・`lastPresenceUsers`・`presenceRefreshScheduled` |
+| `render.ts` | `dpr`・`viewportWidth`・`viewportHeight`・`selection`・`firstDataDrawn`・`focusRequested`・`rafId`。`baseLayer`・`canvasLayout`・`resizeObserver` は結線・破棄用の部品参照 |
+| `commands.ts` | `pendingCommands` |
+| `readonly-switch.ts` | `readOnly`・`readOnlyDeferred`・`deferredLockEditTarget`・`inDeferredLockCommit`・`flushWaiters`（Set）・`editStateCheckTimer` |
+| `cell-lock.ts` | `readOnlyRowsChecked` |
+| `editor-wiring.ts` | `editor`（生成・破棄の唯一の持ち主） |
+| `select-wiring.ts` | `selectDropdown`・`selectOpenTarget`・`selectOpenMode`・`suggestFilterKey`。`backend` は結線参照 |
+| `date-wiring.ts` | `datePicker`・`dateOpenTarget`。`backend` は結線参照 |
+| `pointer.ts` | `resizeDrag`・`selectionDrag`・`searchSelectCandidate` |
+| `link-click.ts` | `linkCandidate`・`lastLinkFire` |
+| `hover.ts` | `hoveredCell`・`hoveredStatus` |
+| `edit-submit.ts` | `pendingStandaloneUndoPatches` |
+| `edit-commands.ts` | `backend`・`docPort`・`clipPort`・`copyPort` は結線先を保持する参照。Undo と選択の状態は既存の `undoCtrl`・`selectionCtrl` の操作を通す |
+
+破棄の順は組み立てに集約した。flush の待ちの解決 → 命令・通知の破棄 → rAF → tick → abort（fetch・DOM listener）→ ResizeObserver → editor → 候補欄 → 日付 → transport → DOM → debugRegistry → 購読解除の順を保つ。
+
+## 13. 分割後に追加した部品の単体テスト
+
+`createGridController`・React の mount を使わず、配線の振る舞いを確かめる（合計 59 件）。§9 の既存 E2E と併用する。
+
+| テスト（`packages/grid/src/mount/`） | 件数 | 守る振る舞い |
+|---|---:|---|
+| `keyboard.test.ts` | 10 | 優先順位の配列・上位の裁定・消費／処理して流す／該当しない・composition 中の介入抑止 |
+| `select-date-wiring.test.ts` | 9 | 候補欄と日付の開閉、編集中・読み取り専用・変換中の抑止 |
+| `readonly-switch.test.ts` | 9 | 変換完了待ちのロック・flush・destroy 中の待ちの解決とタイマー取消 |
+| `edit-submit.test.ts` | 7 | 読み取り専用・検証・Undo の記録・送信の関所 |
+| `commands.test.ts` | 5 | 起動前の順序・キュー上限超え・構造 flush・破棄 |
+| `merges.test.ts` | 4 | 起動前指定・結合の張り直し・単独／共同編集の更新 |
+| `events.test.ts` | 6 | 購読・リモート変更通知・presence・破棄 |
+| `lifecycle.test.ts` | 9 | microtask 起動・setRows/setData/setCellStatus の順序・不正な JS 入力後の継続・config エラー・abort と tick の解放 |
+
+ガードの単体テストは別に 28 件（`tests/tooling/size-guard.test.ts` 23 件・`size-guard-base-ref.test.ts` 5 件）。初期 20 件に実装レビュー・セルフレビューの回帰 8 件を追加した。最終の全回帰・操作確認・公開契約の照合は `verification.md` に記録する。

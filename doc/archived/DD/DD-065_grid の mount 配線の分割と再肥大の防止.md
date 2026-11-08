@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-08 | 2026-11-08 | 進行中 | 論点1〜8 を推奨案で確定（2026-11-08・ユーザー指示）。Phase 1 から実装中 |
+| 2026-11-08 | 2026-11-08 | 完了 | mount 4,567→605行・配線単体59件。全回帰成功、Codex P2 1件を修正。実IMEは未確認境界へ |
 
 > アプローチ: 標準（挙動を変えない構造の変更。安全網は既存の回帰テストで、新しい振る舞いが無いため TDD・E2E 駆動の差分テンプレートは使わない）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない。公開 API も変えない）
@@ -101,30 +101,34 @@ grid の mount 配線（`packages/grid/src/mount-controller.ts`）を機能ご�
 
 - [x] `DD-065/diagnosis.md`: 区画ごとのテスト対応表（区画 × それを守る E2E spec・単体テスト）を作り、どれにも守られていない経路には切り出す前にテストを足す（少なくとも flush を待っている最中の `destroy()`）
 - [x] `DD-065/diagnosis.md`: 分割前の状態の持ち主の一覧を作る（受け入れ基準 4 の数え方。スクリプトで作ってよい）
-- [ ] 共有 context の型と、部品の「生成 → 結線 → `backend.start()`」の手順を決める（論点2）
-- [ ] diagnosis §5 の 9 区画を部品へ切り出す（順序は任意。1 区画ずつコミットできる状態で終える）
-- [ ] キー入力の判定を部品ごとのハンドラにし、優先順位の配列と、その順序と結果を固定する単体テストを作る（論点3）
-- [ ] 後から代入する関数の入れ物 9 個を、結線の段階で渡す操作に置き換える
-- [ ] 各部品に破棄の操作を持たせ、`destroy()` から今と同じ順で呼ぶ
-- [ ] 切り出した配線の振る舞いに単体テストを足す（論点7・受け入れ基準7）。切り出すたびに baseline を下げる
-- [ ] 🔬 機械検証（切り出しごと）: `npx vitest run packages/grid packages/react` → パス／`npm run typecheck --workspace packages/grid` → パス／`npm run lint` → パス／テスト対応表でその区画を守る E2E spec → パス
+- [x] 共有 context の型と、部品の「生成 → 結線 → `backend.start()`」の手順を決める（論点2）
+- [x] diagnosis §5 の 9 区画を部品へ切り出す（順序は任意。1 区画ずつコミットできる状態で終える）
+- [x] キー入力の判定を部品ごとのハンドラにし、優先順位の配列と、その順序と結果を固定する単体テストを作る（論点3）
+- [x] 後から代入する関数の入れ物 9 個を、結線の段階で渡す操作に置き換える
+- [x] 各部品に破棄の操作を持たせ、`destroy()` から今と同じ順で呼ぶ（状態・リソースを持たない部品は共有 abort や既存 owner の破棄を使う）
+- [x] 切り出した配線の振る舞いに単体テストを足す（論点7・受け入れ基準7）。切り出すたびに baseline を下げる
+- [x] 🔬 機械検証（切り出しごと）: `npx vitest run packages/grid packages/react` → パス／`npm run typecheck --workspace packages/grid` → パス／`npm run lint` → パス／テスト対応表でその区画を守る E2E spec → パス（最後の区画は全回帰を兼ねた）
 
 ### Phase 3: 操作確認と記録
 
-- [ ] ブラウザーでの操作確認（Playwright MCP）: 日本語入力の確定と移動・選択式セルの候補欄・日付カレンダー・読み取り専用の列と行での編集キー・結合セルの矢印移動・範囲選択のドラッグと Escape での解除・列幅の変更・ダブルクリックでの編集・コピーと貼り付け・元に戻すとやり直し → 今と同じ動き。証跡は `test-results/dd-evidence/DD-065/`
-- [ ] `DD-065/diagnosis.md`: 分割後の計測（行数・複雑度）と状態の持ち主の一覧を、分割前と並べて追記する
-- [ ] `CHANGELOG.md`: 次の配布の節に内部構造の変更を 1 行（論点8）
-- [ ] 🔬 機械検証: `npm run lint` → パス（baseline から mount-controller.ts と 3 関数が消えている）
+- [x] ブラウザーでの操作確認（Playwright MCP）: 日本語入力の確定と移動・選択式セルの候補欄・日付カレンダー・読み取り専用の列と行での編集キー・結合セルの矢印移動・範囲選択のドラッグと Escape での解除・列幅の変更・ダブルクリックでの編集・コピーと貼り付け・元に戻すとやり直し → 今と同じ動き。証跡は `test-results/dd-evidence/DD-065/`（日本語入力は合成 composition・実 IME ではない）
+- [x] `DD-065/diagnosis.md`: 分割後の計測（行数・複雑度）と状態の持ち主の一覧を、分割前と並べて追記する
+- [x] `CHANGELOG.md`: 次の配布の節に内部構造の変更を 1 行（論点8）
+- [x] 🔬 機械検証: `npm run lint` → パス（baseline から mount-controller.ts と 3 関数が消えている）
 
 ### 完了前チェック
 
-- [ ] 受け入れ基準を 1 項目ずつ照合（未達成があれば理由をログへ）
-- [ ] 😈 セルフレビュー 1 巡（イベントの登録順・タイミング・`destroy()` の解放漏れ・生成と結線の順序を重点に）
-- [ ] 🔬 全回帰 1 回（`npm run lint`・`npm run typecheck`・`npm run typecheck:consumer-strict`・`npm test`・`npm run build`・`npm run test:e2e`・`npm run test:e2e:showcase` → 全パス）
+- [x] 受け入れ基準を 1 項目ずつ照合（11 項目を verification.md に記録）
+- [x] 😈 セルフレビュー 1 巡（イベントの登録順・タイミング・`destroy()` の解放漏れ・生成と結線の順序を重点に）
+- [x] 🔬 全回帰 1 回（`npm run lint`・`npm run typecheck`・`npm run typecheck:consumer-strict`・`npm test`・`npm run build`・`npm run test:e2e`・`npm run test:e2e:showcase` → 全パス）
 
 ## Manual Gate
 
-T1（`doc/plan/ime-manual-gate-ledger.md` §1）。Phase 2 の後に、実 IME（Microsoft IME）で §2 の S1〜S5 を 1 回通す（正味 5〜10 分）。クローズはブロックしない。未実施なら、クローズ時に `## 既知の未保証境界` へ 1 行移す。
+T1（`doc/plan/ime-manual-gate-ledger.md` §1）は未実施。クローズをブロックしない運用に従い、未確認範囲を下記へ移送した。
+
+## 既知の未保証境界
+
+- T1 実 Microsoft IME の S1〜S5 は未実施（正味 5〜10 分）。Playwright の合成 composition は実 IME の代替検証に数えない。
 
 ## 効果の確かめ方
 
@@ -147,3 +151,13 @@ T1（`doc/plan/ime-manual-gate-ledger.md` §1）。Phase 2 の後に、実 IME�
 - 着手（ユーザー指示「コミットしてから、スタートしましょう」）。論点1〜8 を推奨案で確定
 - Phase 1 完了: サイズのガード（`scripts/size-guard/`・`npm run lint:size`）。初期 baseline はファイル 4・関数 4（mount-controller.ts は DD-064 のレビュー対応後の 4,567 行）。ガードの単体テスト 20 件・`npm run lint` パス
 - 分割前の固定: E2E 全件 289 件合格（4.6 分）を基準にした。flush を待っている最中の `destroy()` を readonly-switch-flush ⑫ で固定（解決を外すと落ちることを確認）。命令の保留キューの上限超えは E2E で起こせないため、切り出しと同時に単体テストで固定する。テスト対応表と状態の持ち主の一覧は diagnosis §9・§10
+- Phase 2: E2E の口・購読と通知・結合・読み取り専用・候補欄と日付・編集・ポインター・描画と命令・キー入力の各切り出しを区画ごとに検証してコミット（97efeb0〜8710688）。キー入力の切り出し後の E2E 全件も 290 件成功
+- Claude が SessionLimit で止まったため Codex が引き継ぎ。767fa9a 時点の未コミットの区画⑥を整理し、起動の部品の単体テスト 9 件を追加。5600374 で区画⑥をコミット。DD-066 は別作業として対象外
+- Phase 2 完了: mount-controller.ts は 4,567 → 605 行、組み立て直下の可変状態 62 → 2、後から代入する関数の入れ物 9 → 0。mount 配線の最大複雑度は 20。配線の部品の単体テスト 59 件を新設（diagnosis §11〜13）
+- 全回帰（実行コード 5600374・Node 24.22.1／npm 11.19.1）: lint・typecheck・consumer-strict・unit 1,665 件・build・playground E2E 290 件・showcase E2E 5 件が成功。検証の対象・コマンド・結果と再利用条件は `DD-065/verification.md`
+- Phase 3: Playwright MCP で日本語入力（合成 composition）・候補欄・日付・読み取り専用・結合の移動・範囲ドラッグ／Escape・列幅変更・ダブルクリック・clipboard・Undo/Redo を操作し、公開 error なし。画面の証跡は verification.md を参照。実 Microsoft IME は未実施
+- ユーザー指示の Codex 実装レビュー（high）を開始。依頼は `DD-065/implementation-review-request.md`。公開 API・挙動・仕様・提供範囲は変更しないため機能カタログ更新なし。テストの置き場所は AGENTS.md、次回配布への同梱は CHANGELOG の Unreleased に記録
+- Codex 実装レビュー完了: P2 1 件を採用（比較元の Git 取得失敗を初回不在と混同してガードを省略）。`read-baseline.mjs` でコミット解決・ファイル不在・JSON 不正を区別し、取得失敗は exit 1 とした。移動前後の mount 配線に新たな挙動差の指摘なし。結果と採否は `DD-065/implementation-review-result.md`
+- セルフレビューで baseline の数値を文字列等に壊すと比較をすり抜けるケースを再現し、数値の検証と不正な `--update-baseline` の拒否を追加。実装レビュー指摘とともに 389d304 で修正。ガードの回帰を 8 件追加し、合計 28 件成功
+- 最終検証（389d304）: `npm run lint` と `npm test` を再実行し、161 ファイル・1,673 件成功。変更はガードとそのテストだけなので、SDK 本体の型検査・build・E2E の 5600374 に対する成功結果を再利用（ソース・依存・lockfile・設定・環境が同一）
+- 受け入れ基準 11 項目を照合。実 Microsoft IME の T1 を既知の未保証境界へ移送して完了。単独配布・push は行っていない。DD 本体と添付を一緒にアーカイブし、INDEX を再生成。doc-check と DD-065 の health・差分確認は成功
