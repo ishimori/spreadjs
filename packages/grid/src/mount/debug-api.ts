@@ -10,16 +10,16 @@ import type { ViewportTransform } from '@nanairo-sheet/render';
 import type { MergeIndex } from '@nanairo-sheet/selection';
 
 import type { BrowserWebSocketTransport } from '../browser-transport';
-import type { DatePicker } from '../date-editor';
 import type { DiagnosticSink } from '../diagnostics';
 import type { CompiledColumnDisplay } from '../display-format';
 import { cellScalarToDisplay } from '../document-view';
 import type { GridBackend } from '../grid-backend';
 import type { IntegrationEditor } from '../integration-editor';
 import type { GridDebugApi, GridDebugCellAddress } from '../internal';
-import type { SelectDropdown } from '../select-editor';
 import type { SelectionController } from '../selection-controller';
 import type { UndoController } from '../undo-stack';
+import type { DateWiring } from './date-wiring';
+import type { SelectWiring } from './select-wiring';
 
 /** 観測口が読む部品（いずれも呼ばれた時点の値を読む）。 */
 export interface DebugApiDeps {
@@ -37,8 +37,8 @@ export interface DebugApiDeps {
   currentTransform(): ViewportTransform | undefined;
   display(): CompiledColumnDisplay | undefined;
   merges(): MergeIndex;
-  selectDropdown(): SelectDropdown | undefined;
-  datePicker(): DatePicker | undefined;
+  readonly select: Pick<SelectWiring, 'isOpen' | 'options' | 'highlightedIndex' | 'highlightedValue'>;
+  readonly date: Pick<DateWiring, 'isOpen' | 'highlightedValue' | 'viewMonth'>;
   transport(): BrowserWebSocketTransport | undefined;
 }
 
@@ -101,14 +101,14 @@ export function createDebugApi(deps: DebugApiDeps): GridDebugApi {
     selectionRange: () => selectionCtrl.getRange(),
     dragRange: () => selectionCtrl.getDragRange(),
     // DD-027-1: 選択式ドロップダウンの観測（開閉・候補・ハイライト）。
-    selectOpen: () => deps.selectDropdown()?.isOpen() ?? false,
-    selectOptions: () => [...(deps.selectDropdown()?.options() ?? [])],
-    selectHighlightedIndex: () => deps.selectDropdown()?.highlightedIndex() ?? -1,
-    selectHighlightedValue: () => deps.selectDropdown()?.highlightedValue() ?? null,
+    selectOpen: () => deps.select.isOpen(),
+    selectOptions: () => [...deps.select.options()],
+    selectHighlightedIndex: () => deps.select.highlightedIndex(),
+    selectHighlightedValue: () => deps.select.highlightedValue(),
     // DD-035 R2: 日付カレンダーの観測（開閉・ハイライト・表示月）。
-    dateOpen: () => deps.datePicker()?.isOpen() ?? false,
-    dateHighlightedValue: () => deps.datePicker()?.highlightedValue() ?? null,
-    dateViewMonth: () => deps.datePicker()?.viewMonth() ?? null,
+    dateOpen: () => deps.date.isOpen(),
+    dateHighlightedValue: () => deps.date.highlightedValue(),
+    dateViewMonth: () => deps.date.viewMonth(),
     // DD-020-3: Undo/Redo 可否・深さ（pending が読めないときは undo 不可側に倒す）。
     canUndo: () => undoCtrl.canUndo(backend()?.session.pendingCount ?? 1),
     canRedo: () => undoCtrl.canRedo(backend()?.session.pendingCount ?? 1),

@@ -27,7 +27,7 @@ import {
   mergedCellRect,
   normalizeDpr,
 } from '@nanairo-sheet/render';
-import type { CellRect, CellStatusMark, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
+import type { CellStatusMark, FrameViewport, OverlayFrame, TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import {
   EMPTY_MERGE_INDEX,
   expandRangeToMerges,
@@ -41,9 +41,7 @@ import type { CellPosition, GridLayout } from '@nanairo-sheet/ime';
 
 import { BrowserWebSocketTransport } from './browser-transport';
 import { cellScalarToDisplay } from './document-view';
-import { computeEditorPlacement } from './editor-placement';
 import type { PlacementConfig } from './editor-placement';
-import { captureEditStartRevision, draftToScalar, isRowLive } from './commit-bridge';
 import { ColumnTypeConfigError, createColumnTypeRegistry, isAbsoluteHttpUrl } from './column-types';
 import type { ColumnTypeRegistry } from './column-types';
 import { FormatRuleConfigError, compileColumnBackgrounds, compileFormatRules, compileRowBackgrounds } from './format-rules';
@@ -55,10 +53,8 @@ import { MergedCellsConfigError } from './merged-cell-spec';
 import { compileColumnGroups } from './column-groups';
 import type { CompiledColumnGroup } from './column-groups';
 import { shouldArmLinkCandidate } from './link-column';
-import { createSelectDropdown, decideSelectKey, filterOptionsByPrefix } from './select-editor';
-import type { SelectDropdown } from './select-editor';
-import { createDatePicker, decideDateKey } from './date-editor';
-import type { DatePicker } from './date-editor';
+import { decideSelectKey } from './select-editor';
+import { decideDateKey } from './date-editor';
 import type { EditingDocumentPort } from './ime-editing-session';
 import { createIntegrationEditor } from './integration-editor';
 import { compileAppearance } from './appearance';
@@ -132,6 +128,8 @@ import { createEvents, toGridEvent } from './mount/events';
 import { createCellLock } from './mount/cell-lock';
 import { createMerges } from './mount/merges';
 import { createReadOnlySwitch } from './mount/readonly-switch';
+import { createDateWiring } from './mount/date-wiring';
+import { createSelectWiring } from './mount/select-wiring';
 
 
 interface ResolvedConfig {
@@ -231,7 +229,6 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let browserTransport: BrowserWebSocketTransport | undefined;
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）と選択式ドロップダウン。
   let columnTypeRegistry: ColumnTypeRegistry | undefined;
-  let selectDropdown: SelectDropdown | undefined;
   // DD-027-3: セル書式のプリコンパイル済み解決器（columnOrder 解決後に生成・fail-fast）。書式なしなら hasAny()=false で
   // base-layer への束縛を省き描画コスト増をゼロにする。
   let compiledFormats: CompiledColumnFormats | undefined;
@@ -249,21 +246,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
   let compiledDisplay: CompiledColumnDisplay | undefined;
   // DD-064 K4: 2段の見出しのまとまり（列 index に解決済み・columnOrder 解決後に生成・fail-fast）。空なら 1 段。
   let compiledColumnGroups: readonly CompiledColumnGroup[] = [];
-  // 選択式ドロップダウンの制御は attachBackendRendering 内で backend/editor を閉じ込めた関数として定義し、
-  // createGridController 直下の handler（dblclick・pointerdown・redraw）からは以下の ref 経由で呼ぶ。
-  let openSelectForActive: (() => void) | undefined;
-  let isSelectColumnIndex: ((colIndex: number) => boolean) | undefined;
-  let isSearchableSelectColumnIndex: ((colIndex: number) => boolean) | undefined;
+  // DD-057: 検索付きの候補欄をクリックで開く候補（pointerdown で武装し、同じセルの pointerup で開く）。
   let searchSelectCandidate: { pointerId: number; row: number; col: number } | null = null;
-  let closeSelectDropdown: (() => void) | undefined;
-  let refreshSelectPlacement: ((transform: ViewportTransform) => void) | undefined;
-  // DD-035 R2: 日付カレンダー（select と同方式の ref。attachBackendRendering 内で backend/editor を閉じ込めて定義する）。
-  let datePicker: DatePicker | undefined;
-  let closeDatePicker: (() => void) | undefined;
-  let openDateForActive: (() => void) | undefined;
-  /** 列 index が「dblclick で開く日付列」か（dblclick 分岐用。openOn='icon' の列は従来どおり textarea 編集）。 */
-  let isDblclickDateColumnIndex: ((colIndex: number) => boolean) | undefined;
-  let refreshDatePlacement: ((transform: ViewportTransform) => void) | undefined;
   let baseLayer: ReturnType<typeof createBaseLayer> | undefined;
   let dpr = normalizeDpr(window.devicePixelRatio);
   let viewportWidth = 0;
@@ -326,8 +310,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     backend: () => sync,
     editor: () => editor,
     closePopups: () => {
-      closeSelectDropdown?.();
-      closeDatePicker?.();
+      select.close();
+      date.close();
     },
     syncCellLock: () => cellLock.syncCellLock(),
   });
@@ -355,11 +339,46 @@ export function createGridController(target: GridMountTarget, options: GridMount
     hasReadOnlyCellRows,
     hasReadOnlyCells,
     isActiveCellReadOnly,
-    readOnlyEntryBlocked,
     validateReadOnlyRowsOnce,
     syncCellLock,
     filterReadOnlyCells,
   } = cellLock;
+  // 選択式の候補欄（区画②・mount/select-wiring.ts）と日付カレンダー（区画③・mount/date-wiring.ts）。
+  // 生成は今、backend への結線は attachBackendRendering（候補欄 → カレンダーの順に DOM を作る）。
+  const select = createSelectWiring({
+    host: stage,
+    diag,
+    stringColumnStrings,
+    cellLock,
+    merges,
+    editor: () => editor,
+    registry: () => columnTypeRegistry,
+    appearance: () => appearance,
+    isReadOnly: () => readonlySwitch.isReadOnly(),
+    ensureActiveCellVisible,
+    currentTransform,
+    placementConfig,
+    visibleArea,
+    submitSetCells,
+    notifyRowReject,
+  });
+  const date = createDateWiring({
+    host: stage,
+    diag,
+    stringColumnStrings,
+    cellLock,
+    merges,
+    editor: () => editor,
+    registry: () => columnTypeRegistry,
+    isReadOnly: () => readonlySwitch.isReadOnly(),
+    closeSelect: () => select.close(),
+    ensureActiveCellVisible,
+    currentTransform,
+    placementConfig,
+    visibleArea,
+    submitSetCells,
+    notifyRowReject,
+  });
 
   // DD-036 C1: 固定行数/固定列数（mount オプション・既定 1＝DD-036 以前のハードコード値と完全一致）。view-local。
   // 受理形は 0 以上の有限整数。非整数・負・NaN・非 number は診断 warn（frozen-count-invalid）を出して既定 1 へ倒す
@@ -468,8 +487,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // どちらもアクティブセル（編集中は編集セル）に開くので、アクティブセルで判定する。確定の時にも対象を確かめる（二重の防御）。
     const active = editor?.session.getActiveCell();
     if (active !== undefined && isMergedCellIndex(active.row, active.col)) {
-      closeSelectDropdown?.();
-      closeDatePicker?.();
+      select.close();
+      date.close();
     }
     merges.normalizeActiveCell();
     syncCellLock();
@@ -488,9 +507,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
     overlayLayer.draw(overlayFrame(transform));
     editor?.refreshPlacement(transform, placementConfig());
     // DD-027-1: 選択式ドロップダウン（listbox）と ▼ インジケーターを scroll/構造Op に追従させる。
-    refreshSelectPlacement?.(transform);
+    select.refreshPlacement(transform);
     // DD-035 R2: 日付カレンダー（ポップオーバー）と 📅 インジケーターも同様に追従させる。
-    refreshDatePlacement?.(transform);
+    date.refreshPlacement(transform);
   }
 
   /**
@@ -668,8 +687,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       );
       return;
     }
-    closeSelectDropdown?.();
-    closeDatePicker?.();
+    select.close();
+    date.close();
     selectionCtrl.clear();
     // DD-064: 結合範囲の中を指したら左上へ（範囲の中は左上のセルとして選ぶ）。
     const target = mergeAnchorOf(currentMerges(), { row, col });
@@ -1332,7 +1351,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         && upCell.row === candidate.row && upCell.col === candidate.col;
       finishResize(event.pointerId, true);
       finishSelectionDrag(event.pointerId, true);
-      if (openSearch) openSelectForActive?.();
+      if (openSearch) select.open();
       // DD-027-2: 選択ドラッグ確定の直後に、リンク候補が生きていれば link-open を発火する（同一セルクリック＝📐）。
       maybeEmitLinkOpen(event.pointerId);
     },
@@ -1370,14 +1389,14 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // 取消（文書無変更・focus は textarea のまま・AC3）。続けて通常のセル選択も行う（Excel 風）。
       // Fable P3: この dismiss クリックがリンクセルに当たっても link-open は発火させない（ポップアップの打ち消しと
       // リンク起動を1クリックで兼ねさせない）。close する前に open 状態を捕捉し、後段の候補武装を抑止する。
-      const selectDropdownWasOpen = selectDropdown?.isOpen() === true;
+      const selectDropdownWasOpen = select.isOpen();
       if (selectDropdownWasOpen) {
-        closeSelectDropdown?.();
+        select.close();
       }
       // DD-035 R2: 日付カレンダー表示中の外クリックも取消（日クリックはポップオーバー側の pointerdown で処理済み＝ここへ来ない）。
-      const datePickerWasOpen = datePicker?.isOpen() === true;
+      const datePickerWasOpen = date.isOpen();
       if (datePickerWasOpen) {
-        closeDatePicker?.();
+        date.close();
       }
       const transform = currentTransform();
       if (transform === undefined) {
@@ -1452,7 +1471,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // composition 中は開始しない（クリックは pendingNavigation 経路のまま・composition を乱さない・AC7）。
       if (!editor.session.isComposing() && editor.session.getPhase() === 'Navigation') {
         searchSelectCandidate = !selectDropdownWasOpen && !datePickerWasOpen && !event.ctrlKey && !event.metaKey && !event.altKey
-          && isSearchableSelectColumnIndex?.(cell.col) === true
+          && select.isSearchableSelectColumnIndex(cell.col)
           ? { pointerId: event.pointerId, row: cell.row, col: cell.col } : null;
         selectionDrag = { pointerId: event.pointerId };
         selectionCtrl.beginDrag(cell);
@@ -1522,15 +1541,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // DD-027-1 / DD-037: 選択式列は textarea 編集ではなくドロップダウンを開く（AC1）。自由入力併存列
         // （allowFreeText:true）も対象＝候補は明示操作で開き、自由入力は印字文字から始める（DD-037 決定①）。
         // 先に activeCell を対象セルへ合わせてから開く（openSelectForActive は activeCell を読む）。
-        if (isSelectColumnIndex?.(hit.colIndex) === true) {
+        if (select.isSelectColumnIndex(hit.colIndex)) {
           editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
-          openSelectForActive?.();
+          select.open();
           return;
         }
         // DD-035 R2: 日付列（openOn='dblclick'）は textarea 編集ではなくカレンダーを開く。openOn='icon' は従来どおり。
-        if (isDblclickDateColumnIndex?.(hit.colIndex) === true) {
+        if (date.isDblclickDateColumnIndex(hit.colIndex)) {
           editor.pointerdownCell({ row: hit.rowIndex, col: hit.colIndex });
-          openDateForActive?.();
+          date.open();
           return;
         }
         editor.doubleClickCell({ row: hit.rowIndex, col: hit.colIndex });
@@ -2456,8 +2475,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       };
       const active = editor.session.getActiveCell();
       if (active.row !== topLeft.row || active.col !== topLeft.col) {
-        closeSelectDropdown?.();
-        closeDatePicker?.();
+        select.close();
+        date.close();
         editor.pointerdownCell(topLeft); // onChange → syncWithEditor が既存レンジを解除する（この後に張り直す）
       }
       // 1×1 の貼り付けは setRange が単一選択へ正規化する（明示レンジを作らない＝見た目不変・AC3）。
@@ -2618,478 +2637,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
       return readonlySwitch.runEditorCommit(() => submitSetCells(op, 'edit'));
     };
 
-    // 候補 UI の対象セル判定（アクティブセルの前段裁定・dblclick 分岐・▼ 表示で共有）。
-    // DD-037 決定①: `allowFreeText` の値によらず選択式列なら候補 UI を出す（候補 UI の可否と commit 検証の
-    // 厳格さを分離した）。キー裁定での差（印字文字を奪うか）は allowsFreeTextIndex 側で表現する。
-    const isSelectCellIndex = (colIndex: number): boolean => {
-      const registry = columnTypeRegistry;
-      if (registry === undefined) {
-        return false;
-      }
-      const colId = backend.view.columnIdAt(colIndex);
-      return colId !== undefined && registry.showsSuggestions(String(colId));
-    };
-
-    /** 列 index で自由入力が許可されているか（DD-037・印字文字を textarea 編集へ流すかの判定）。 */
-    const allowsFreeTextIndex = (colIndex: number): boolean => {
-      const registry = columnTypeRegistry;
-      if (registry === undefined) {
-        return true;
-      }
-      const colId = backend.view.columnIdAt(colIndex);
-      return colId === undefined || registry.allowsFreeText(String(colId));
-    };
-
-    // ドロップダウンを開いた時点の対象セル（beforeRevision 凍結・確定で OCC 裁定に使う・📐）。
-    let selectOpenTarget:
-      | { readonly rowId: RowId; readonly columnId: ColumnId; readonly beforeRevision: number; readonly currentValue: string }
-      | null = null;
-
-    /**
-     * 開いているドロップダウンの種類（DD-037 決定①③）。
-     * - `'picker'`: Navigation で明示操作（F2 / Enter / Alt+↓ / ダブルクリック）から開いた従来のドロップダウン。
-     *   ↑↓/Enter/Esc/Tab を奪う。候補のみの列では印字文字/Backspace で候補を選ぶ（DD-057）。
-     * - `'suggest'`: 自由入力併存列（allowFreeText:true）の**編集中**に draft の前方一致で自動表示する候補リスト。
-     *   **キーを一切奪わない**（decideSelectKey は非 Navigation 位相で必ず 'none'）＝印字・IME・キャレット移動・
-     *   Enter/Tab の確定はすべて従来の editor 経路のまま流れる。表示だけの passive なオーバーレイ。
-     */
-    let selectOpenMode: 'picker' | 'suggest' | null = null;
-
-    /**
-     * suggest モードで最後に適用した絞り込みの識別子（`columnId\u0000draft`）。`refreshSelectPlacement` は毎フレーム
-     * 走るため、これが同じ間は listbox の DOM 再構築（`setOptions`→`replaceChildren`）を省く（60fps の無駄な
-     * 再構築＝ちらつき・hover/スクロール状態のリセットを避ける）。閉じるたびに null へ戻す。
-     */
-    let suggestFilterKey: string | null = null;
-
-    const openSelect = (initialCharacter?: string): void => {
-      if (readonlySwitch.isReadOnly()) {
-        // 選択式列のドロップダウンは開かない（要確認2・文書変更経路の入口）。
-        diag.emit('info', 'readonly-blocked', 'readOnly: 選択式ドロップダウンを抑止');
-        return;
-      }
-      if (isActiveCellReadOnly()) {
-        diag.emit(...readOnlyEntryBlocked('選択式ドロップダウン'));
-        return;
-      }
-      if (editor === undefined || selectDropdown === undefined || columnTypeRegistry === undefined) {
-        return;
-      }
-      // composition 中・非 Navigation は開かない（IME 経路無改変・I-3）。
-      if (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
-        return;
-      }
-      const active = editor.session.getActiveCell();
-      const rowId = backend.view.rowIdAt(active.row);
-      const columnId = backend.view.columnIdAt(active.col);
-      if (rowId === undefined || columnId === undefined) {
-        return;
-      }
-      const options = columnTypeRegistry.getSelectOptions(String(columnId));
-      if (options === undefined) {
-        return;
-      }
-      const currentValue = backend.view.cellDisplay(rowId, columnId);
-      const beforeRevision = captureEditStartRevision(backend.session.committedDocument, rowId, columnId);
-      selectOpenTarget = { rowId, columnId, beforeRevision, currentValue };
-      // 画面外セルで F2 等を押したとき、まず可視域へスクロールしてから配置する（1フレームのちらつき解消・Fable 5 P3-7）。
-      ensureActiveCellVisible();
-      const transform = currentTransform();
-      const placement = transform === undefined ? null : computeEditorPlacement(transform, active.row, active.col, placementConfig());
-      selectOpenMode = 'picker';
-      selectDropdown.open({
-        searchable: columnTypeRegistry.isSearchableSelect(String(columnId)),
-        rect: placement !== null && placement.visible ? placement.rect : null,
-        options,
-        currentValue,
-      });
-      if (initialCharacter !== undefined) {
-        selectDropdown.typeCharacter(initialCharacter);
-      }
-      selectOpenMode = 'picker';
-      backend.view.markViewportDirty();
-    };
-
-    const cancelSelect = (): void => {
-      if (selectDropdown === undefined || !selectDropdown.isOpen()) {
-        return;
-      }
-      selectDropdown.close();
-      selectOpenTarget = null;
-      selectOpenMode = null;
-      suggestFilterKey = null;
-      backend.view.markViewportDirty();
-    };
-
-    const confirmSelect = (): void => {
-      if (selectDropdown === undefined || !selectDropdown.isOpen() || selectOpenTarget === null) {
-        return;
-      }
-      // DD-056 H12（Codex 実装レビュー P1）: 表示専用（変換の終わり待ちを含む）では候補の確定を、下の編集の取り消しより前に断る
-      // （取り消してから送信の関所で断ると、編集中の値も候補も残らない）。候補欄は閉じ、編集中の値はそのまま残す。
-      if (readonlySwitch.isReadOnly()) {
-        diag.emit('info', 'readonly-blocked', 'readOnly: 選択式の候補の確定を抑止（編集中の値はそのまま）');
-        cancelSelect();
-        return;
-      }
-      // DD-064（Codex P2）: 開いている間に対象セルが結合範囲になったら確定しない（結合範囲は読むだけ）。候補欄は閉じ、
-      // 編集中の値はそのまま残す（readOnly と同じ扱い）。
-      if (isMergedCellId(selectOpenTarget.rowId, selectOpenTarget.columnId)) {
-        diag.emit('info', 'merged-cell-blocked', 'mergedCells: 結合範囲になったセルへの候補の確定を抑止');
-        cancelSelect();
-        return;
-      }
-      const target = selectOpenTarget; // Escape 投入より前に確保する（以降の副作用で null 化されても安全）
-      // DD-037: suggest モード（編集中の候補リスト）から候補をクリックで確定するときは、先に編集セッションを
-      // 取り消す。そうしないと編集中の draft が後から commit されて候補の確定を上書きしてしまう。
-      // 状態機械の公開入口（handleEvent）へ Escape を投げるだけ＝editor-state-machine・IME は無改変（I-3）。
-      // 変換中は IME を最優先して何もしない（確定は変換確定後の操作で行う）。
-      if (selectOpenMode === 'suggest' && editor !== undefined) {
-        if (editor.session.isComposing()) {
-          return;
-        }
-        if (editor.session.getPhase() !== 'Navigation') {
-          editor.session.handleEvent({ type: 'keydown', key: 'Escape', isComposing: false, shiftKey: false });
-        }
-      }
-      const value = selectDropdown.confirmValue(); // 内部で close 済み
-      selectOpenTarget = null;
-      selectOpenMode = null;
-      backend.view.markViewportDirty();
-      // 無変更判定は open 時スナップショットでなく**確定時点**の表示値と比較する（Fable 5 P2-4）: open 中に
-      // リモート/ローカルで値が変わった後に「元の値」を選ぶとサイレント no-op になる事故を防ぐ。
-      const currentNow = backend.view.cellDisplay(target.rowId, target.columnId);
-      if (value === null || value === currentNow) {
-        return; // 候補なし or 確定時点で既に同値 → 文書を触らない
-      }
-      // 確定前に対象行の生存を確認する（表示中にリモート/ローカルで削除された場合の実行前拒否・📐）。
-      if (!isRowLive(backend.session.committedDocument, target.rowId)) {
-        notifyRowReject('row-unavailable', 'select-row-deleted', `選択確定対象の行が削除済み: row=${String(target.rowId)}`);
-        return;
-      }
-      const op: SetCellsOperation = {
-        type: 'setCells',
-        conflictPolicy: 'reject-overlap',
-        changes: [
-          {
-            rowId: target.rowId,
-            columnId: target.columnId,
-            beforeRevision: target.beforeRevision, // 開いた時点で凍結（OCC は既存 reject 経路が裁く）
-            // RC12（DD-052-2・Codex P2）: stringColumns 指定列は選択式でも型変換をスキップする
-            // （textarea 経由の確定と同じ契約＝編集 UI に依存せず「空文字以外は常に string」）。
-            value: draftToScalar(value, stringColumnStrings.has(String(target.columnId))),
-          },
-        ],
-      };
-      submitSetCells(op, 'select'); // 既存 chokepoint（Undo 記録・cell-commit 通知・自動行高が既存経路で成立）・DD-063 の検証
-      backend.view.markCellDirty();
-    };
-
-    // 選択式ドロップダウンは選択式列があるときだけ配線する（無ければ overhead ゼロ）。
-    if (columnTypeRegistry?.hasAnySelectColumn() === true) {
-      selectDropdown = createSelectDropdown({
-        host: stage, font: appearance.cellFont, visibleArea,
-        onConfirm: () => { confirmSelect(); editor?.focus(); },
-        onDismiss: (restoreFocus) => { cancelSelect(); if (restoreFocus) editor?.focus(); },
-      });
-    }
-
-    // ---- DD-035 R2 日付列（カレンダー・ポップオーバー・editor 経路無改変）----
-    /** 列 index が日付列か（readOnly 列・グリッド readOnly は開けない側で除外する）。 */
-    const isDateCellIndex = (colIndex: number): boolean => {
-      const registry = columnTypeRegistry;
-      if (registry === undefined) {
-        return false;
-      }
-      const colId = backend.view.columnIdAt(colIndex);
-      return colId !== undefined && registry.isDateColumn(String(colId));
-    };
-    /** 列 index の日付列 openOn（既定 'dblclick'）。日付列でなければ undefined。 */
-    const dateOpenOnOf = (colIndex: number): 'dblclick' | 'icon' | undefined => {
-      const colId = backend.view.columnIdAt(colIndex);
-      const type = colId === undefined ? undefined : columnTypeRegistry?.getDateType(String(colId));
-      return type === undefined ? undefined : (type.openOn ?? 'dblclick');
-    };
-
-    // カレンダーを開いた時点の対象セル（beforeRevision 凍結・確定で OCC 裁定に使う・select と同型）。
-    let dateOpenTarget: { readonly rowId: RowId; readonly columnId: ColumnId; readonly beforeRevision: number } | null = null;
-
-    const openDate = (): void => {
-      if (readonlySwitch.isReadOnly()) {
-        diag.emit('info', 'readonly-blocked', 'readOnly: 日付カレンダーを抑止');
-        return;
-      }
-      if (isActiveCellReadOnly()) {
-        diag.emit(...readOnlyEntryBlocked('日付カレンダー'));
-        return;
-      }
-      if (editor === undefined || datePicker === undefined || columnTypeRegistry === undefined) {
-        return;
-      }
-      // composition 中・非 Navigation は開かない（IME 経路無改変・I-3）。
-      if (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
-        return;
-      }
-      const active = editor.session.getActiveCell();
-      if (!isDateCellIndex(active.col)) {
-        return;
-      }
-      const rowId = backend.view.rowIdAt(active.row);
-      const columnId = backend.view.columnIdAt(active.col);
-      if (rowId === undefined || columnId === undefined) {
-        return;
-      }
-      cancelSelect(); // 併存しない（同一列に両型は無いが防御）
-      const currentValue = backend.view.cellDisplay(rowId, columnId);
-      const beforeRevision = captureEditStartRevision(backend.session.committedDocument, rowId, columnId);
-      dateOpenTarget = { rowId, columnId, beforeRevision };
-      ensureActiveCellVisible();
-      const transform = currentTransform();
-      const placement = transform === undefined ? null : computeEditorPlacement(transform, active.row, active.col, placementConfig());
-      datePicker.open({ rect: placement !== null && placement.visible ? placement.rect : null, currentValue });
-      diag.emit('info', 'date-open', `date: カレンダーを開く row=${String(rowId)} col=${String(columnId)} current=「${currentValue}」`);
-      backend.view.markViewportDirty();
-    };
-
-    const cancelDate = (): void => {
-      if (datePicker === undefined || !datePicker.isOpen()) {
-        return;
-      }
-      datePicker.close();
-      dateOpenTarget = null;
-      backend.view.markViewportDirty();
-    };
-
-    /**
-     * カレンダーの確定（日クリック・Enter・「今日」・「クリア」=''）。閉じてから既存 chokepoint（submitSetCells）へ流す＝
-     * Undo 記録・cell-commit 通知・OCC（開いた時点の beforeRevision を凍結）が既存経路で成立する（confirmSelect と同型）。
-     * 確定時点で同値なら文書を触らず、対象行が削除済みなら実行前拒否（row-unavailable）。
-     */
-    const confirmDate = (value: string): void => {
-      if (datePicker === undefined || !datePicker.isOpen() || dateOpenTarget === null) {
-        return;
-      }
-      // DD-056 H12: 表示専用（変換の終わり待ちを含む）では確定しない（confirmSelect と同じ。開いた後に切り替わった場合の防御）。
-      if (readonlySwitch.isReadOnly()) {
-        diag.emit('info', 'readonly-blocked', 'readOnly: 日付の確定を抑止');
-        cancelDate();
-        return;
-      }
-      // DD-064（Codex P2）: 開いている間に対象セルが結合範囲になったら確定しない（confirmSelect と同じ）。
-      if (isMergedCellId(dateOpenTarget.rowId, dateOpenTarget.columnId)) {
-        diag.emit('info', 'merged-cell-blocked', 'mergedCells: 結合範囲になったセルへの日付の確定を抑止');
-        cancelDate();
-        return;
-      }
-      const target = dateOpenTarget;
-      datePicker.close();
-      dateOpenTarget = null;
-      backend.view.markViewportDirty();
-      const currentNow = backend.view.cellDisplay(target.rowId, target.columnId);
-      if (value === currentNow) {
-        return;
-      }
-      if (!isRowLive(backend.session.committedDocument, target.rowId)) {
-        notifyRowReject('row-unavailable', 'date-row-deleted', `日付確定対象の行が削除済み: row=${String(target.rowId)}`);
-        return;
-      }
-      const op: SetCellsOperation = {
-        type: 'setCells',
-        conflictPolicy: 'reject-overlap',
-        changes: [
-          {
-            rowId: target.rowId,
-            columnId: target.columnId,
-            beforeRevision: target.beforeRevision,
-            // RC12（DD-052-2・Codex P2）: stringColumns 指定列は日付ピッカーでも型変換をスキップする（他2経路と同じ契約）。
-            // 通常時は 'YYYY-MM-DD' → kind:'date'（ADR-0012 正準）／'' → blank（クリア）。
-            value: draftToScalar(value, stringColumnStrings.has(String(target.columnId))),
-          },
-        ],
-      };
-      submitSetCells(op, 'date'); // DD-063: 日付のカレンダーの確定も検証する
-      backend.view.markCellDirty();
-    };
-
-    // カレンダーは日付列があるときだけ配線する（無ければ overhead ゼロ）。
-    if (columnTypeRegistry?.hasAnyDateColumn() === true) {
-      datePicker = createDatePicker({
-        host: stage,
-        onConfirm: (value) => confirmDate(value),
-        onIndicatorClick: () => openDate(),
-        visibleArea,
-      });
-    }
-    closeDatePicker = cancelDate;
-    openDateForActive = openDate;
-    isDblclickDateColumnIndex = (colIndex) => dateOpenOnOf(colIndex) === 'dblclick' && !isReadOnlyColumnIndex(colIndex);
-    refreshDatePlacement = (transform: ViewportTransform): void => {
-      if (datePicker === undefined || editor === undefined) {
-        return;
-      }
-      // open 中に IME composition が始まる/非 Navigation へ遷移したら閉じる（select と同じ毎フレーム防御）。
-      if (datePicker.isOpen() && (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation')) {
-        cancelDate();
-      }
-      // 📅 インジケーター: アクティブセルが日付列 & Navigation & 非 composition & 開ける状態（readOnly/列 readOnly でない）。
-      const active = editor.session.getActiveCell();
-      const showIndicator =
-        !readonlySwitch.isReadOnly() &&
-        isDateCellIndex(active.col) &&
-        !isActiveCellReadOnly() && // DD-035 R4 / DD-036 C3: readOnly 列・行では開けないため affordance も出さない
-        !editor.session.isComposing() &&
-        editor.session.getPhase() === 'Navigation';
-      let indicatorRect: CellRect | null = null;
-      if (showIndicator) {
-        const ip = computeEditorPlacement(transform, active.row, active.col, placementConfig());
-        indicatorRect = ip.visible ? ip.rect : null;
-      }
-      let openRect: CellRect | null = null;
-      if (datePicker.isOpen() && dateOpenTarget !== null) {
-        const r = backend.view.rowIndexOf(dateOpenTarget.rowId);
-        const c = backend.view.colIndexOf(dateOpenTarget.columnId);
-        if (r < 0 || c < 0) {
-          diag.emit('warn', 'date-target-removed', `日付カレンダーの対象セルが消失したため閉じる: row=${String(dateOpenTarget.rowId)} col=${String(dateOpenTarget.columnId)}`);
-          cancelDate();
-        } else {
-          const op = computeEditorPlacement(transform, r, c, placementConfig());
-          if (op.visible) {
-            openRect = op.rect;
-          } else {
-            cancelDate(); // 画面外スクロール → 閉じる
-          }
-        }
-      }
-      datePicker.refresh({ openRect, indicatorRect });
-    };
-
-    // createGridController 直下の handler（dblclick・pointerdown・redraw）から呼ぶための ref を公開する。
-    openSelectForActive = openSelect;
-    isSelectColumnIndex = isSelectCellIndex;
-    isSearchableSelectColumnIndex = (index) => {
-      const id = backend.view.columnIdAt(index);
-      return id !== undefined && columnTypeRegistry?.isSearchableSelect(String(id)) === true;
-    };
-    closeSelectDropdown = cancelSelect;
-    /**
-     * DD-037 決定③: 自由入力併存列（allowFreeText:true）の**編集中**に、draft の前方一致で候補リストを自動表示する
-     * （suggest モード）。候補 0 件になったら閉じる＝自由入力の邪魔をしない。
-     *
-     * **キーを一切奪わない**のが本モードの契約: `decideSelectKey` は非 Navigation 位相で必ず 'none' を返すため、
-     * 印字・IME 変換・キャレット移動・Enter/Tab の確定はすべて従来の editor 経路のまま流れる。ゆえに変換中
-     * （composition）に出したままでも状態不整合が起きない（picker と違い入力の所有権を持たないため）。
-     * ハイライトは付けずに開く＝Enter は候補でなく入力文字列を確定する（決定④）。候補の選択はクリック
-     * （listbox の pointerdown → confirmSelect）で行う。
-     */
-    const syncSuggestList = (): void => {
-      if (selectDropdown === undefined || editor === undefined || columnTypeRegistry === undefined) {
-        return;
-      }
-      const active = editor.session.getActiveCell();
-      const eligible =
-        editor.session.getPhase() !== 'Navigation' && // 編集中だけ（Navigation の候補は picker が担当）
-        !readonlySwitch.isReadOnly() &&
-        isSelectCellIndex(active.col) &&
-        allowsFreeTextIndex(active.col) && // 厳格モードは picker が開くため suggest は出さない
-        !isActiveCellReadOnly();
-      if (!eligible) {
-        if (selectOpenMode === 'suggest') {
-          cancelSelect(); // 編集終了・対象外セルへ移動 → 候補リストを畳む
-        }
-        return;
-      }
-      if (selectOpenMode === 'picker') {
-        return; // 明示操作で開いた picker を優先（編集中に picker は開かないが防御）
-      }
-      const rowId = backend.view.rowIdAt(active.row);
-      const columnId = backend.view.columnIdAt(active.col);
-      if (rowId === undefined || columnId === undefined) {
-        return;
-      }
-      const options = columnTypeRegistry.getSelectOptions(String(columnId));
-      if (options === undefined) {
-        return;
-      }
-      const draft = editor.session.getDraft();
-      const filterKey = `${String(columnId)}\u0000${draft}`;
-      if (selectOpenMode === 'suggest' && filterKey === suggestFilterKey) {
-        return; // draft も対象列も変わっていない → listbox の再構築は不要（毎フレーム呼ばれるため必須の間引き）
-      }
-      const filtered = filterOptionsByPrefix(options, draft);
-      if (filtered.length === 0) {
-        if (selectOpenMode === 'suggest') {
-          cancelSelect(); // 候補 0 件 → 閉じる（決定③・suggestFilterKey も null へ戻る）
-        }
-        return;
-      }
-      if (selectOpenMode === 'suggest') {
-        selectDropdown.setOptions(filtered); // 開いたまま絞り込み（ハイライトは解除される）
-        suggestFilterKey = filterKey;
-        return;
-      }
-      // 初回表示: 対象セルを凍結して開く（rect は本フレームの placement 更新で入る）。
-      selectOpenTarget = {
-        rowId,
-        columnId,
-        beforeRevision: captureEditStartRevision(backend.session.committedDocument, rowId, columnId),
-        currentValue: backend.view.cellDisplay(rowId, columnId),
-      };
-      selectOpenMode = 'suggest';
-      suggestFilterKey = filterKey;
-      selectDropdown.open({ rect: null, options: filtered, currentValue: '', highlight: false });
-      backend.view.markViewportDirty();
-    };
-
-    refreshSelectPlacement = (transform: ViewportTransform): void => {
-      if (selectDropdown === undefined || editor === undefined) {
-        return;
-      }
-      // Fable 5 P2-2: open 中に IME composition が始まる/非 Navigation へ遷移したら閉じる（keydown consume では
-      // compositionstart は止められない＝状態不整合→自傷 cell-conflict を防ぐ）。毎フレームの防御。
-      // DD-037: 対象は picker（入力の所有権を持つドロップダウン）だけ。suggest は編集中/変換中に出ているのが
-      // 正常な状態で、キーを奪わないため同じ不整合は起こらない。
-      if (
-        selectOpenMode === 'picker' &&
-        selectDropdown.isOpen() &&
-        (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation')
-      ) {
-        cancelSelect();
-      }
-      syncSuggestList();
-      // ▼ インジケーター: アクティブセルが選択式列 & Navigation & 非 composition のとき（発見性・in-scope 小）。
-      const active = editor.session.getActiveCell();
-      const showIndicator =
-        isSelectCellIndex(active.col) &&
-        !isActiveCellReadOnly() && // DD-035 R4 / DD-036 C3: readOnly 列・行では開けないため affordance も出さない
-        !editor.session.isComposing() &&
-        editor.session.getPhase() === 'Navigation';
-      let indicatorRect: CellRect | null = null;
-      if (showIndicator) {
-        const ip = computeEditorPlacement(transform, active.row, active.col, placementConfig());
-        indicatorRect = ip.visible ? ip.rect : null;
-      }
-      // open 中の listbox 位置: 開いた対象セルの現在 index を引き直す。対象行/列が消えたら閉じて診断、
-      // 画面外へスクロールしたら閉じる（📐 エッジ・Fable 5 P2-2 の同経路）。
-      let openRect: CellRect | null = null;
-      if (selectDropdown.isOpen() && selectOpenTarget !== null) {
-        const r = backend.view.rowIndexOf(selectOpenTarget.rowId);
-        const c = backend.view.colIndexOf(selectOpenTarget.columnId);
-        if (r < 0 || c < 0) {
-          // 対象行/列が削除された → 閉じて診断（📐「閉じて診断」）。確定は起きない
-          // （confirmSelect の isRowLive はサブフレーム race に対する残余防御）。
-          diag.emit('warn', 'select-target-removed', `選択式ドロップダウンの対象セルが消失したため閉じる: row=${String(selectOpenTarget.rowId)} col=${String(selectOpenTarget.columnId)}`);
-          cancelSelect();
-        } else {
-          const op = computeEditorPlacement(transform, r, c, placementConfig());
-          if (op.visible) {
-            openRect = op.rect;
-          } else {
-            cancelSelect(); // 画面外スクロール → 閉じる（composition 不在ゆえ textarea の I-3 問題なし）
-          }
-        }
-      }
-      selectDropdown.refresh({ openRect, indicatorRect });
-    };
+    // 選択式の候補欄 → 日付カレンダーの順に backend へ結線する（どちらも該当する列があるときだけ DOM を作る）。
+    select.attach(backend);
+    date.attach(backend);
 
     const editorLayout: GridLayout = {
       get rowCount() {
@@ -3128,8 +2678,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       // 候補クリックは listbox の pointerdown preventDefault で focus を保持するため blur せず、確定を妨げない。
       // DD-035 R2: 日付カレンダーも同様に閉じる。
       onBlur: (target) => {
-        if (!selectDropdown?.contains(target)) cancelSelect();
-        cancelDate();
+        if (!select.contains(target)) select.close();
+        date.close();
       },
       layout: editorLayout,
       onPresenceChange: (update: PresenceUpdate) => {
@@ -3239,9 +2789,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // DD-035 R2: 日付カレンダーの前段裁定。open 中は矢印/PageUp/Down/Enter/Esc/Tab を消費し他キーを握り潰す。
         // 閉じている日付セルでは Alt+↓（常時）・F2/Enter（openOn='dblclick'）で開く。印字文字は 'none'＝手入力併存。
         // composition 中・非 Navigation では decideDateKey が必ず 'none'（I-3）。readOnly/列 readOnly は openDate 側で抑止。
-        if (datePicker !== undefined) {
+        if (date.isAttached()) {
           const active = current.session.getActiveCell();
-          const openOn = dateOpenOnOf(active.col);
+          const openOn = date.openOnOf(active.col);
           const decision = decideDateKey({
             key: input.key,
             ctrlKey: input.ctrlKey,
@@ -3251,43 +2801,43 @@ export function createGridController(target: GridMountTarget, options: GridMount
             eventComposing: input.isComposing,
             sessionComposing: current.session.isComposing(),
             phase: current.session.getPhase(),
-            isOpen: datePicker.isOpen(),
+            isOpen: date.isOpen(),
             isDateCell: openOn !== undefined && !readonlySwitch.isReadOnly() && !isActiveCellReadOnly(),
             openOn: openOn ?? 'dblclick',
           });
           switch (decision) {
             case 'open':
-              openDate();
+              date.open();
               return true;
             case 'move-left':
-              datePicker.moveDays(-1);
+              date.moveDays(-1);
               return true;
             case 'move-right':
-              datePicker.moveDays(1);
+              date.moveDays(1);
               return true;
             case 'move-up':
-              datePicker.moveDays(-7);
+              date.moveDays(-7);
               return true;
             case 'move-down':
-              datePicker.moveDays(7);
+              date.moveDays(7);
               return true;
             case 'prev-month':
-              datePicker.moveMonths(-1);
+              date.moveMonths(-1);
               return true;
             case 'next-month':
-              datePicker.moveMonths(1);
+              date.moveMonths(1);
               return true;
             case 'confirm': {
-              const value = datePicker.highlightedValue();
+              const value = date.highlightedValue();
               if (value === null) {
-                cancelDate();
+                date.close();
               } else {
-                confirmDate(value);
+                date.confirm(value);
               }
               return true;
             }
             case 'cancel':
-              cancelDate();
+              date.close();
               return true;
             case 'consume':
               return true;
@@ -3299,7 +2849,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         // 閉じている選択式セルでは編集開始キー（F2/Enter/Alt+↓）でドロップダウンを開く。印字文字も開くのは
         // 厳格モード（allowFreeText:false）だけで、自由入力併存列では textarea 編集へ流す（DD-037 決定①）。
         // composition 中・非 Navigation では decideSelectKey が必ず 'none'＝IME 経路無改変（I-3）。
-        if (selectDropdown !== undefined) {
+        if (select.isAttached()) {
           const active = current.session.getActiveCell();
           const decision = decideSelectKey({
             key: input.key,
@@ -3310,38 +2860,38 @@ export function createGridController(target: GridMountTarget, options: GridMount
             eventComposing: input.isComposing,
             sessionComposing: current.session.isComposing(),
             phase: current.session.getPhase(),
-            isOpen: selectDropdown.isOpen(),
+            isOpen: select.isOpen(),
             // DD-035 R4: readOnly 列の選択式セルは「非選択式」として裁定する（Enter=下移動等の閲覧系キーを奪わない。
             // 編集開始キーは readonly 裁定/列ロックが遮断済み）。
-            isSelectCell: isSelectCellIndex(active.col) && !isActiveCellReadOnly(),
+            isSelectCell: select.isSelectColumnIndex(active.col) && !isActiveCellReadOnly(),
             // DD-037 決定①: 自由入力併存列では印字文字を奪わない（textarea 編集を開始させる）。
-            allowsFreeText: allowsFreeTextIndex(active.col),
+            allowsFreeText: select.allowsFreeText(active.col),
           });
           switch (decision) {
             case 'open':
-              openSelect(input.key.length === 1 ? input.key : undefined);
+              select.open(input.key.length === 1 ? input.key : undefined);
               return true;
             case 'type':
-              selectDropdown.typeCharacter(input.key);
+              select.typeCharacter(input.key);
               backendNow.view.markViewportDirty();
               return true;
             case 'backspace':
-              selectDropdown.backspace();
+              select.backspace();
               backendNow.view.markViewportDirty();
               return true;
             case 'move-down':
-              selectDropdown.highlightNext();
+              select.highlightNext();
               backendNow.view.markViewportDirty();
               return true;
             case 'move-up':
-              selectDropdown.highlightPrev();
+              select.highlightPrev();
               backendNow.view.markViewportDirty();
               return true;
             case 'confirm':
-              confirmSelect();
+              select.confirm();
               return true;
             case 'cancel':
-              cancelSelect();
+              select.close();
               return true;
             case 'consume':
               return true;
@@ -3751,8 +3301,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       abort.abort(); // scroller listeners を解放
       resizeObserver.disconnect();
       editor?.destroy(); // 常駐 textarea/badge・editor listeners を解放
-      selectDropdown?.destroy(); // DD-027-1: listbox・▼ インジケーターを除去
-      datePicker?.destroy(); // DD-035 R2: ポップオーバー・📅 インジケーターを除去
+      select.dispose(); // DD-027-1: listbox・▼ インジケーターを除去
+      date.dispose(); // DD-035 R2: ポップオーバー・📅 インジケーターを除去
       browserTransport?.close(); // WS を閉じ再接続タイマーを解放
       scaffold.dispose(); // container から stage を除去
       debugRegistry.delete(instance);
@@ -3778,8 +3328,8 @@ export function createGridController(target: GridMountTarget, options: GridMount
       currentTransform,
       display: () => compiledDisplay,
       merges: currentMerges,
-      selectDropdown: () => selectDropdown,
-      datePicker: () => datePicker,
+      select,
+      date,
       transport: () => browserTransport,
     }),
   );
