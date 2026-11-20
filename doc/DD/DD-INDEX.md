@@ -7,7 +7,6 @@
 | DD | 件名 | ステータス | 補足 |
 |----|------|-----------|------|
 | DD-070 | 一覧の並べ替え・絞り込み・列の切り替え（consumer 駆動・RM Database） | 進行中 | 親DD（管理用）。実装は子DD DD-070-1〜9 を順に行う |
-| DD-070-8 | 見せる行と並び（単独モード） | 進行中 | 親=DD-070（第8子） |
 | DD-070-9 | 見せる行と並び（共同編集モード） | 検討中 | 親=DD-070（第9子）。DD-070-8 の Codex レビューの反映後に着手 |
 | DD-051 | Beta移行計画の見直し | 検討中 | 論点1（Tier 1 IME を Microsoft IME のみ）はユーザー決定済み。論点2〜10 は Human Spec Gate 待ち |
 | DD-042 | 固定境界の見出し文字切れ | 検討中 | DD-039 の Manual Gate M1（実機での見え方）を 2026-09-04 に後追い実施して観測した現象。DD-039 が「実機で不自然だった場合は別 DD で扱う」と明記していた分岐の実行。**未着手（起票のみ）** |
@@ -29,6 +28,7 @@
 | DD-070-5 | 表のデータを読むAPI | getRows を追加（両モード・React）。Codex high の 8 件（P2×6・P3×2）に対応（指数表記の修正・rejected の時点・初回同期前は空を含む）。配布は親 DD-070 でまとめて |
 | DD-070-6 | 見出しの印と位置 | 見出しの印（▲▼・絞り込みのボタン・▾▸）と header-click の rect・target・column-group-click を追加。見出しの描画を header-layer へ移した。Codex high の 9 件（P1×1・P2×6・P3×2）を直した |
 | DD-070-7 | 見せる列の切り替え | hiddenColumns・setHiddenColumns を追加（幅 0 で残す）。Codex high の 13 件（P1×5・P2×8）を直した。配布は親 DD-070 でまとめて |
+| DD-070-8 | 見せる行と並び（単独モード） | setRowView・visibleRowIds を追加（5 万行で setData 約 1.1 秒に対し約 50 ms）。Codex high の 13 件（P1×3・P2×10）を直した。配布は親 DD-070 でまとめて |
 | DD-069 | セルごとの背景色と読むだけのセルへの入力の通知（consumer 駆動・計画策定の部署別シート） | K8（cellBackgrounds・setCellBackgrounds）と K11（edit-blocked・cells-skipped）を追加。Codex high の2件とセルフレビューの1件を直し alpha.23 で配布。実 IME と consumer の取り込みは未保証境界へ |
 | DD-068 | 見出し下端の太い境界線 | 見出し下端を濃い3px実線に統一。unit1692件・PC4条件・配布HTMLで検証済み |
 | DD-067 | 列見出しの縦罫線 | 見出しと本文の縦罫線を統一。unit1688件・consumerのPC4条件とビルド成功 |
