@@ -40,7 +40,6 @@ import type {
   SelectionById,
   ServerMessage,
   ServerOperationEnvelope,
-  SetCellsOperation,
   SheetDocument,
   UserPresence,
   WelcomeMessage,
@@ -49,6 +48,7 @@ import { createOperationId, createTransactionId } from '@nanairo-sheet/types';
 import type { ColumnId, DocumentId, OperationId, RowId } from '@nanairo-sheet/types';
 
 import type { Clock, IdGenerator } from './deps';
+import { cloneOperation, emptyInverseSeed, isEmptyChangeSet, touchedRows } from './operation-helpers';
 
 // ---- トランスポート IF（送受信・接続イベント）----
 
@@ -200,9 +200,7 @@ export class ClientSession implements TransportListener {
   private lastPollAt = 0;
   private awaitingSync = false;
   private awaitingBootstrap = false; // fresh join（committed.revision=0）で snapshot bootstrap を待つ（P1-6/P1-7）
-  // DD-070-5（Codex P2）: サーバーの初回の状態を受け取ったか（welcome で bootstrap 不要と分かった・bootstrap を受理した）。
-  // 一度立てたら下ろさない（再接続中も、それまでに受け取った状態は読める）。立つ前の view はサーバーの既存の行を欠く。
-  private initialStateReceived = false;
+  private initialStateReceived = false; // DD-070-5: サーバーの初回の状態を受け取ったか（welcome で bootstrap 不要・bootstrap を受理。下ろさない）
   private reconcileInfo: ReconcileInfo | undefined = undefined; // 再接続 reconcile（committed が権威化してから適用＝Codex P1-2）
   private welcomeSeen = false; // この接続で welcome を受信済み（reorder で bootstrap 先着時に buffer するか判定・Codex P1-c）
   private bootstrapAcceptedOnConnection = false; // この接続で bootstrap を受理済み（bootstrap@0 の受理判定・DD-026-1 Codex P1）
@@ -1005,55 +1003,4 @@ export function applyInverseSeed(doc: SheetDocument, seed: InverseSeed): SheetDo
     setCell(next, change.rowId, change.columnId, { value: cloneCellScalar(before), lastChangedRevision: 0 });
   }
   return next;
-}
-
-/** Operation が触れる RowId（依存失効の判定用）。 */
-function touchedRows(op: DocumentOperation): RowId[] {
-  switch (op.type) {
-    case 'setCells':
-      return op.changes.map((c) => c.rowId);
-    case 'insertRows':
-      return op.rows.map((r) => r.rowId);
-    case 'deleteRows':
-      return op.rowIds;
-  }
-}
-
-/** Operation を深くコピーする（Conflict Queue の「自分の値」保全用・as 不使用）。 */
-function cloneOperation(op: DocumentOperation): DocumentOperation {
-  switch (op.type) {
-    case 'setCells': {
-      const changes: SetCellsOperation['changes'] = op.changes.map((c) =>
-        c.beforeRevision === undefined
-          ? { rowId: c.rowId, columnId: c.columnId, value: cloneCellScalar(c.value) }
-          : {
-              rowId: c.rowId,
-              columnId: c.columnId,
-              beforeRevision: c.beforeRevision,
-              value: cloneCellScalar(c.value),
-            },
-      );
-      return { type: 'setCells', conflictPolicy: op.conflictPolicy, changes };
-    }
-    case 'insertRows':
-      return {
-        type: 'insertRows',
-        afterRowId: op.afterRowId,
-        rows: op.rows.map((r) => (r.height === undefined ? { rowId: r.rowId } : { rowId: r.rowId, height: r.height })),
-      };
-    case 'deleteRows':
-      return { type: 'deleteRows', rowIds: [...op.rowIds] };
-  }
-}
-
-function isEmptyChangeSet(changeSet: ChangeSet): boolean {
-  return (
-    changeSet.cells.length === 0 &&
-    changeSet.rowsInserted.length === 0 &&
-    changeSet.rowsDeleted.length === 0
-  );
-}
-
-function emptyInverseSeed(): InverseSeed {
-  return { cells: [], insertedRowIds: [], deletedRows: [] };
 }
