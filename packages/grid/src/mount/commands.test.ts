@@ -18,6 +18,7 @@ function setup() {
       colAxis: { count: () => 3 },
       rowIndexOf: () => 0,
       colIndexOf: () => 0,
+      isColumnHidden: () => false, // DD-070-7
       markViewportDirty: () => {},
     },
   } as unknown as GridBackend;

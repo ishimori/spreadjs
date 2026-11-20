@@ -71,10 +71,18 @@ export function resizeHitTest(
       return { axis: 'column', index: c };
     }
     // 左境界の ±handle 内 かつ 列 c-1 が実際に隣接（右端が rect.x に一致）→ 列 c-1。
+    // DD-070-7: 隠した列（幅 0）は境界を持たないので飛ばし、左の見えている列の右境界とみなす（無ければ境界なし）。
     if (c > 0 && Math.abs(x - rect.x) <= handle) {
-      const prev = transform.columnHeaderRect(c - 1);
+      let p = c - 1;
+      while (p >= 0 && transform.columnHeaderRect(p).width === 0) {
+        p -= 1;
+      }
+      if (p < 0) {
+        return null;
+      }
+      const prev = transform.columnHeaderRect(p);
       if (Math.abs(prev.x + prev.width - rect.x) <= ADJACENCY_EPS) {
-        return { axis: 'column', index: c - 1 };
+        return { axis: 'column', index: p };
       }
     }
     return null;

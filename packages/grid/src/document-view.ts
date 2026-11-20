@@ -65,6 +65,8 @@ export interface FlushResult {
   structuralRebuilt: boolean;
   /** 立っていた dirty 種別（消費前のスナップショット）。 */
   dirty: Record<DirtyKind, boolean>;
+  /** DD-070-7: 列の幅（隠す・見せる）が変わった（scroll の幅を合わせ直す）。 */
+  columnLayoutChanged: boolean;
 }
 
 /**
@@ -128,6 +130,13 @@ export class DocumentView {
   private readonly colWidthOverrides: Map<ColumnId, number>;
   private readonly rowHeightOverrides: Map<RowId, number>;
   /**
+   * DD-070-7: 隠した列（view-local）。列の Axis に幅 0 で残す（列の並びと番号は変えない＝番号に依る設定がそのまま効く）。
+   * 列幅の override（colWidthOverrides）とは別に持ち、見せると元の幅に戻る。layout の columnWidths には 0 を入れない。
+   */
+  private readonly hiddenColumnSet = new Set<ColumnId>();
+  /** DD-070-7: 列の幅（隠す・見せる）が変わり、scroll の幅（spacer）を合わせ直す必要があるか。flush で下ろす。 */
+  private columnLayoutChanged = false;
+  /**
    * 自動行高の別レイヤ（DD-012-5 D5）。手動 override（rowHeightOverrides）とは別に保持し、手動があれば手動を優先する。
    * layout イベントには含めない（D7・自動高は環境・フォントで再現される導出値）。
    */
@@ -184,7 +193,7 @@ export class DocumentView {
     this.currentColAxis = createAxis({
       ids: this.getDocument().columnOrder,
       defaultSize: this.colWidth,
-      overrides: this.colWidthOverrides,
+      overrides: this.combinedColumnOverrides(),
     });
     this.currentRowAxis = createAxis({
       ids: displayRowOrder(this.getDocument()),
@@ -200,6 +209,15 @@ export class DocumentView {
    * 構造Op 後の Axis 再構築でも維持する。呼び出し側（mount-controller）が px をクランプ済みで渡す。
    */
   setColumnWidth(columnId: ColumnId, width: number): void {
+    // DD-070-7: 隠した列は override だけ覚える（Axis は幅 0 のまま。見せたときにその幅で出す）。
+    if (this.hiddenColumnSet.has(columnId)) {
+      if (width === this.colWidth) {
+        this.colWidthOverrides.delete(columnId);
+      } else {
+        this.colWidthOverrides.set(columnId, width);
+      }
+      return;
+    }
     if (width === this.colWidth) {
       // 既定値へ戻した → override を解除する（layout の override-only 契約・Codex[P2]）。
       if (this.colWidthOverrides.delete(columnId)) {
@@ -247,6 +265,51 @@ export class DocumentView {
       this.currentRowAxis.setSizeById(rowId, manual);
     }
     this.markViewportDirty();
+  }
+
+  /** 列幅の override に隠した列（幅 0）を重ねた Axis 用の大きさ（DD-070-7）。 */
+  private combinedColumnOverrides(): Map<ColumnId, number> {
+    if (this.hiddenColumnSet.size === 0) {
+      return this.colWidthOverrides;
+    }
+    const combined = new Map(this.colWidthOverrides);
+    for (const columnId of this.hiddenColumnSet) {
+      combined.set(columnId, 0);
+    }
+    return combined;
+  }
+
+  /**
+   * 隠す列を丸ごと置き換える（DD-070-7・view-local）。列の Axis を幅 0 を重ねて作り直し、描き直しと scroll の幅の合わせ直しを
+   * 求める。列の並びと番号は変えない。変わらなければ何もしない（戻り値 false）。
+   */
+  setHiddenColumns(columnIds: Iterable<ColumnId>): boolean {
+    const next = new Set(columnIds);
+    if (next.size === this.hiddenColumnSet.size && [...next].every((id) => this.hiddenColumnSet.has(id))) {
+      return false;
+    }
+    this.hiddenColumnSet.clear();
+    for (const id of next) {
+      this.hiddenColumnSet.add(id);
+    }
+    this.currentColAxis = createAxis({
+      ids: this.getDocument().columnOrder,
+      defaultSize: this.colWidth,
+      overrides: this.combinedColumnOverrides(),
+    });
+    this.columnLayoutChanged = true;
+    this.markViewportDirty();
+    return true;
+  }
+
+  /** 隠した列か（DD-070-7）。 */
+  isColumnHidden(columnId: ColumnId): boolean {
+    return this.hiddenColumnSet.has(columnId);
+  }
+
+  /** 隠した列があるか（DD-070-7。無ければ寄せ・当たり判定の追加の処理をしない）。 */
+  hasHiddenColumns(): boolean {
+    return this.hiddenColumnSet.size > 0;
   }
 
   /** 列幅 override のスナップショット（既定値の列は含まない＝override のみ・DD-012-4 layout イベント用）。 */
@@ -549,7 +612,7 @@ export class DocumentView {
         this.currentColAxis = createAxis({
           ids: doc.columnOrder,
           defaultSize: this.colWidth,
-          overrides: this.colWidthOverrides,
+          overrides: this.combinedColumnOverrides(),
         });
       }
       this.structuralRebuilds += 1;
@@ -558,10 +621,12 @@ export class DocumentView {
       this.recomputeAllAutoRowHeights();
     }
     const needsRedraw = this.dirtyCell || this.dirtyStructure || this.dirtyViewport;
+    const columnLayoutChanged = this.columnLayoutChanged;
     this.dirtyCell = false;
     this.dirtyStructure = false;
     this.dirtyViewport = false;
-    return { needsRedraw, structuralRebuilt, dirty };
+    this.columnLayoutChanged = false;
+    return { needsRedraw, structuralRebuilt, dirty, columnLayoutChanged };
   }
 
   /** 表示 index → RowId（範囲外は undefined）。Phase 3 の editingTarget 解決に使う（#4）。 */

@@ -212,6 +212,14 @@
       "meta": "columnHeaderMarks / columnGroupMarks / header-click の rect・target / column-group-click ／ unit＋実ブラウザーE2E 検証済み"
     },
     {
+      "id": "column-visibility",
+      "title": "見せる列の切り替え（列の非表示・まとまりの折りたたみ）",
+      "status": "available",
+      "summary": "列を作り直さずに隠す・見せる（スクロール位置・選択・元に戻すを保つ）。Excel のグループ化と同じく、隠した列は幅 0 で残るので、2 段の見出し・罫線・結合・固定列などの設定はそのまま効きます。矢印・Tab・クリックは隠した列を飛ばし、選択中の列を隠すと隣の列へ寄ります。まとまりのクリックと組み合わせて、180 列の表で詳細の列を折りたためます。",
+      "source": "DD-070-7",
+      "meta": "hiddenColumns / setHiddenColumns ／ unit＋実ブラウザーE2E 検証済み"
+    },
+    {
       "id": "list-ops",
       "title": "一覧の並べ替え・絞り込み・列の切り替え",
       "status": "planned",

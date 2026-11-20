@@ -80,6 +80,8 @@ export function createAxis<Id extends string>(config: AxisConfig<Id>): Axis<Id> 
 
   // prefix sum キャッシュ（サイズ変更・構造変更で無効化）。prefix[i]=index i の開始 offset。
   let prefix: Float64Array | null = null;
+  // DD-070-7: 大きさ 0 の項目（隠した列）の数。prefix と一緒に数える（0 なら当たり判定は従来と同一）。
+  let zeroCount = 0;
 
   let rebuildCount = 0;
   let lastRebuildMs = 0;
@@ -115,10 +117,16 @@ export function createAxis<Id extends string>(config: AxisConfig<Id>): Axis<Id> 
     const start = performance.now();
     const built = new Float64Array(ids.length + 1);
     let acc = 0;
+    let zeros = 0;
     for (let i = 0; i < ids.length; i += 1) {
       built[i] = acc;
-      acc += sizeAt(i);
+      const size = sizeAt(i);
+      if (size === 0) {
+        zeros += 1;
+      }
+      acc += size;
     }
+    zeroCount = zeros;
     built[ids.length] = acc;
     prefix = built;
     const elapsed = performance.now() - start;
@@ -130,6 +138,28 @@ export function createAxis<Id extends string>(config: AxisConfig<Id>): Axis<Id> 
 
   const invalidatePrefix = (): void => {
     prefix = null;
+  };
+
+  /**
+   * DD-070-7: 当たり判定が大きさ 0 の項目（隠した列）に当たったら、見えている項目へ寄せる。二分探索は「開始 offset が pixel 以下の
+   * 最大の index」を返すので、間の 0 の項目は自然に飛ばす。寄せが要るのは先頭（pixel<=0）と末尾（pixel>=total）だけ。
+   * `prefer` の向きに見えている項目が無ければ逆の向き。全部 0 なら元の index。
+   */
+  const visibleNear = (index: number, prefer: 1 | -1): number => {
+    if (zeroCount === 0 || sizeAt(index) !== 0) {
+      return index;
+    }
+    for (let i = index + prefer; i >= 0 && i < ids.length; i += prefer) {
+      if (sizeAt(i) !== 0) {
+        return i;
+      }
+    }
+    for (let i = index - prefer; i >= 0 && i < ids.length; i -= prefer) {
+      if (sizeAt(i) !== 0) {
+        return i;
+      }
+    }
+    return index;
   };
 
   const axis: Axis<Id> = {
@@ -159,10 +189,10 @@ export function createAxis<Id extends string>(config: AxisConfig<Id>): Axis<Id> 
       }
       const total = p[n] ?? 0;
       if (pixel <= 0) {
-        return 0;
+        return visibleNear(0, 1);
       }
       if (pixel >= total) {
-        return n - 1;
+        return visibleNear(n - 1, -1);
       }
       // prefix は昇順。prefix[i] <= pixel を満たす最大の i を二分探索する。
       let lo = 0;
@@ -176,7 +206,7 @@ export function createAxis<Id extends string>(config: AxisConfig<Id>): Axis<Id> 
           hi = mid;
         }
       }
-      return lo;
+      return visibleNear(lo, 1);
     },
     getId(index) {
       const id = ids[index];

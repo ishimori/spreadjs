@@ -137,6 +137,11 @@ export function createCommands(deps: CommandsDeps): MountCommands {
       diag.emit('warn', 'scroll-column-unknown', `scrollToColumn: 未知の列 columnId=${columnId} → 無視`);
       return;
     }
+    // DD-070-7: 隠した列（幅 0）へは動かさない。
+    if (backend.view.isColumnHidden(createColumnId(columnId))) {
+      diag.emit('info', 'scroll-column-hidden', `scrollToColumn: 隠した列 columnId=${columnId} → 何もしない`);
+      return;
+    }
     deps.ensureCellVisible({ row: 0, col }, 'horizontal');
     backend.view.markViewportDirty();
     diag.emit('info', 'scroll-to-column', `scrollToColumn: columnId=${columnId} index=${col}`);

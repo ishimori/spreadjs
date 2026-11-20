@@ -25,6 +25,7 @@ import type { DateWiring } from './date-wiring';
 import type { EditCommands } from './edit-commands';
 import type { GridEvents } from './events';
 import type { Keyboard } from './keyboard';
+import type { HiddenColumns } from './hidden-columns';
 import type { MountMerges } from './merges';
 import type { ReadOnlySwitch } from './readonly-switch';
 import type { SelectWiring } from './select-wiring';
@@ -46,6 +47,8 @@ export interface EditorWiringDeps {
   readonly readonlySwitch: Pick<ReadOnlySwitch, 'isReadOnly' | 'isDeferred' | 'isDeferredLockIdle' | 'scheduleEditStateCheck' | 'runEditorCommit'>;
   readonly cellLock: Pick<CellLock, 'isActiveCellReadOnly' | 'syncCellLock'>;
   readonly merges: Pick<MountMerges, 'normalizeActiveCell' | 'current'>;
+  /** DD-070-7: 選択中のセルが隠した列に入ったら、動いてきた向きの次の見えている列へ寄せる。 */
+  readonly hiddenColumns: Pick<HiddenColumns, 'normalizeActiveCell'>;
   emit(event: GridEvent): void;
   registry(): ColumnTypeRegistry | undefined;
   appearance(): CompiledAppearance;
@@ -176,6 +179,10 @@ export function createEditorWiring(deps: EditorWiringDeps): EditorWiring {
           // DD-064: 移動の結果（編集中の Enter・Tab・矢印での確定と移動を含む）が結合範囲の中なら左上へ寄せる。寄せた先の
           // onChange（入れ子）が以下を済ませるので、ここでは何もしない。
           if (merges.normalizeActiveCell()) {
+            return;
+          }
+          // DD-070-7: 隠した列（幅 0）に入ったら次の見えている列へ寄せる。寄せた先の onChange（入れ子）が以下を済ませる。
+          if (deps.hiddenColumns.normalizeActiveCell()) {
             return;
           }
           cellLock.syncCellLock(); // DD-035 R4 / DD-036 C3: activeCell の列・行に応じて textarea の readOnly 属性を同期（非 composing 時のみ）

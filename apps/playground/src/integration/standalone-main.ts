@@ -342,6 +342,8 @@ const columnGroups = parseJsonParam(searchParams.get('colgroups')) as GridColumn
 // DD-070-6: 見出しの印の初期値（例 `?headermarks={"col-b":{"filter":"active"}}`・`?groupmarks={"sup":{"collapsed":true}}`）。
 const columnHeaderMarks = parseJsonParam(searchParams.get('headermarks')) as Record<string, GridColumnHeaderMark> | undefined;
 const columnGroupMarks = parseJsonParam(searchParams.get('groupmarks')) as Record<string, GridColumnGroupMark> | undefined;
+// DD-070-7: 隠す列の初期値（例 `?hidden=col-b,col-c`）。
+const hiddenColumns = searchParams.has('hidden') ? (searchParams.get('hidden') ?? '').split(',').filter((c) => c !== '') : undefined;
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
 const SAVE_KEY = 'nsheet:standalone:cells';
@@ -464,6 +466,7 @@ const handle: StandaloneHandle = {
         ...(columnGroups !== undefined ? { columnGroups } : {}),
         ...(columnHeaderMarks !== undefined ? { columnHeaderMarks } : {}),
         ...(columnGroupMarks !== undefined ? { columnGroupMarks } : {}),
+        ...(hiddenColumns !== undefined ? { hiddenColumns } : {}),
         ...borderOptions(searchParams),
         ...validateCellOption(searchParams),
         ...(searchParams.has('wrap') ? { wrapColumns: searchParams.get('wrap')!.split(',').filter(Boolean) } : {}),

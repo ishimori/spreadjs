@@ -134,6 +134,8 @@ export interface NanairoSheetViewCommonProps {
   readonly columnHeaderMarks?: Readonly<Record<string, GridColumnHeaderMark>>;
   /** 列のまとまりの開閉の印（grid columnGroupMarks・DD-070-6）。開き直さずに `setColumnGroupMarks` を呼ぶ（同上）。 */
   readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
+  /** 隠す列（grid hiddenColumns・DD-070-7）。開き直さずに `setHiddenColumns` を呼ぶ（参照で比べる・memo 化して渡す）。 */
+  readonly hiddenColumns?: readonly string[];
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -263,7 +265,8 @@ type ExcludedGridInstanceKeys =
   | 'setReadOnly' // readOnly prop の変化で呼ぶ（DD-056）。handle からも切り替えられると prop と食い違うため出さない
   | 'setMergedCells' // mergedCells prop の変化で呼ぶ（DD-064）。setReadOnly と同じ理由で handle に出さない
   | 'setColumnHeaderMarks' // columnHeaderMarks prop の変化で呼ぶ（DD-070-6）。同上
-  | 'setColumnGroupMarks'; // columnGroupMarks prop の変化で呼ぶ（DD-070-6）。同上
+  | 'setColumnGroupMarks' // columnGroupMarks prop の変化で呼ぶ（DD-070-6）。同上
+  | 'setHiddenColumns'; // hiddenColumns prop の変化で呼ぶ（DD-070-7）。同上
 /** GridInstance のメンバーのうち、React handle に無いもの（除外リスト適用後・空集合であるべき）。 */
 type MissingHandleKeys = Exclude<keyof GridInstance, ExcludedGridInstanceKeys | keyof NanairoSheetViewHandle>;
 
@@ -443,6 +446,8 @@ function toMountOptions(
     // DD-070-6: 見出しの印は mount 時の値を初期値として渡す（以後の変化は setter）。
     columnHeaderMarks: props.columnHeaderMarks,
     columnGroupMarks: props.columnGroupMarks,
+    // DD-070-7: 隠す列も mount 時の値を初期値として渡す（以後の変化は setHiddenColumns）。
+    hiddenColumns: props.hiddenColumns,
     onEvent,
     onDiagnostic,
     validateCell,
@@ -494,6 +499,7 @@ function NanairoSheetViewImpl(
   /** DD-070-6: 現在の instance が持っている見出しの印（mount 時の値か、直近に写した値）。参照で比べる。 */
   const appliedHeaderMarksRef = useRef<NanairoSheetViewCommonProps['columnHeaderMarks']>(undefined);
   const appliedGroupMarksRef = useRef<NanairoSheetViewCommonProps['columnGroupMarks']>(undefined);
+  const appliedHiddenColumnsRef = useRef<NanairoSheetViewCommonProps['hiddenColumns']>(undefined);
 
   // 最新の callback / props / diagnostic を **commit 後**に ref へ反映する（差し替えで remount しない・契約 §4 分類3）。
   // render 中ではなく useLayoutEffect で更新する: Concurrent React（startTransition/Suspense）で **未 commit の
@@ -685,6 +691,7 @@ function NanairoSheetViewImpl(
     appliedMergedCellsRef.current = propsRef.current.mergedCells; // DD-064: この mount が持つ mergedCells
     appliedHeaderMarksRef.current = propsRef.current.columnHeaderMarks; // DD-070-6
     appliedGroupMarksRef.current = propsRef.current.columnGroupMarks; // DD-070-6
+    appliedHiddenColumnsRef.current = propsRef.current.hiddenColumns; // DD-070-7
     // 接続状態キャッシュを instance の実値で初期化する（remount で旧状態を引き継がず、
     // 初回 connection 前の pending も現 instance の状態で通知する・Codex P2）。
     lastConnStateRef.current = instance.connectionState();
@@ -742,6 +749,16 @@ function NanairoSheetViewImpl(
     appliedGroupMarksRef.current = groupMarksProp;
     instance.setColumnGroupMarks(groupMarksProp ?? {});
   }, [groupMarksProp]);
+  // DD-070-7: 隠す列の変化も開き直さずに setHiddenColumns へ写す（未指定へ戻したら [] で全部見せる）。
+  const hiddenColumnsProp = props.hiddenColumns;
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (instance === null || appliedHiddenColumnsRef.current === hiddenColumnsProp) {
+      return;
+    }
+    appliedHiddenColumnsRef.current = hiddenColumnsProp;
+    instance.setHiddenColumns(hiddenColumnsProp ?? []);
+  }, [hiddenColumnsProp]);
 
   // 初期値系（initialData/initialColumnWidths/initialRowHeights）の変更は無視＋診断 warn（契約 §4 分類2）。
   // **参照比較**で判定する（毎 render の直列化なし・Codex P1）。mountKey 変更に伴う remount では mount effect が

@@ -149,3 +149,24 @@ describe('Axis: 大規模健全性（50,000行・二分探索）', () => {
     expect(axis.indexAt(50000 * 22 - 1)).toBe(49_999);
   });
 });
+
+describe('DD-070-7 大きさ 0 の項目（隠した列）の当たり判定', () => {
+  const ids = ['a', 'b', 'c', 'd'] as const;
+  it('間の 0 は飛ばし、先頭・末尾の 0 は見えている項目へ寄せる。0 が無ければ従来どおり', () => {
+    const axis = createAxis<string>({ ids: [...ids], defaultSize: 80, overrides: [['a', 0], ['c', 0], ['d', 0]] });
+    expect(axis.indexAt(0)).toBe(1); // a は 0 → b
+    expect(axis.indexAt(-5)).toBe(1);
+    expect(axis.indexAt(10)).toBe(1);
+    expect(axis.indexAt(79)).toBe(1);
+    expect(axis.indexAt(80)).toBe(1); // 末尾（total=80）→ 末尾から戻って b
+    expect(axis.indexAt(500)).toBe(1);
+    const plain = createAxis<string>({ ids: [...ids], defaultSize: 80 });
+    expect([plain.indexAt(0), plain.indexAt(80), plain.indexAt(500)]).toEqual([0, 1, 3]);
+  });
+
+  it('全部 0 なら元の index を返す（例外にしない）', () => {
+    const axis = createAxis<string>({ ids: ['a', 'b'], defaultSize: 80, overrides: [['a', 0], ['b', 0]] });
+    expect(axis.indexAt(0)).toBe(0);
+    expect(axis.totalSize()).toBe(0);
+  });
+});

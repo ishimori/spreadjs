@@ -53,6 +53,12 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 - **grid セルのダブルクリックの通知（イベント `cell-dblclick`・DD-070-2）**: `{ type: 'cell-dblclick', rowId, columnId }`。本体の
   セルのダブルクリックで、SDK の既定の動き（編集の開始・候補欄・カレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは
   止めない）。結合範囲は左上のセル。見出し・列の境界（幅の自動調整）・行番号では出さない。
+- **grid 見せる列の切り替え（`hiddenColumns`・`setHiddenColumns(columnIds)`・DD-070-7）**: 列を作り直さずに隠す・見せる（スクロール
+  位置・選択・Undo を保つ）。隠した列は列の並びと番号を変えずに幅 0 で残す（Excel と同じ）ので、2 段の見出し・罫線・結合・固定列数・
+  列ごとの設定はそのまま効く。クリック・ドラッグ・列幅の境界のつまみは見えている列だけ。選択中のセルが隠した列に入ったら動いてきた
+  向きの次の見えている列へ寄せる（矢印・Tab・Enter・`setActiveCell`・隠したときの今のセル）。範囲の選択・コピー・貼り付けは隠した
+  列を含む（Excel と同じ）。`scrollToColumn` は隠した列なら何もしない。保存する列幅（`layout`）に 0 は入れない（見せると元の幅）。
+  view-local・両モード。未知の列は捨てて診断 warn（`hidden-columns-invalid`）。React は prop `hiddenColumns`（開き直さずに setter）。
 - **grid 見出しの印と位置（DD-070-6）**: 列の見出しの印 `columnHeaderMarks`（mount）・`setColumnHeaderMarks(marks)`（ColumnId →
   `{ sort?: 'asc' | 'desc', filter?: 'available' | 'active' }`。見出しの右端に、右から絞り込みのボタン〔available＝枠と ▼・active＝塗り〕、
   その左に並べ替えの三角。名前は印を除いた幅の中央）と、列のまとまりの開閉の印 `columnGroupMarks`・`setColumnGroupMarks(marks)`

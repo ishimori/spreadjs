@@ -444,3 +444,31 @@ describe('DD-070-5 numberToPlainString（指数表記の無い十進・値は変
     }
   });
 });
+
+describe('DD-070-7 隠した列（幅 0・番号は変えない）', () => {
+  it('隠すと列の Axis でその列が幅 0 になり番号は同じ。見せると元の幅（override）に戻る。layout の columnWidths に 0 は入らない', () => {
+    const { view } = createDocHolder();
+    view.setColumnWidth(col('col-1'), 120);
+    expect(view.setHiddenColumns([col('col-1')])).toBe(true);
+    expect(view.colAxis.count()).toBe(3);
+    expect(view.colAxis.size(1)).toBe(0);
+    expect(view.colIndexOf(col('col-2'))).toBe(2);
+    expect(view.colAxis.totalSize()).toBe(120); // 60 + 0 + 60
+    expect(view.isColumnHidden(col('col-1'))).toBe(true);
+    expect(view.columnWidthOverrideRecord()).toEqual({ 'col-1': 120 });
+    expect(view.flush().columnLayoutChanged).toBe(true);
+    expect(view.flush().columnLayoutChanged).toBe(false);
+    expect(view.setHiddenColumns([col('col-1')])).toBe(false); // 同じなら何もしない
+    view.setHiddenColumns([]);
+    expect(view.colAxis.size(1)).toBe(120);
+  });
+
+  it('隠した列の幅を変えても Axis は 0 のまま、見せたときにその幅で出す', () => {
+    const { view } = createDocHolder();
+    view.setHiddenColumns([col('col-0')]);
+    view.setColumnWidth(col('col-0'), 90);
+    expect(view.colAxis.size(0)).toBe(0);
+    view.setHiddenColumns([]);
+    expect(view.colAxis.size(0)).toBe(90);
+  });
+});

@@ -675,6 +675,30 @@ grid.subscribe((event) => {
   `'filter'`。2 段の見出しの上の段のクリックは `column-group-click`（列の `header-click` は出ない）
 - 不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`。例外にしない）
 
+### 見せる列の切り替え（`hiddenColumns`・`setHiddenColumns`・DD-070-7）
+
+列を作り直さずに隠す・見せる（両モード共通・view-local）。列のまとまりの折りたたみは、まとまりのクリック（`column-group-click`）で
+consumer が隠す列を決めて渡す。
+
+```ts
+const detail: Record<string, string[]> = { sup: ['sup-name', 'sup-country', 'sup-contact'] }; // まとまり → 折りたためる列
+const collapsed = new Set<string>();
+grid.subscribe((event) => {
+  if (event.type !== 'column-group-click') return;
+  if (collapsed.has(event.groupId)) collapsed.delete(event.groupId);
+  else collapsed.add(event.groupId);
+  grid.setHiddenColumns([...collapsed].flatMap((id) => detail[id] ?? []));
+  grid.setColumnGroupMarks(Object.fromEntries(Object.keys(detail).map((id) => [id, { collapsed: collapsed.has(id) }])));
+});
+```
+
+- 隠した列は幅 0 で残る（列の並びと番号は変わらない）。2 段の見出し・罫線・結合・固定列数などの設定は列の番号のまま効き、まとまりの
+  上の段は見えている列だけの幅になる。まとまりの全部の列を隠すと上の段も見えなくなるので、折りたたんでも見せる列（Excel の集計の列）を
+  1 つ残す
+- 矢印・Tab・クリックは隠した列を飛ばす。選択中のセルの列を隠すと隣の見えている列へ寄る。範囲の選択・コピー・貼り付けは隠した列も含む
+- `setHiddenColumns([])` で全部見せる（元の幅に戻る）。保存する列幅（`layout` の `columnWidths`）に 0 は入らない。React は prop の値
+  （参照）が変わったら setter を呼ぶ（memo 化して渡す）
+
 ### 表のデータを読む（`getRows`・DD-070-5）
 
 画面に出ている表の今のデータを読む（両モード共通）。共同編集モードでは他の参加者の確定も含む。

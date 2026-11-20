@@ -17,6 +17,7 @@ import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
 import { createCellBackgroundStore } from './cell-background';
 import { createHeaderMarkStore } from './header-marks';
+import { createHiddenColumns } from './mount/hidden-columns';
 import { createEditBlocked } from './mount/edit-blocked';
 import { createCellStatusStore } from './cell-status';
 import type {
@@ -293,6 +294,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const frozenRowCount = resolveFrozenCount(options.frozenRowCount, 'frozenRowCount');
   const frozenColCount = resolveFrozenCount(options.frozenColumnCount, 'frozenColumnCount');
 
+  // DD-070-7: 見せる列の切り替え（隠した列は列の Axis に幅 0 で残す・view-local）は mount/hidden-columns.ts。
+  const hiddenColumns = createHiddenColumns({
+    diag,
+    backend: () => lifecycle.backend(),
+    editor: () => editorWiring.get(),
+  });
+
   // ---- 描画（区画⑨・mount/render.ts・base-layer-options.ts）----
   const render = createRender({
     scaffold,
@@ -409,6 +417,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const editorWiring = createEditorWiring({
     host: stage,
     diag,
+    hiddenColumns,
     isStandalone,
     headerHeight,
     wrapColumnStrings,
@@ -542,6 +551,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 結線の順番（DOM を作る順も従来どおり）: 描画層 → 編集の命令のポート → 候補欄 → 日付カレンダー → editor。
     render.attach(backend);
     headerMarks.recheck(); // DD-070-6: 列の並び・まとまりが分かったので、それまでに受けた印の未知の列・まとまりを検査する
+    hiddenColumns.attach(backend); // DD-070-7: 結線の前に受けた隠す列を反映する
     editCommands.attach(backend);
     select.attach(backend);
     date.attach(backend);
@@ -551,6 +561,10 @@ export function createGridController(target: GridMountTarget, options: GridMount
     backend.start();
   }
 
+  // DD-070-7: mount の初期値の隠す列（結線の前なので覚えておき、結線の時に検査して反映する）。
+  if (options.hiddenColumns !== undefined) {
+    hiddenColumns.set(options.hiddenColumns, 'hiddenColumns');
+  }
   // DD-070-6: mount の初期値の見出しの印（lifecycle・config の生成の後。列の並びが分かる前なので未知の検査は結線の時）。
   headerMarksReady = true;
   if (options.columnHeaderMarks !== undefined) {
@@ -602,6 +616,13 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       headerMarks.setColumnMarks(marks, 'setColumnHeaderMarks');
       lifecycle.backend()?.view.markViewportDirty();
+    },
+    setHiddenColumns(columnIds: readonly string[]) {
+      // DD-070-7: 丸ごと置き換え（不正な値・未知の列は捨てて warn・同期 throw しない）。結線前なら覚えて結線の時に反映する。
+      if (destroyed) {
+        return;
+      }
+      hiddenColumns.set(columnIds, 'setHiddenColumns');
     },
     setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>) {
       if (destroyed) {

@@ -381,7 +381,8 @@ export function createRender(deps: RenderDeps): MountRender {
         const result = view.flush();
         if (result.needsRedraw) {
           // 自動行高が変わると総サイズ（totalSize）が変わるため spacer を同期する（末尾まで scroll 可能に維持）。
-          if (wrapEnabled) {
+          // DD-070-7: 列を隠す・見せると横の総サイズが変わるので同じく合わせ直す。
+          if (wrapEnabled || result.columnLayoutChanged) {
             syncSpacer();
           }
           redraw();

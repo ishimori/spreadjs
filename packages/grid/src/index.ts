@@ -713,6 +713,13 @@ export interface GridCommonMountOptions {
    * 印のあるまとまりは上の段の名前の左に ▾（開いている）／▸（閉じている）を描く。実行中は `setColumnGroupMarks`。
    */
   readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
+  /**
+   * 隠す列（Experimental 0.x・DD-070-7・初期値）。ColumnId の配列。隠した列は列の並びと番号を変えずに幅 0 で残す（Excel と同じ）
+   * ので、2 段の見出し・罫線・結合・固定列数・列ごとの設定はそのまま効く。クリック・ドラッグ・列幅の境界は見えている列だけ。
+   * 選択中のセルが隠した列に入ったら動いてきた向きの次の見えている列へ寄せる。範囲の選択・コピー・貼り付けは Excel と同じく
+   * 隠した列を含む。view-local・両モード共通。実行中は `GridInstance.setHiddenColumns`。未知の列は捨てて診断 warn（`hidden-columns-invalid`）。
+   */
+  readonly hiddenColumns?: readonly string[];
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**
@@ -819,6 +826,12 @@ export interface GridInstance {
    * boot 前に呼んでもよい。**同期 throw しない**: 不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`）。
    */
   setColumnHeaderMarks(marks: Readonly<Record<string, GridColumnHeaderMark>>): void;
+  /**
+   * 隠す列を丸ごと置き換える（Experimental 0.x・DD-070-7・両モード・view-local）。`[]` で全部見せる（元の幅に戻る）。開き直さない
+   * （スクロール位置・選択・Undo を保つ）。boot 前に呼んでもよい。**同期 throw しない**: 未知の列は捨てて診断 warn
+   * （`hidden-columns-invalid`）、配列でなければ何も変えない。保存する列幅（`layout` の `columnWidths`）には 0 を入れない。
+   */
+  setHiddenColumns(columnIds: readonly string[]): void;
   /** 列のまとまりの開閉の印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。`{}` で全部消す。 */
   setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>): void;
   /**
