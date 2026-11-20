@@ -51,7 +51,7 @@ for (const dpr of [1, 1.25, 2]) {
         await expect.poll(async () => (await patternPixels(page, false, seam, 76, 'dashed'))[0]).toEqual(['0,0,255,255', '255,232,232,255']);
         const explicit = (await sa.cellRectAt(page, 10, 2))!;
         await expect.poll(async () => (await patternPixels(page, true, explicit.y, explicit.x + 10, 'dashed'))[0]?.[0]).toBe('153,0,153,255');
-        expect(await pixel(page, seam, 10)).not.toBe('0,0,255,255');
+        // DD-067: 指定した縦の罫線は列見出しにも描く（破線は位相しだいで見出しの y=10 が on/off どちらにもなるので画素は見ない）。
         expect(await pixel(page, 20, r.y)).not.toBe('255,0,0,255');
         await page.screenshot({ path: evidence48(`pattern-before-dpr-${dpr}-frozen-${frozen}.png`) });
         // 実ドラッグで幅/高さを変更。patternも追従する。
@@ -236,7 +236,7 @@ for (const dpr of [1, 1.25, 2]) {
         // 同幅交点は横線が勝つ。横線は空の未来月にも連続。
         expect(await pixel(page, x, rect.y)).toBe('0,170,0,255');
         expect(await pixel(page, 850, rect.y + rect.height)).toBe('153,0,153,255');
-        expect(await pixel(page, x, 10)).not.toBe('255,0,0,255'); // headerへ延長しない
+        expect(await pixel(page, x, 10)).toBe('255,0,0,255'); // DD-067: 指定した縦の罫線は列見出しにも描く
 
         // 実ドラッグで列幅と行高を変更して境界が追従する。
         const box = (await page.locator('.nsheet-scroller').boundingBox())!;
