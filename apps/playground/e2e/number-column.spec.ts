@@ -2,13 +2,8 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
+import * as ih from './integration-helpers';
 import * as sa from './standalone-helpers';
-
-interface InvalidEvent {
-  type: 'cell-invalid';
-  source: string;
-  cells: Array<{ rowId: string; columnId: string; value: string; message: string }>;
-}
 
 async function open(page: Page, query: string): Promise<void> {
   await page.goto(`/standalone.html?${query}`);
@@ -16,8 +11,10 @@ async function open(page: Page, query: string): Promise<void> {
   await sa.waitReady(page);
 }
 
-async function invalidEvents(page: Page): Promise<InvalidEvent[]> {
-  return (await sa.events(page)).filter((e) => e.type === 'cell-invalid') as unknown as InvalidEvent[];
+async function invalidEvents(page: Page): Promise<Array<{ source: string; cells: NonNullable<sa.StandaloneEvent['cells']> }>> {
+  return (await sa.events(page))
+    .filter((e) => e.type === 'cell-invalid')
+    .map((e) => ({ source: e.source ?? '', cells: e.cells ?? [] }));
 }
 
 test('AC1: 数値の列は 12.5・全角・桁区切りの負数を数値で入れ、ND・<0.1・12.5%・日付の形は入れずに cell-invalid を出す', async ({ browser }) => {
@@ -47,6 +44,26 @@ test('AC1: 数値の列は 12.5・全角・桁区切りの負数を数値で入�
     // 数値の列でない列は従来どおり何でも入る。
     await sa.composeCommitAtCell(page, 2, 2, 'ND');
     await expect.poll(() => sa.displayCell(page, 'r2', 'col-c')).toBe('ND');
+  } finally {
+    await context.close();
+  }
+});
+
+test('AC2（Codex P3）: 貼り付けは不正なセルが 1 つでもあれば、検証を通るセルも含めて全体を書かず、不正なセルを全部載せる', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await open(page, 'number=col-b,col-c');
+    await sa.selectCell(page, 1, 1);
+    // r1: col-b=1（通る）・col-c=ND（不正）／r2: col-b=2（通る）・col-c=x（不正）
+    await ih.dispatchSyntheticPaste(page, '1\tND\n2\tx');
+    await expect.poll(async () => (await invalidEvents(page)).length).toBe(1);
+    const [event] = await invalidEvents(page);
+    expect(event!.source).toBe('paste');
+    expect(event!.cells.map((c) => `${c.rowId}:${c.columnId}:${c.value}`)).toEqual(['r1:col-c:ND', 'r2:col-c:x']);
+    for (const [rowId, columnId] of [['r1', 'col-b'], ['r1', 'col-c'], ['r2', 'col-b'], ['r2', 'col-c']] as const) {
+      expect(await sa.displayCell(page, rowId, columnId)).toBe('');
+    }
   } finally {
     await context.close();
   }

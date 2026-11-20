@@ -26,6 +26,8 @@ import type { MountMerges } from './merges';
 export interface MountConfigDeps {
   readonly options: GridMountOptions;
   readonly wrapColumnStrings: ReadonlySet<string>;
+  /** DD-070-4（Codex P2）: 型変換に使う文字列として保つ列（mount 時に写した集合）。数値の列との併用の検査にも同じ集合を使う。 */
+  readonly stringColumnStrings: ReadonlySet<string>;
   readonly frozenColCount: number;
   /** 色の正規化（canvas の strokeStyle で読み直す）に使う base canvas の 2D context。 */
   readonly baseCtx: CanvasRenderingContext2D;
@@ -57,7 +59,7 @@ export interface MountConfig {
 }
 
 export function createMountConfig(deps: MountConfigDeps): MountConfig {
-  const { options, wrapColumnStrings, baseCtx, diag } = deps;
+  const { options, wrapColumnStrings, stringColumnStrings, baseCtx, diag } = deps;
   let appearance = compileAppearance(undefined, [], () => true, () => undefined);
   // DD-027-1: 列タイプメタの Internal registry（columnOrder 解決後に生成・fail-fast）。
   let columnTypeRegistry: ColumnTypeRegistry | undefined;
@@ -83,13 +85,14 @@ export function createMountConfig(deps: MountConfigDeps): MountConfig {
     try {
       // DD-027-2: wrapColumns を渡してリンク列×折り返しの併用を fail-fast（wrap-link-conflict→column-types-invalid）。
       // DD-035 R4: readOnlyColumns も同じ registry で検証（未知列・重複 → column-types-invalid）・参照する（列タイプと直交）。
-      // DD-070-4: stringColumns も渡して数値の列との併用を fail-fast（number-string-conflict→column-types-invalid）。
+      // DD-070-4: stringColumns も渡して数値の列との併用を fail-fast（number-string-conflict→column-types-invalid）。型変換と同じく
+      // mount 時に写した集合を使う（Codex P2: 非同期の boot で options を読み直すと、mount 後に配列を変えたとき検査と変換が食い違う）。
       columnTypeRegistry = createColumnTypeRegistry(
         options.columnTypes,
         columnOrder,
         wrapColumnStrings,
         options.readOnlyColumns,
-        options.stringColumns,
+        stringColumnStrings,
       );
       // DD-027-3: セル書式ルールをプリコンパイル（fail-fast）。不正は columnTypes と同じ column-types-invalid へ写像する。
       appearance = compileAppearance(options.appearance, columnOrder, (font) => {

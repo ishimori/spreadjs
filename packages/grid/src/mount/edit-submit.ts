@@ -125,7 +125,7 @@ export function createEditSubmit(deps: EditSubmitDeps): EditSubmit {
     if (invalid.length === 0) {
       return false;
     }
-    diag.emit('info', 'cell-invalid', `validateCell が ${invalid.length} 件を拒否（${source}・未 submit・文書無変更）`);
+    diag.emit('info', 'cell-invalid', `確定前の検証（数値の列・validateCell）で ${invalid.length} 件を拒否（${source}・未 submit・文書無変更）`);
     queueMicrotask(() => {
       if (!deps.isDestroyed()) {
         deps.emit({ type: 'cell-invalid', source, cells: invalid });

@@ -475,6 +475,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
   const config = createMountConfig({
     options,
     wrapColumnStrings,
+    stringColumnStrings,
     frozenColCount,
     baseCtx,
     diag,
