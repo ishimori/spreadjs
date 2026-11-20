@@ -37,10 +37,10 @@ type DebugWindow = Window & { __integrationTestApi?: GridDebugApi };
 /** 1 回の実行の印。worker は runner の子なので、worker が作り直されても同じ値になる。 */
 const RUN_ID = String(process.ppid);
 /**
- * 入力確定は 1 回の確定ごとに文書を丸ごと複製する（core の applyOperation）ため、セルの数に比例して遅い（DD-070-1 の計測結果）。
- * 直すまでは値を記録して注記するだけにし、直したら false にして判定に戻す。
+ * 入力確定は 1 回の確定ごとに文書を丸ごと複製していた（core の applyOperation）ため、セルの数に比例して遅かった（DD-070-1）。
+ * DD-070-10 で構造共有の複製に変えて判定に戻した。再び比例して遅くなったら、直すまでの間だけ true にして値を記録する。
  */
-const COMMIT_KNOWN_SLOW = true;
+const COMMIT_KNOWN_SLOW = false;
 
 interface PerfCase {
   readonly name: string;

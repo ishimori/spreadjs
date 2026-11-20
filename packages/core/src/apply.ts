@@ -1,7 +1,7 @@
 // 決定論的適用関数（計画書 §7.6）。サーバー（sequencer）とクライアント（session）が共有する（§5.3）。
 // 時刻・乱数・DOM・ネットワークを参照せず、同一 (文書, Operation, 付与revision) → 同一 ApplyResult。
 // 付与 revision は呼び出し側（サーバー付与＝committed / クライアント楽観＝暫定）が ctx で渡す。
-// 入力文書は破壊しない（cloneDocument バッファで二相適用）。
+// 入力文書は破壊しない（forkDocument の構造共有の作業文書で二相適用・DD-070-10。費用は表の大きさに比例しない）。
 //
 // 検査の分担: apply が投げる ApplyError は「文書だけで判定できる構造エラー」= unknown-row /
 // target-row-deleted / unknown-anchor / unknown-column（DD-010・列固定違反）。すべて validateOperation が
@@ -11,7 +11,16 @@
 
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
 
-import { cloneCellScalar, cloneDocument, columnIndexOf, getCell, resolveAnchorIndex, setCell } from './document';
+import {
+  cloneCellScalar,
+  columnIndexOf,
+  forkDocument,
+  getCell,
+  resolveAnchorIndex,
+  setCell,
+  writableRowMeta,
+  writableRowOrder,
+} from './document';
 import type { RowMeta, SheetDocument } from './document';
 import type {
   CellScalar,
@@ -82,8 +91,9 @@ export function applyOperation(
   op: DocumentOperation,
   ctx: { revision: number },
 ): ApplyResult {
-  // 入力を破壊しないため 1 回だけ clone し、以降は working copy を in-place で変更する（二相適用）。
-  const next = cloneDocument(doc);
+  // 入力を破壊しないため構造共有の作業文書を 1 回作り、以降は作業文書を in-place で変更する（二相適用）。
+  // 作業文書は書くチャンク・行・行の並びだけを写す（DD-070-10。以前の丸ごとの深い複製はセルの数に比例した）。
+  const next = forkDocument(doc);
   return applyOperationInto(next, op, ctx.revision);
 }
 
@@ -145,7 +155,7 @@ function applySetCells(next: SheetDocument, op: SetCellsOperation, revision: num
     throw new ApplyError('unknown-column', unknownColumns);
   }
 
-  // Phase 2: working copy 上で確定（clone は applyOperation/replay が 1 回だけ実施済み）。
+  // Phase 2: working copy 上で確定（作業文書は applyOperation が 1 回だけ作った・replay は base そのもの）。
   // before は working copy から読み、同一 SetCells 内の複数変更（同一セルの連続書き）も正しく直前値を反映する。
   const cells: CellChange[] = [];
   const inverseCells: InverseSeed['cells'] = [];
@@ -203,10 +213,13 @@ function applyInsertRows(
   // slot は max+1 から連番で、末尾で maxSlot を一括更新する（単調非減少・rollback でも減らさない）。
   let slot = next.maxSlot + 1;
   let insertAt = anchorIndex + 1; // アンカー直後（先頭=-1 のときは 0）
+  // 共有中の行の並び・行の情報は書く前に写す（forkDocument。空 rows なら写さない）。
+  const rowOrder = op.rows.length > 0 ? writableRowOrder(next) : next.rowOrder;
+  const rowMeta = op.rows.length > 0 ? writableRowMeta(next) : next.rowMeta;
 
   for (const rowSpec of op.rows) {
-    next.rowOrder.splice(insertAt, 0, rowSpec.rowId);
-    next.rowMeta.set(rowSpec.rowId, {
+    rowOrder.splice(insertAt, 0, rowSpec.rowId);
+    rowMeta.set(rowSpec.rowId, {
       id: rowSpec.rowId,
       slot,
       tombstone: false,
@@ -246,8 +259,8 @@ function applyDeleteRows(
     }
     const index = next.rowOrder.indexOf(rowId);
     inverseDeleted.push({ rowId, index, meta: { ...meta } }); // tombstone 前の状態を保存（復元用）
-    meta.tombstone = true;
-    meta.lastChangedRevision = revision;
+    // RowMeta は fork 元と共有しうるため、その場で書き換えず差し替える（DD-070-10）。
+    writableRowMeta(next).set(rowId, { ...meta, tombstone: true, lastChangedRevision: revision });
     rowsDeleted.push(rowId);
   }
   next.revision = revision;

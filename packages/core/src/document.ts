@@ -72,7 +72,7 @@ export function columnIndexOf(doc: SheetDocument, columnId: ColumnId): number {
 }
 
 /**
- * 完全な深いコピーを返す（二相適用の validate→commit バッファ用）。
+ * 完全な深いコピーを返す（切り離した複製が要る呼び出し側用。core の適用は forkDocument を使う）。
  * rowOrder/columnOrder は新配列、rowMeta/cells は新 Map、RowMeta/CellRecord/CellScalar も
  * すべて別オブジェクトにする。clone のどこを変更しても入力 doc は不変（部分ミューテーション経路の遮断）。
  */
@@ -89,6 +89,46 @@ export function cloneDocument(doc: SheetDocument): SheetDocument {
     cells: doc.cells.clone(), // CellRecord/CellScalar まで別オブジェクト（隔離は cell-store.clone が担保）
     maxSlot: doc.maxSlot, // 採番カーソルを引き継ぐ（clone 後の InsertRows で slot が衝突しない・単調維持）
   };
+}
+
+// forkDocument が共有にした rowOrder 配列・rowMeta Map。書く前に writableRowOrder / writableRowMeta で写す。
+const sharedRowAxis = new WeakSet<object>();
+
+/**
+ * 構造を共有する複製（二相適用の作業用の文書・DD-070-10）。費用は表の大きさに比例しない。
+ * - cells は `CellStore.fork`（書くチャンクと行だけを写す）。rowOrder・rowMeta は共有し、行の挿入・削除で
+ *   書く前に writableRowOrder / writableRowMeta が写す。columnOrder は小さいので写す。
+ * - 共有するため **RowMeta・CellRecord・CellScalar のオブジェクトはその場で書き換えない**（差し替える）。
+ *   rowOrder・rowMeta を書くときは必ず writableRowOrder / writableRowMeta を通す。
+ * fork のどちら側をこの約束どおりに書き換えても、もう片方は変わらない。
+ */
+export function forkDocument(doc: SheetDocument): SheetDocument {
+  sharedRowAxis.add(doc.rowOrder);
+  sharedRowAxis.add(doc.rowMeta);
+  return {
+    revision: doc.revision,
+    rowOrder: doc.rowOrder,
+    rowMeta: doc.rowMeta,
+    columnOrder: [...doc.columnOrder],
+    cells: doc.cells.fork(),
+    maxSlot: doc.maxSlot,
+  };
+}
+
+/** 書いてよい rowOrder（forkDocument で共有中なら写して差し替える）。 */
+export function writableRowOrder(doc: SheetDocument): RowId[] {
+  if (sharedRowAxis.has(doc.rowOrder)) {
+    doc.rowOrder = [...doc.rowOrder];
+  }
+  return doc.rowOrder;
+}
+
+/** 書いてよい rowMeta（forkDocument で共有中なら写して差し替える）。中の RowMeta は差し替えて書く。 */
+export function writableRowMeta(doc: SheetDocument): Map<RowId, RowMeta> {
+  if (sharedRowAxis.has(doc.rowMeta)) {
+    doc.rowMeta = new Map(doc.rowMeta);
+  }
+  return doc.rowMeta;
 }
 
 /** rowMeta 全体の最大 slot（空なら -1）。snapshot 復元時に maxSlot キャッシュを再計算する（DD-021-3）。 */

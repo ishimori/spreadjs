@@ -70,7 +70,10 @@ function lowerBound(cols: readonly number[], target: number): number {
  * - `get`/`set`/`delete` は (slot, colIndex) 整数キー。set は blank レコードも保持する（二段 Map と等価）。
  * - `forEachInRow` は colIndex 昇順で列挙（正準直列化・serialization が Map 反復順に依存しないための決定順）。
  * - `deleteRow` は挿入 rollback（inverseSeed）で行ごと除去する経路。
- * - `clone` は CellRecord/CellScalar まで別オブジェクトへ深く複製する（二相適用バッファの隔離）。
+ * - `clone` は CellRecord/CellScalar まで別オブジェクトへ深く複製する（完全に切り離した複製）。
+ * - `fork` はチャンクと行を共有する複製（DD-070-10）。どちらかが書くときに、書くチャンクと行だけを写す
+ *   （copy-on-write）。CellRecord/CellScalar は共有するため、get で得たレコードをその場で書き換えないこと
+ *   （書き換えは set で差し替える）。費用は O(チャンク数)＝表の大きさに比例しない（256 行で 1 チャンク）。
  */
 export interface CellStore {
   get(slot: number, colIndex: number): CellRecord | undefined;
@@ -80,6 +83,7 @@ export interface CellStore {
   hasRow(slot: number): boolean;
   forEachInRow(slot: number, visit: (colIndex: number, record: CellRecord) => void): void;
   clone(): CellStore;
+  fork(): CellStore;
   /** 保持レコード総数（blank レコードも含む。二段 Map の Σ rowCells.size と一致）。 */
   nonEmptyCount(): number;
   approxMemoryBytes(): number;
@@ -95,29 +99,61 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
   if (!Number.isInteger(chunkRows) || chunkRows <= 0) {
     throw new Error(`chunkRows は正の整数（受領: ${chunkRows}）`);
   }
-  const chunks = new Map<number, Chunk>();
-  let count = 0;
-  let totalValueChars = 0;
+  return buildCellStore(chunkRows, new Map(), 0, 0);
+}
 
-  const getSlot = (slot: number, create: boolean): RowSlot | undefined => {
+/**
+ * `chunks` を土台にストアを組む。`chunks` の Map 自体はこのストアのもの（他と共有しない）だが、中のチャンクと行は
+ * fork 元と共有しうる。このストアが書いてよいのは、自分で作った・写したチャンクと行（owned）だけ。
+ */
+function buildCellStore(
+  chunkRows: number,
+  chunks: Map<number, Chunk>,
+  initialCount: number,
+  initialValueChars: number,
+): CellStore {
+  let count = initialCount;
+  let totalValueChars = initialValueChars;
+  // 書いてよいチャンク・行。fork のたびに自分の側も空に戻す（それまでのチャンクと行は fork 先と共有になるため）。
+  let ownedChunks = new WeakSet<Chunk>();
+  let ownedRows = new WeakSet<RowSlot>();
+
+  const locate = (slot: number): { chunkIndex: number; local: number } => {
     if (slot < 0 || !Number.isInteger(slot)) {
       throw new Error(`slot は 0 以上の整数（受領: ${slot}）`);
     }
     const chunkIndex = Math.floor(slot / chunkRows);
-    let chunk = chunks.get(chunkIndex);
-    if (chunk === undefined) {
-      if (!create) {
-        return undefined;
-      }
-      chunk = { slots: new Array<RowSlot | undefined>(chunkRows) };
-      chunks.set(chunkIndex, chunk);
+    return { chunkIndex, local: slot - chunkIndex * chunkRows };
+  };
+
+  const readRow = (slot: number): RowSlot | undefined => {
+    const { chunkIndex, local } = locate(slot);
+    return chunks.get(chunkIndex)?.slots[local];
+  };
+
+  /** 書いてよいチャンク（無ければ作る・共有中なら写して差し替える）。 */
+  const writableChunk = (chunkIndex: number): Chunk => {
+    const current = chunks.get(chunkIndex);
+    if (current !== undefined && ownedChunks.has(current)) {
+      return current;
     }
-    const local = slot - chunkIndex * chunkRows;
-    let row = chunk.slots[local];
-    if (row === undefined && create) {
-      row = { cols: [], records: [] };
-      chunk.slots[local] = row;
+    const chunk: Chunk = { slots: current === undefined ? new Array<RowSlot | undefined>(chunkRows) : current.slots.slice() };
+    chunks.set(chunkIndex, chunk);
+    ownedChunks.add(chunk);
+    return chunk;
+  };
+
+  /** 書いてよい行（無ければ作る・共有中なら写して差し替える）。 */
+  const writableRow = (slot: number): RowSlot => {
+    const { chunkIndex, local } = locate(slot);
+    const chunk = writableChunk(chunkIndex);
+    const current = chunk.slots[local];
+    if (current !== undefined && ownedRows.has(current)) {
+      return current;
     }
+    const row: RowSlot = current === undefined ? { cols: [], records: [] } : { cols: current.cols.slice(), records: current.records.slice() };
+    chunk.slots[local] = row;
+    ownedRows.add(row);
     return row;
   };
 
@@ -131,7 +167,7 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
       if (colIndex < 0) {
         return undefined;
       }
-      const row = getSlot(slot, false);
+      const row = readRow(slot);
       if (row === undefined) {
         return undefined;
       }
@@ -145,10 +181,7 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
       if (colIndex < 0 || !Number.isInteger(colIndex)) {
         throw new Error(`colIndex は 0 以上の整数（受領: ${colIndex}）`);
       }
-      const row = getSlot(slot, true);
-      if (row === undefined) {
-        return;
-      }
+      const row = writableRow(slot);
       const idx = lowerBound(row.cols, colIndex);
       if (idx < row.cols.length && row.cols[idx] === colIndex) {
         totalValueChars += valueChars(record) - valueChars(row.records[idx]!);
@@ -164,20 +197,22 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
       if (colIndex < 0) {
         return;
       }
-      const row = getSlot(slot, false);
-      if (row === undefined) {
+      const existing = readRow(slot);
+      if (existing === undefined) {
         return;
       }
-      const idx = lowerBound(row.cols, colIndex);
-      if (idx < row.cols.length && row.cols[idx] === colIndex) {
-        totalValueChars -= valueChars(row.records[idx]!);
-        row.cols.splice(idx, 1);
-        row.records.splice(idx, 1);
-        count -= 1;
+      const idx = lowerBound(existing.cols, colIndex);
+      if (idx >= existing.cols.length || existing.cols[idx] !== colIndex) {
+        return; // 無いセルの削除は何も写さない
       }
+      const row = writableRow(slot);
+      totalValueChars -= valueChars(row.records[idx]!);
+      row.cols.splice(idx, 1);
+      row.records.splice(idx, 1);
+      count -= 1;
     },
     deleteRow(slot) {
-      const row = getSlot(slot, false);
+      const row = readRow(slot);
       if (row === undefined) {
         return;
       }
@@ -185,18 +220,15 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
         totalValueChars -= valueChars(record);
       }
       count -= row.cols.length;
-      const chunkIndex = Math.floor(slot / chunkRows);
-      const chunk = chunks.get(chunkIndex);
-      if (chunk !== undefined) {
-        chunk.slots[slot - chunkIndex * chunkRows] = undefined;
-      }
+      const { chunkIndex, local } = locate(slot);
+      writableChunk(chunkIndex).slots[local] = undefined;
     },
     hasRow(slot) {
-      const row = getSlot(slot, false);
+      const row = readRow(slot);
       return row !== undefined && row.cols.length > 0;
     },
     forEachInRow(slot, visit) {
-      const row = getSlot(slot, false);
+      const row = readRow(slot);
       if (row === undefined) {
         return;
       }
@@ -219,6 +251,12 @@ export function createCellStore(config: CellStoreConfig = {}): CellStore {
         }
       }
       return copy;
+    },
+    fork() {
+      // ここから先は今のチャンクと行を fork 先と共有する＝自分の側も書く前に写す。
+      ownedChunks = new WeakSet();
+      ownedRows = new WeakSet();
+      return buildCellStore(chunkRows, new Map(chunks), count, totalValueChars);
     },
     nonEmptyCount() {
       return count;
