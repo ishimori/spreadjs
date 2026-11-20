@@ -472,6 +472,13 @@ const instance = mount(
 window.__gridInstance = instance;
 window.__integrationTestApi = getDebugApi(instance);
 
+// DD-070-9 回帰確認用（E2E 専用）: mount の直後（サーバーの初回の状態を受け取る前）に setRowView を呼ぶ consumer を再現する
+// （`?rowview=id1,id2`）。初回の状態の前に組み立てると全部の行が「後からできた行」になり並びが効かない。
+const initialRowView = params.get('rowview');
+if (initialRowView !== null) {
+  instance.setRowView(initialRowView.split(',').filter((id) => id !== ''));
+}
+
 // CG-1 実機 IME trace 採取（DD-016-2 Phase 4）。`?trace=1` のときだけ dynamic import で有効化する
 // （通常利用・E2E には無影響。trace-capture は内部 @nanairo-sheet/* を import しない＝R1 維持）。
 if (params.get('trace') === '1') {

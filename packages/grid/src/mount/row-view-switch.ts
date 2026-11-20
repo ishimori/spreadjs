@@ -4,7 +4,8 @@
 //
 // 「呼んだ時点にあった行」は呼んだ時に決める（Codex P2: 変換の終わりまで待つ間にできた行を隠さない）。backend の結線前に
 // 受けた指定は、単独モードなら setData と同じ boot 前の queue に呼ばれた順で積み（Codex P2: 保留した setData より先に
-// 反映すると、注入した行が全部「後からできた行」になる）、それ以外は覚えておいて結線の時に反映する。
+// 反映すると、注入した行が全部「後からできた行」になる）、それ以外は覚えておいて結線の時に反映する。共同編集モードでサーバーの
+// 初回の状態を受け取る前の指定は、受け取った後に組み立てて反映する（DD-070-9）。
 
 import { createRowId } from '@nanairo-sheet/types';
 import type { RowId } from '@nanairo-sheet/types';
@@ -27,6 +28,11 @@ export interface RowViewSwitchDeps {
    * false（積まない）。
    */
   deferUntilStandaloneBoot(run: () => void): boolean;
+  /**
+   * DD-070-9: 共同編集モードでサーバーの初回の状態をまだ受け取っていなければ、受け取った後に run を呼ぶよう予約する（予約したら
+   * true）。受け取った後・単独モードは false。初回の状態の前に組み立てると、全部の行が「後からできた行」になり並びが効かない。
+   */
+  deferUntilInitialState(run: () => void): boolean;
 }
 
 export interface RowViewSwitch {
@@ -135,7 +141,9 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
         return;
       }
       if (deps.backend() !== undefined) {
-        applyNow(order);
+        if (!deps.deferUntilInitialState(() => applyNow(order))) {
+          applyNow(order);
+        }
         return;
       }
       if (deps.deferUntilStandaloneBoot(() => applyNow(order))) {
@@ -147,7 +155,9 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
       if (beforeAttach !== undefined) {
         const { order } = beforeAttach;
         beforeAttach = undefined;
-        apply(backend, build(backend, order));
+        if (!deps.deferUntilInitialState(() => applyNow(order))) {
+          apply(backend, build(backend, order));
+        }
       }
     },
     scheduleCheck() {

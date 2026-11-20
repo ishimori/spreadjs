@@ -391,6 +391,22 @@ export function createGridController(target: GridMountTarget, options: GridMount
       date.close();
     },
     deferUntilStandaloneBoot: (run) => lifecycle.deferUntilStandaloneBoot(run),
+    // DD-070-9: 初回の状態を受け取るまで命令の保留（commands.runOrDefer）に積み、毎フレームの drain で受け取ったかを確かめ直す。
+    deferUntilInitialState: (run) => {
+      const initialStateArrived = (): boolean => lifecycle.backend()?.session.hasInitialState !== false;
+      if (initialStateArrived()) {
+        return false;
+      }
+      const attempt = (): void => {
+        if (initialStateArrived()) {
+          run();
+        } else {
+          commands.runOrDefer(attempt, initialStateArrived);
+        }
+      };
+      commands.runOrDefer(attempt, initialStateArrived);
+      return true;
+    },
   });
   const { currentTransform, syncSpacer, syncLayout } = render;
   // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。

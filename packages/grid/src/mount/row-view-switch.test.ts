@@ -8,8 +8,16 @@ import type { GridDiagnostic } from '../diagnostics';
 import { createRowViewSwitch } from './row-view-switch';
 
 function setup(
-  options: { attached?: boolean; phase?: string; composing?: boolean; unknown?: number; standaloneBoot?: boolean } = {},
+  options: {
+    attached?: boolean;
+    phase?: string;
+    composing?: boolean;
+    unknown?: number;
+    standaloneBoot?: boolean;
+    waitingInitialState?: boolean;
+  } = {},
 ) {
+  const initialWaiters: Array<() => void> = [];
   const diagnostics: GridDiagnostic[] = [];
   const applied: Array<readonly string[] | null> = [];
   const knowns: Array<string[] | null> = [];
@@ -51,6 +59,11 @@ function setup(
     closePopups: () => {
       closes += 1;
     },
+    deferUntilInitialState: (run: () => void) => {
+      if (options.waitingInitialState !== true) return false;
+      initialWaiters.push(run);
+      return true;
+    },
     deferUntilStandaloneBoot: (run: () => void) => {
       if (options.standaloneBoot !== true) return false;
       queued.push(run);
@@ -66,6 +79,7 @@ function setup(
     closes: () => closes,
     knowns,
     queued,
+    initialWaiters,
     setDocRows: (rows: string[]) => {
       docRows = rows;
     },
@@ -163,5 +177,28 @@ describe('DD-070-8 row-view-switch', () => {
     t.sw.set(['r0']);
     expect(t.applied).toEqual([]);
     expect(t.sw.visibleRowIds()).toEqual([]);
+  });
+});
+
+describe('DD-070-9 row-view-switch（共同編集モードの初回の状態の前）', () => {
+  it('初回の状態を受け取る前の指定は、受け取った後に今の文書で組み立てて反映する', () => {
+    const t = setup({ waitingInitialState: true });
+    t.sw.set(['r1', 'r0']);
+    expect(t.applied).toEqual([]);
+    expect(t.initialWaiters).toHaveLength(1);
+    t.setDocRows(['r0', 'r1', 'r2']); // 初回の状態が届いた
+    t.initialWaiters[0]!();
+    expect(t.applied).toEqual([['r1', 'r0']]);
+    expect(t.knowns.at(-1)).toEqual(['r0', 'r1', 'r2']);
+  });
+
+  it('結線の前に受けた指定も、初回の状態を受け取るまで待つ', () => {
+    const t = setup({ attached: false, waitingInitialState: true });
+    t.sw.set(['r2']);
+    t.attach();
+    t.sw.attach(t.backend as never);
+    expect(t.applied).toEqual([]);
+    t.initialWaiters[0]!();
+    expect(t.applied).toEqual([['r2']]);
   });
 });
