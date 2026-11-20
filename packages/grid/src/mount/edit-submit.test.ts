@@ -12,7 +12,15 @@ import { createSelectionController } from '../selection-controller';
 import { createUndoController } from '../undo-stack';
 import { createEditSubmit } from './edit-submit';
 
-function setup(options: { standalone?: boolean; readOnly?: boolean; validateCell?: (cell: { value: string }) => string | undefined } = {}) {
+function setup(
+  options: {
+    standalone?: boolean;
+    readOnly?: boolean;
+    validateCell?: (cell: { value: string }) => string | undefined;
+    /** DD-070-4: 数値の列（ColumnId → 拒否のメッセージ）。 */
+    numberColumns?: Record<string, string>;
+  } = {},
+) {
   let doc: SheetDocument = applyOperation(
     createDocument([createColumnId('a'), createColumnId('b')]),
     { type: 'insertRows', afterRowId: null, rows: [{ rowId: createRowId('r1') }] },
@@ -48,6 +56,14 @@ function setup(options: { standalone?: boolean; readOnly?: boolean; validateCell
     isStandalone: options.standalone === true,
     wrapEnabled: false,
     validateCell: options.validateCell as never,
+    numberColumns: () =>
+      options.numberColumns === undefined
+        ? undefined
+        : {
+            hasAnyNumberColumn: () => Object.keys(options.numberColumns!).length > 0,
+            isNumberColumn: (columnId: string) => columnId in options.numberColumns!,
+            numberInvalidMessage: (columnId: string) => options.numberColumns![columnId],
+          },
     undoCtrl,
     selectionCtrl: createSelectionController(),
     readonlySwitch: { isReadOnly: () => options.readOnly === true, isDeferredEditorCommit: () => false },
@@ -146,5 +162,53 @@ describe('mount/edit-submit: 行操作の実行前拒否', () => {
     expect(submitted).toHaveLength(1);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: 'row-structure-change', change: { kind: 'insert', afterRowId: 'r1' } });
+  });
+});
+
+describe('DD-070-4: 数値の列', () => {
+  function setValues(...values: Array<{ col: string; value: SetCellsOperation['changes'][number]['value'] }>): SetCellsOperation {
+    return {
+      type: 'setCells',
+      conflictPolicy: 'reject-overlap',
+      changes: values.map((v) => ({ rowId: createRowId('r1'), columnId: createColumnId(v.col), beforeRevision: 0, value: v.value })),
+    };
+  }
+
+  it('数値の列に数値でない値（文字列・日付）は送らず、既定のメッセージで cell-invalid を出す。数値と空は通す', async () => {
+    const { editSubmit, submitted, events } = setup({ numberColumns: { a: '数値を入力してください' } });
+    editSubmit.submitSetCells(setValues({ col: 'a', value: { kind: 'string', value: 'ND' } }), 'edit');
+    editSubmit.submitSetCells(setValues({ col: 'a', value: { kind: 'date', value: '2026-01-02' } }), 'edit');
+    expect(submitted).toEqual([]);
+    await Promise.resolve();
+    expect(events.map((e) => (e.type === 'cell-invalid' ? e.cells[0]!.message : e.type))).toEqual(['数値を入力してください', '数値を入力してください']);
+    editSubmit.submitSetCells(setValues({ col: 'a', value: { kind: 'number', value: 12.5 } }), 'edit');
+    editSubmit.submitSetCells(setValues({ col: 'a', value: { kind: 'blank' } }), 'edit');
+    expect(submitted).toHaveLength(2);
+  });
+
+  it('貼り付けは 1 件でも数値でなければ全体を拒否し、不正なセルを全部載せる。数値でない列は検査しない', async () => {
+    const { editSubmit, events } = setup({ numberColumns: { a: '数値だけ' } });
+    const op = setValues({ col: 'a', value: { kind: 'string', value: '<0.1' } }, { col: 'b', value: { kind: 'string', value: 'ND' } });
+    expect(editSubmit.rejectInvalidCells(op, 'paste')).toBe(true);
+    await Promise.resolve();
+    expect(events).toEqual([
+      { type: 'cell-invalid', source: 'paste', cells: [{ rowId: 'r1', columnId: 'a', value: '<0.1', message: '数値だけ' }] },
+    ]);
+  });
+
+  it('数値として通ったセルだけ validateCell に渡す（数値でなかったセルは呼ばない）', () => {
+    const seen: string[] = [];
+    const { editSubmit } = setup({
+      numberColumns: { a: '数値を入力してください' },
+      validateCell: (cell) => {
+        seen.push(cell.value);
+        return undefined;
+      },
+    });
+    editSubmit.rejectInvalidCells(
+      setValues({ col: 'a', value: { kind: 'string', value: 'ND' } }, { col: 'a', value: { kind: 'number', value: 3 } }, { col: 'b', value: { kind: 'string', value: 'x' } }),
+      'paste',
+    );
+    expect(seen).toEqual(['3', 'x']);
   });
 });

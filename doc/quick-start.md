@@ -639,6 +639,28 @@ const { activeCell, range } = grid.selection(); // 今の選択（ボタンか�
 - `cell-dblclick` は本体のセルだけ（見出し・列の境界・行番号では届かない）。結合範囲は左上のセルとして届く。ダブルクリックで
   編集を始めたくない列は `readOnlyColumns` にする（読むだけのセルでは `edit-blocked` の後に `cell-dblclick` が届く）
 
+### 数値の列（`columnTypes` の `type: 'number'`・DD-070-4）
+
+wt%・比率・単価など、数値だけを入れる列に付ける（両モード共通）。
+
+```ts
+mount(target, {
+  mode: 'standalone',
+  columnOrder,
+  columnTypes: { wt: { type: 'number' }, price: { type: 'number', invalidMessage: '単価は数値で入力してください' } },
+  columnDisplayFormats: { price: { type: 'number', grouping: true } }, // 表示の書式は従来どおり別に指定できる
+  onEvent: (event) => {
+    if (event.type === 'cell-invalid') showToast(event.cells[0]!.message); // 既定は「数値を入力してください」
+  },
+});
+```
+
+- 通る: `12.5`・`-3`・全角の `１２３`・3 桁区切りの `1,234`（SDK の型変換と同じ判定）。空にする確定も通る
+- 拒否: `ND`・`<0.1`・`－`（全角マイナスだけ）・`12.5%`・`2026-01-02` など。入力は捨てられ `cell-invalid` が届く（`validateCell` と同じ）。
+  貼り付け・Ctrl+D／Ctrl+R は 1 件でも不正なら全体を書かない
+- 数値として通ったセルは、そのあと `validateCell` にも渡る（範囲の検査などは consumer が書く）
+- `setData`・`setRows`・リモートの変更の値は検証しない（データを捨てない）。`stringColumns` と同じ列にはできない
+
 ### 下方向・右方向へのコピー（Ctrl+D・Ctrl+R・DD-070-3）
 
 設定は要らない（両モード共通）。Excel と同じく、範囲が 2 行以上なら一番上の行を残りの行へ、1 セル（1 行）なら上のセルを写す

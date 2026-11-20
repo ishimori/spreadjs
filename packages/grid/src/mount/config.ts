@@ -83,7 +83,14 @@ export function createMountConfig(deps: MountConfigDeps): MountConfig {
     try {
       // DD-027-2: wrapColumns を渡してリンク列×折り返しの併用を fail-fast（wrap-link-conflict→column-types-invalid）。
       // DD-035 R4: readOnlyColumns も同じ registry で検証（未知列・重複 → column-types-invalid）・参照する（列タイプと直交）。
-      columnTypeRegistry = createColumnTypeRegistry(options.columnTypes, columnOrder, wrapColumnStrings, options.readOnlyColumns);
+      // DD-070-4: stringColumns も渡して数値の列との併用を fail-fast（number-string-conflict→column-types-invalid）。
+      columnTypeRegistry = createColumnTypeRegistry(
+        options.columnTypes,
+        columnOrder,
+        wrapColumnStrings,
+        options.readOnlyColumns,
+        options.stringColumns,
+      );
       // DD-027-3: セル書式ルールをプリコンパイル（fail-fast）。不正は columnTypes と同じ column-types-invalid へ写像する。
       appearance = compileAppearance(options.appearance, columnOrder, (font) => {
         const probe = document.createElement('span');

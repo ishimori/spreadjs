@@ -70,10 +70,24 @@ export interface GridDateColumnType {
 }
 
 /**
- * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）。書式（DD-027-3）は
- * 別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ * 数値の列（DD-070-4）。確定しようとしている値が空でなく、SDK の型変換（全角数字・全角マイナス・3 桁区切りを数値にする）で
+ * 数値にならなければ拒否する（`validateCell` と同じ経路＝入力を捨てて `cell-invalid`。貼り付け・Ctrl+D／Ctrl+R は全体を拒否）。
+ * 数値として通ったセルは、そのあと consumer の `validateCell` にも渡す。`stringColumns` と同じ列は mount 時に fail-fast。
  */
-export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType;
+export interface GridNumberColumnType {
+  readonly type: 'number';
+  /** 拒否したときの `cell-invalid` の `message`（既定「数値を入力してください」）。 */
+  readonly invalidMessage?: string;
+}
+
+/** 数値の列で拒否したときの既定のメッセージ（DD-070-4）。 */
+export const DEFAULT_NUMBER_INVALID_MESSAGE = '数値を入力してください';
+
+/**
+ * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）・数値（DD-070-4）。
+ * 書式（DD-027-3）は別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ */
+export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType | GridNumberColumnType;
 
 /**
  * 絶対 http/https URL か（defaultOpen の open 可否・DD-027-2 決定・純関数＝TDD 対象）。`new URL(value)` がパースでき
@@ -108,7 +122,9 @@ export class ColumnTypeConfigError extends Error {
       | 'wrap-link-conflict'
       | 'readonly-unknown-column'
       | 'readonly-duplicate-column'
-      | 'date-open-on-invalid',
+      | 'date-open-on-invalid'
+      | 'number-string-conflict'
+      | 'number-message-invalid',
     /** 対象列 ID（診断用）。 */
     readonly columnId: string,
     message: string,
@@ -171,6 +187,124 @@ export interface ColumnTypeRegistry {
   isReadOnlyColumn(columnId: string): boolean;
   /** 読み取り専用列が 1 つでもあるか（列ロックの配線要否判定・無ければ現行経路を一切変えない）。 */
   hasAnyReadOnlyColumn(): boolean;
+  /** 数値の列か（DD-070-4）。 */
+  isNumberColumn(columnId: string): boolean;
+  /** 数値の列が 1 つでもあるか（確定前の検証の要否判定・DD-070-4）。 */
+  hasAnyNumberColumn(): boolean;
+  /** 数値の列で拒否したときのメッセージ（数値の列でなければ undefined・DD-070-4）。 */
+  numberInvalidMessage(columnId: string): string | undefined;
+}
+
+/** DD-035 R4: 読み取り専用列（列タイプと直交する属性）。未知列・重複は fail-fast（columnTypes と同じ厳格さ・同じ公開 code）。 */
+function checkReadOnlyColumns(readOnlyColumns: readonly string[] | undefined, columnSet: ReadonlySet<string>): Set<string> {
+  const readOnlySet = new Set<string>();
+  if (readOnlyColumns === undefined) {
+    return readOnlySet;
+  }
+  for (const raw of readOnlyColumns) {
+    const columnId = String(raw);
+    if (!columnSet.has(columnId)) {
+      throw new ColumnTypeConfigError(
+        'readonly-unknown-column',
+        columnId,
+        `readOnlyColumns: 未知の列 "${columnId}"（columnOrder に存在しない）`,
+      );
+    }
+    if (readOnlySet.has(columnId)) {
+      throw new ColumnTypeConfigError(
+        'readonly-duplicate-column',
+        columnId,
+        `readOnlyColumns: 列 "${columnId}" が重複指定されている`,
+      );
+    }
+    readOnlySet.add(columnId);
+  }
+  return readOnlySet;
+}
+
+/**
+ * 1 列の列タイプの形を検査する（不正なら ColumnTypeConfigError を throw）。DD-070-4 でサイズのガード（循環的複雑度）に収めるため
+ * createColumnTypeRegistry から切り出した（中身は従来どおり）。
+ */
+function checkColumnType(
+  columnId: string,
+  type: GridColumnType,
+  wrapSet: ReadonlySet<string>,
+  stringSet: ReadonlySet<string>,
+): void {
+  if (type.type === 'number') {
+    // DD-070-4: 数値にしない列（stringColumns）と数値だけを通す列は両立しない。
+    if (stringSet.has(columnId)) {
+      throw new ColumnTypeConfigError(
+        'number-string-conflict',
+        columnId,
+        `columnTypes: 数値の列 "${columnId}" は stringColumns（文字列として保つ列）と併用できない`,
+      );
+    }
+    const message: unknown = type.invalidMessage;
+    if (message !== undefined && (typeof message !== 'string' || message.trim() === '')) {
+      throw new ColumnTypeConfigError(
+        'number-message-invalid',
+        columnId,
+        `columnTypes: 数値の列 "${columnId}" の invalidMessage は空でない文字列が必要`,
+      );
+    }
+    return;
+  }
+  if (type.type === 'date') {
+    // DD-035 R2: openOn は 2 値のみ（未指定=既定 'dblclick'）。JS 経路の不正値は fail-fast（サイレントに既定へ倒さない）。
+    if (type.openOn !== undefined && type.openOn !== 'dblclick' && type.openOn !== 'icon') {
+      throw new ColumnTypeConfigError(
+        'date-open-on-invalid',
+        columnId,
+        `columnTypes: 日付列 "${columnId}" の openOn "${String(type.openOn)}" は 'dblclick' | 'icon' のいずれかが必要`,
+      );
+    }
+    return;
+  }
+  if (type.type === 'link') {
+    // DD-027-2: リンク列は wrap（折り返し・自動行高）と描画契約が両立しない（単行 fitText・下線 vs 複数行）。
+    // mount 時に fail-fast し、要求が出たら描画契約を定義して解除する（検討内容・最小・誠実）。
+    if (wrapSet.has(columnId)) {
+      throw new ColumnTypeConfigError(
+        'wrap-link-conflict',
+        columnId,
+        `columnTypes: リンク列 "${columnId}" は wrapColumns（折り返し）と併用できない`
+          + `（単行リンク描画と複数行折り返しの描画契約が両立しないため・DD-027-2）`,
+      );
+    }
+    return;
+  }
+  if (type.options.length === 0) {
+    throw new ColumnTypeConfigError(
+      'empty-options',
+      columnId,
+      `columnTypes: 選択式列 "${columnId}" の候補が 0 件`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const option of type.options) {
+    if (seen.has(option)) {
+      throw new ColumnTypeConfigError(
+        'duplicate-options',
+        columnId,
+        `columnTypes: 選択式列 "${columnId}" に重複候補 "${option}"`,
+      );
+    }
+    seen.add(option);
+    // 決定⑥ round-trip 保証（Fable 5 P2）: 候補が parseCellInput→cellScalarToDisplay で自己 round-trip しないと、
+    // 本人が選んでも editorSubmit（表示文字列比較）で拒否され、confirmSelect の parse で保存表示が変わる
+    // （例 "1,000"→1000・"01"→"1"）。mount 時に fail-fast し、違反候補と正規化後表示を message に含める。
+    const normalized = cellScalarToDisplay(parseCellInput(option));
+    if (normalized !== option) {
+      throw new ColumnTypeConfigError(
+        'option-not-round-trip',
+        columnId,
+        `columnTypes: 選択式列 "${columnId}" の候補 "${option}" は値解釈で "${normalized}" に正規化され round-trip しない`
+          + `（数値/日付形の候補は表示と一致しないため使用不可・決定⑥）`,
+      );
+    }
+  }
 }
 
 /**
@@ -186,33 +320,15 @@ export function createColumnTypeRegistry(
   columnOrder: readonly string[],
   wrapColumns?: Iterable<string>,
   readOnlyColumns?: readonly string[],
+  /** DD-070-4: 文字列として保つ列（数値の列との併用を fail-fast にする）。未指定なら検査しない。 */
+  stringColumns?: Iterable<string>,
 ): ColumnTypeRegistry {
+  const stringSet = new Set<string>(stringColumns === undefined ? [] : [...stringColumns].map((c) => String(c)));
   const types = new Map<string, GridColumnType>();
   const columnSet = new Set(columnOrder.map((c) => String(c)));
   const wrapSet = new Set<string>(wrapColumns === undefined ? [] : [...wrapColumns].map((c) => String(c)));
 
-  // DD-035 R4: 読み取り専用列（列タイプと直交する属性）。未知列・重複は fail-fast（columnTypes と同じ厳格さ・同じ公開 code）。
-  const readOnlySet = new Set<string>();
-  if (readOnlyColumns !== undefined) {
-    for (const raw of readOnlyColumns) {
-      const columnId = String(raw);
-      if (!columnSet.has(columnId)) {
-        throw new ColumnTypeConfigError(
-          'readonly-unknown-column',
-          columnId,
-          `readOnlyColumns: 未知の列 "${columnId}"（columnOrder に存在しない）`,
-        );
-      }
-      if (readOnlySet.has(columnId)) {
-        throw new ColumnTypeConfigError(
-          'readonly-duplicate-column',
-          columnId,
-          `readOnlyColumns: 列 "${columnId}" が重複指定されている`,
-        );
-      }
-      readOnlySet.add(columnId);
-    }
-  }
+  const readOnlySet = checkReadOnlyColumns(readOnlyColumns, columnSet);
 
   if (columnTypes !== undefined) {
     for (const [columnId, type] of Object.entries(columnTypes)) {
@@ -223,70 +339,15 @@ export function createColumnTypeRegistry(
           `columnTypes: 未知の列 "${columnId}"（columnOrder に存在しない）`,
         );
       }
-      // 対応 type は 'select'（DD-027-1）・'link'（DD-027-2）・'date'（DD-035）。将来 type が増えたらここへ分岐を足す。
-      if (type.type !== 'select' && type.type !== 'link' && type.type !== 'date') {
+      // 対応 type は 'select'（DD-027-1）・'link'（DD-027-2）・'date'（DD-035）・'number'（DD-070-4）。将来 type が増えたらここへ分岐を足す。
+      if (type.type !== 'select' && type.type !== 'link' && type.type !== 'date' && type.type !== 'number') {
         throw new ColumnTypeConfigError(
           'unsupported-type',
           columnId,
           `columnTypes: 列 "${columnId}" の未対応 type "${(type as { type: string }).type}"`,
         );
       }
-      if (type.type === 'date') {
-        // DD-035 R2: openOn は 2 値のみ（未指定=既定 'dblclick'）。JS 経路の不正値は fail-fast（サイレントに既定へ倒さない）。
-        if (type.openOn !== undefined && type.openOn !== 'dblclick' && type.openOn !== 'icon') {
-          throw new ColumnTypeConfigError(
-            'date-open-on-invalid',
-            columnId,
-            `columnTypes: 日付列 "${columnId}" の openOn "${String(type.openOn)}" は 'dblclick' | 'icon' のいずれかが必要`,
-          );
-        }
-        types.set(columnId, type);
-        continue;
-      }
-      if (type.type === 'link') {
-        // DD-027-2: リンク列は wrap（折り返し・自動行高）と描画契約が両立しない（単行 fitText・下線 vs 複数行）。
-        // mount 時に fail-fast し、要求が出たら描画契約を定義して解除する（検討内容・最小・誠実）。
-        if (wrapSet.has(columnId)) {
-          throw new ColumnTypeConfigError(
-            'wrap-link-conflict',
-            columnId,
-            `columnTypes: リンク列 "${columnId}" は wrapColumns（折り返し）と併用できない`
-              + `（単行リンク描画と複数行折り返しの描画契約が両立しないため・DD-027-2）`,
-          );
-        }
-        types.set(columnId, type);
-        continue;
-      }
-      if (type.options.length === 0) {
-        throw new ColumnTypeConfigError(
-          'empty-options',
-          columnId,
-          `columnTypes: 選択式列 "${columnId}" の候補が 0 件`,
-        );
-      }
-      const seen = new Set<string>();
-      for (const option of type.options) {
-        if (seen.has(option)) {
-          throw new ColumnTypeConfigError(
-            'duplicate-options',
-            columnId,
-            `columnTypes: 選択式列 "${columnId}" に重複候補 "${option}"`,
-          );
-        }
-        seen.add(option);
-        // 決定⑥ round-trip 保証（Fable 5 P2）: 候補が parseCellInput→cellScalarToDisplay で自己 round-trip しないと、
-        // 本人が選んでも editorSubmit（表示文字列比較）で拒否され、confirmSelect の parse で保存表示が変わる
-        // （例 "1,000"→1000・"01"→"1"）。mount 時に fail-fast し、違反候補と正規化後表示を message に含める。
-        const normalized = cellScalarToDisplay(parseCellInput(option));
-        if (normalized !== option) {
-          throw new ColumnTypeConfigError(
-            'option-not-round-trip',
-            columnId,
-            `columnTypes: 選択式列 "${columnId}" の候補 "${option}" は値解釈で "${normalized}" に正規化され round-trip しない`
-              + `（数値/日付形の候補は表示と一致しないため使用不可・決定⑥）`,
-          );
-        }
-      }
+      checkColumnType(columnId, type, wrapSet, stringSet);
       types.set(columnId, type);
     }
   }
@@ -305,9 +366,15 @@ export function createColumnTypeRegistry(
     return type !== undefined && type.type === 'date' ? type : undefined;
   };
 
+  const numberOf = (columnId: string): GridNumberColumnType | undefined => {
+    const type = types.get(columnId);
+    return type !== undefined && type.type === 'number' ? type : undefined;
+  };
+
   let anySelect = false;
   let anyLink = false;
   let anyDate = false;
+  let anyNumber = false;
   for (const type of types.values()) {
     if (type.type === 'select') {
       anySelect = true;
@@ -315,10 +382,18 @@ export function createColumnTypeRegistry(
       anyLink = true;
     } else if (type.type === 'date') {
       anyDate = true;
+    } else if (type.type === 'number') {
+      anyNumber = true;
     }
   }
 
   return {
+    isNumberColumn: (columnId) => numberOf(columnId) !== undefined,
+    hasAnyNumberColumn: () => anyNumber,
+    numberInvalidMessage: (columnId) => {
+      const type = numberOf(columnId);
+      return type === undefined ? undefined : (type.invalidMessage ?? DEFAULT_NUMBER_INVALID_MESSAGE);
+    },
     getColumnType: (columnId) => types.get(columnId),
     isSelectColumn: (columnId) => selectOf(columnId) !== undefined,
     isLinkColumn: (columnId) => linkOf(columnId) !== undefined,

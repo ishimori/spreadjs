@@ -32,7 +32,7 @@ export type { GridErrorCode, GridConflictCode } from './error-codes';
 export type { GridDiagnostic, GridDiagnosticLevel, GridDiagnosticHook } from './diagnostics';
 import type { GridConflictCode, GridErrorCode } from './error-codes';
 import type { GridDiagnosticHook } from './diagnostics';
-export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType } from './column-types';
+export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType, GridNumberColumnType } from './column-types';
 import type { GridColumnType } from './column-types';
 export type { GridColumnFormatRule, GridCellFormatStyle } from './format-rules';
 import type { GridColumnFormatRule } from './format-rules';
@@ -479,7 +479,12 @@ export interface GridCommonMountOptions {
      *   \`2026/7/31\` → \`2026-07-31\` に正準化）。\`openOn:'dblclick'\`（既定）=ダブルクリック/F2/Enter/Alt+↓/📅 アイコン、
      *   \`'icon'\`=📅 アイコン/Alt+↓ のみ。表示書式は \`columnDisplayFormats\` の date pattern を併用する。型は編集 UI の選択であって
      *   入力規則ではない（非日付文字列の手入力は拒否しない）。readOnly／\`readOnlyColumns\` の列では開かない。
-     * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の \`openOn\` 不正値）は mount 時に \`error\`
+     * - **数値**（DD-070-4）: \`{ type: 'number', invalidMessage? }\`。確定しようとしている値が空でなく、SDK の型変換（全角数字・
+     *   全角マイナス・3 桁区切りは数値）で数値にならなければ拒否する（\`validateCell\` と同じ経路＝入力を捨てて \`cell-invalid\`。
+     *   貼り付け・Ctrl+D／Ctrl+R は 1 件でも不正なら全体を拒否）。\`invalidMessage\` は拒否の \`message\`（既定「数値を入力してください」）。
+     *   数値として通ったセルは、そのあと \`validateCell\` にも渡す。setData・リモート由来の値は検証しない。\`stringColumns\` と同じ列は不可。
+     * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の \`openOn\` 不正値・数値×stringColumns 併用・
+     *   空の invalidMessage）は mount 時に \`error\`
      *   （phase=config・code=\`column-types-invalid\`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
      */
     readonly columnTypes?: Readonly<Record<string, GridColumnType>>;
@@ -985,10 +990,22 @@ export interface GridDateColumnType {
     readonly openOn?: 'dblclick' | 'icon';
 }
 /**
- * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）。書式（DD-027-3）は
- * 別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ * 数値の列（DD-070-4）。確定しようとしている値が空でなく、SDK の型変換（全角数字・全角マイナス・3 桁区切りを数値にする）で
+ * 数値にならなければ拒否する（\`validateCell\` と同じ経路＝入力を捨てて \`cell-invalid\`。貼り付け・Ctrl+D／Ctrl+R は全体を拒否）。
+ * 数値として通ったセルは、そのあと consumer の \`validateCell\` にも渡す。\`stringColumns\` と同じ列は mount 時に fail-fast。
  */
-export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType;
+export interface GridNumberColumnType {
+    readonly type: 'number';
+    /** 拒否したときの \`cell-invalid\` の \`message\`（既定「数値を入力してください」）。 */
+    readonly invalidMessage?: string;
+}
+/** 数値の列で拒否したときの既定のメッセージ（DD-070-4）。 */
+export declare const DEFAULT_NUMBER_INVALID_MESSAGE = "\\u6570\\u5024\\u3092\\u5165\\u529B\\u3057\\u3066\\u304F\\u3060\\u3055\\u3044";
+/**
+ * 列タイプの union（Experimental 0.x）。選択式（DD-027-1）・ハイパーリンク（DD-027-2）・日付（DD-035）・数値（DD-070-4）。
+ * 書式（DD-027-3）は別チャネル（描画）で扱うため本 union には加えない。type 判別子で分岐する（registry が type 別に参照系を提供）。
+ */
+export type GridColumnType = GridSelectColumnType | GridLinkColumnType | GridDateColumnType | GridNumberColumnType;
 /**
  * 絶対 http/https URL か（defaultOpen の open 可否・DD-027-2 決定・純関数＝TDD 対象）。\`new URL(value)\` がパースでき
  * protocol が http:/https: のときだけ true。相対 URL・非 URL 文字列・\`javascript:\`/\`data:\`/\`file:\` 等は false
@@ -1003,12 +1020,12 @@ export declare function isAbsoluteHttpUrl(value: string): boolean;
  */
 export declare class ColumnTypeConfigError extends Error {
     /** 機械可読な理由（診断用・公開はしない）。 */
-    readonly reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid';
+    readonly reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid' | 'number-string-conflict' | 'number-message-invalid';
     /** 対象列 ID（診断用）。 */
     readonly columnId: string;
     constructor(
     /** 機械可読な理由（診断用・公開はしない）。 */
-    reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid',
+    reason: 'unknown-column' | 'unsupported-type' | 'empty-options' | 'duplicate-options' | 'option-not-round-trip' | 'wrap-link-conflict' | 'readonly-unknown-column' | 'readonly-duplicate-column' | 'date-open-on-invalid' | 'number-string-conflict' | 'number-message-invalid',
     /** 対象列 ID（診断用）。 */
     columnId: string, message: string);
 }
@@ -1064,6 +1081,12 @@ export interface ColumnTypeRegistry {
     isReadOnlyColumn(columnId: string): boolean;
     /** 読み取り専用列が 1 つでもあるか（列ロックの配線要否判定・無ければ現行経路を一切変えない）。 */
     hasAnyReadOnlyColumn(): boolean;
+    /** 数値の列か（DD-070-4）。 */
+    isNumberColumn(columnId: string): boolean;
+    /** 数値の列が 1 つでもあるか（確定前の検証の要否判定・DD-070-4）。 */
+    hasAnyNumberColumn(): boolean;
+    /** 数値の列で拒否したときのメッセージ（数値の列でなければ undefined・DD-070-4）。 */
+    numberInvalidMessage(columnId: string): string | undefined;
 }
 /**
  * columnTypes（mount オプション）と columnOrder から Internal registry を生成する（fail-fast・AC8）。
@@ -1073,7 +1096,9 @@ export interface ColumnTypeRegistry {
  * @param wrapColumns 折り返し（wrap）列（ColumnId 文字列）。リンク列と併用は描画契約が両立しないため fail-fast
  *   （DD-027-2 検討内容・wrap-link-conflict）。未指定なら併用検査をしない（DD-027-1 の呼び出しと後方互換）。
  */
-export declare function createColumnTypeRegistry(columnTypes: Readonly<Record<string, GridColumnType>> | undefined, columnOrder: readonly string[], wrapColumns?: Iterable<string>, readOnlyColumns?: readonly string[]): ColumnTypeRegistry;
+export declare function createColumnTypeRegistry(columnTypes: Readonly<Record<string, GridColumnType>> | undefined, columnOrder: readonly string[], wrapColumns?: Iterable<string>, readOnlyColumns?: readonly string[],
+/** DD-070-4: 文字列として保つ列（数値の列との併用を fail-fast にする）。未指定なら検査しない。 */
+stringColumns?: Iterable<string>): ColumnTypeRegistry;
 
 // ==== packages/grid/src/diagnostics.ts ====
 /** 診断エントリの重大度。 */

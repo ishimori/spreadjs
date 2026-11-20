@@ -107,6 +107,23 @@ function parseLinkColumns(
   }
   return Object.keys(columnTypes).length > 0 ? columnTypes : undefined;
 }
+// DD-070-4: 数値の列を URL で指定できる（E2E 用）。形式: `?number=col-b,col-c`（列末尾 `!msg=…` で invalidMessage）。
+function parseNumberColumns(
+  raw: string | null,
+  base: Record<string, GridColumnType> | undefined,
+): Record<string, GridColumnType> | undefined {
+  const columnTypes: Record<string, GridColumnType> = { ...(base ?? {}) };
+  if (raw !== null && raw !== '') {
+    for (const spec of raw.split(',')) {
+      const msgAt = spec.indexOf('!msg=');
+      const columnId = msgAt < 0 ? spec : spec.slice(0, msgAt);
+      if (columnId !== '') {
+        columnTypes[columnId] = msgAt < 0 ? { type: 'number' } : { type: 'number', invalidMessage: spec.slice(msgAt + 5) };
+      }
+    }
+  }
+  return Object.keys(columnTypes).length > 0 ? columnTypes : undefined;
+}
 // DD-027-3: セル書式ルールを URL で指定できる（E2E 用・main.ts と同形式）。Fable P3: standalone も配線し駆動可能にする
 // （書式描画は mount-controller の buildColumnTypeRegistry→getCellStyle 経路が両モード共通＝経路は既に共有）。
 // 形式: `?format=col-b:進行中=badge+bc#34a853+fg#ffffff;受注=bg#fde293`（列は `,`・ルールは `;`・match は `|`）。
@@ -229,7 +246,10 @@ function parseColumnDisplayFormats(raw: string | null): Record<string, GridColum
   return Object.keys(displays).length > 0 ? displays : undefined;
 }
 const searchParams = new URLSearchParams(location.search);
-const columnTypes = parseLinkColumns(searchParams.get('link'), parseColumnTypes(searchParams.get('select')));
+const columnTypes = parseNumberColumns(
+  searchParams.get('number'),
+  parseLinkColumns(searchParams.get('link'), parseColumnTypes(searchParams.get('select'))),
+);
 const columnFormats = parseColumnFormats(searchParams.get('format'));
 const columnCaptions = parseColumnCaptions(searchParams.get('caption'));
 const columnDisplayFormats = parseColumnDisplayFormats(searchParams.get('display'));

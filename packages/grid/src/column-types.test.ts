@@ -241,3 +241,36 @@ describe('validateEditorCommit: editor 経路の commit 前検証（AC4/AC5/AC6�
     expect(reg.validateEditorCommit('col-0', '任意').allowed).toBe(true);
   });
 });
+
+describe('数値の列（DD-070-4）: registry・fail-fast', () => {
+  const order = ['wt', 'name'];
+
+  it('数値の列を判定し、拒否のメッセージは既定か指定の値', () => {
+    const reg = createColumnTypeRegistry({ wt: { type: 'number' } }, order);
+    expect(reg.isNumberColumn('wt')).toBe(true);
+    expect(reg.isNumberColumn('name')).toBe(false);
+    expect(reg.hasAnyNumberColumn()).toBe(true);
+    expect(reg.numberInvalidMessage('wt')).toBe('数値を入力してください');
+    expect(reg.numberInvalidMessage('name')).toBeUndefined();
+    const custom = createColumnTypeRegistry({ wt: { type: 'number', invalidMessage: 'wt% は数値で' } }, order);
+    expect(custom.numberInvalidMessage('wt')).toBe('wt% は数値で');
+    expect(createColumnTypeRegistry(undefined, order).hasAnyNumberColumn()).toBe(false);
+  });
+
+  it('stringColumns と同じ列・空のメッセージは fail-fast', () => {
+    expect(() => createColumnTypeRegistry({ wt: { type: 'number' } }, order, undefined, undefined, ['wt'])).toThrowError(
+      ColumnTypeConfigError,
+    );
+    expect(() => createColumnTypeRegistry({ wt: { type: 'number', invalidMessage: ' ' } }, order)).toThrowError(ColumnTypeConfigError);
+    // 別の列の stringColumns とは併用できる。
+    expect(() => createColumnTypeRegistry({ wt: { type: 'number' } }, order, undefined, undefined, ['name'])).not.toThrow();
+  });
+
+  it('数値の列は選択式・リンク・日付の判定に入らない（候補欄・カレンダーを開かない）', () => {
+    const reg = createColumnTypeRegistry({ wt: { type: 'number' } }, order);
+    expect(reg.isSelectColumn('wt')).toBe(false);
+    expect(reg.isLinkColumn('wt')).toBe(false);
+    expect(reg.isDateColumn('wt')).toBe(false);
+    expect(reg.validateEditorCommit('wt', 'ND').allowed).toBe(true); // 選択式の検証ではない（数値の判定は確定前の検証の関所）
+  });
+});

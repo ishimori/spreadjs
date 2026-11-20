@@ -22,7 +22,7 @@ import type { GridDiagnosticHook } from './diagnostics';
 
 // 列タイプ体系（DD-027-1・Experimental 0.x）。公開型は grid 自身（column-types.ts）で定義する（内部 package 型
 // ではない＝R7 に反さない）。registry 本体は Internal で、consumer 向けの登録 API は公開しない（決定⑤）。
-export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType } from './column-types';
+export type { GridColumnType, GridSelectColumnType, GridLinkColumnType, GridDateColumnType, GridNumberColumnType } from './column-types';
 import type { GridColumnType } from './column-types';
 
 // セル書式モデル（DD-027-3・Experimental 0.x）。利用側供給の「値→書式マッピング」による view-local 描画。
@@ -463,7 +463,12 @@ export interface GridCommonMountOptions {
    *   `2026/7/31` → `2026-07-31` に正準化）。`openOn:'dblclick'`（既定）=ダブルクリック/F2/Enter/Alt+↓/📅 アイコン、
    *   `'icon'`=📅 アイコン/Alt+↓ のみ。表示書式は `columnDisplayFormats` の date pattern を併用する。型は編集 UI の選択であって
    *   入力規則ではない（非日付文字列の手入力は拒否しない）。readOnly／`readOnlyColumns` の列では開かない。
-   * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の `openOn` 不正値）は mount 時に `error`
+   * - **数値**（DD-070-4）: `{ type: 'number', invalidMessage? }`。確定しようとしている値が空でなく、SDK の型変換（全角数字・
+   *   全角マイナス・3 桁区切りは数値）で数値にならなければ拒否する（`validateCell` と同じ経路＝入力を捨てて `cell-invalid`。
+   *   貼り付け・Ctrl+D／Ctrl+R は 1 件でも不正なら全体を拒否）。`invalidMessage` は拒否の `message`（既定「数値を入力してください」）。
+   *   数値として通ったセルは、そのあと `validateCell` にも渡す。setData・リモート由来の値は検証しない。`stringColumns` と同じ列は不可。
+   * - 不正設定（未知列・候補0件・重複・未対応 type・リンク×wrap 併用・date の `openOn` 不正値・数値×stringColumns 併用・
+   *   空の invalidMessage）は mount 時に `error`
    *   （phase=config・code=`column-types-invalid`）で fail-fast する。共同編集モードでの全クライアント設定一致は利用側責務（値は string のまま）。
    */
   readonly columnTypes?: Readonly<Record<string, GridColumnType>>;

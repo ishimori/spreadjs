@@ -7,6 +7,7 @@ import type { CellPosition } from '@nanairo-sheet/ime';
 import { createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, OperationId, RowId } from '@nanairo-sheet/types';
 
+import type { ColumnTypeRegistry } from '../column-types';
 import type { DiagnosticSink } from '../diagnostics';
 import { cellScalarToDisplay } from '../document-view';
 import type { GridConflictCode } from '../error-codes';
@@ -27,6 +28,8 @@ export interface EditSubmitDeps {
   readonly isStandalone: boolean;
   readonly wrapEnabled: boolean;
   readonly validateCell: GridMountOptions['validateCell'];
+  /** DD-070-4: 数値の列の判定（列タイプの registry。boot 前は undefined）。 */
+  numberColumns(): Pick<ColumnTypeRegistry, 'hasAnyNumberColumn' | 'isNumberColumn' | 'numberInvalidMessage'> | undefined;
   readonly undoCtrl: UndoController;
   readonly selectionCtrl: SelectionController;
   readonly readonlySwitch: Pick<ReadOnlySwitch, 'isReadOnly' | 'isDeferredEditorCommit'>;
@@ -87,7 +90,10 @@ export function createEditSubmit(deps: EditSubmitDeps): EditSubmit {
    */
   function rejectInvalidCells(op: SetCellsOperation, source: CellValidationSource): boolean {
     const validate = deps.validateCell;
-    if (validate === undefined) {
+    // DD-070-4: 数値の列は consumer の検証より先に SDK が判定する（数値でなければ拒否・通ったセルだけ validateCell へ）。
+    const numbers = deps.numberColumns();
+    const checkNumbers = numbers !== undefined && numbers.hasAnyNumberColumn();
+    if (validate === undefined && !checkNumbers) {
       return false;
     }
     const invalid: GridInvalidCell[] = [];
@@ -98,6 +104,13 @@ export function createEditSubmit(deps: EditSubmitDeps): EditSubmit {
       const rowId = String(change.rowId);
       const columnId = String(change.columnId);
       const value = cellScalarToDisplay(change.value);
+      if (checkNumbers && change.value.kind !== 'number' && numbers.isNumberColumn(columnId)) {
+        invalid.push({ rowId, columnId, value, message: numbers.numberInvalidMessage(columnId) ?? '' });
+        continue;
+      }
+      if (validate === undefined) {
+        continue;
+      }
       let message: unknown;
       try {
         message = validate({ rowId, columnId, value });

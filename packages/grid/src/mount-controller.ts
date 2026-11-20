@@ -186,6 +186,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     isStandalone,
     wrapEnabled,
     validateCell: options.validateCell,
+    numberColumns: () => config.registry(), // DD-070-4
     undoCtrl,
     selectionCtrl,
     readonlySwitch,

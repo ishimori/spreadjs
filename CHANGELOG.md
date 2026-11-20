@@ -53,6 +53,11 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 - **grid セルのダブルクリックの通知（イベント `cell-dblclick`・DD-070-2）**: `{ type: 'cell-dblclick', rowId, columnId }`。本体の
   セルのダブルクリックで、SDK の既定の動き（編集の開始・候補欄・カレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは
   止めない）。結合範囲は左上のセル。見出し・列の境界（幅の自動調整）・行番号では出さない。
+- **grid 数値の列（`columnTypes` の `{ type: 'number', invalidMessage? }`・DD-070-4）**: 確定しようとしている値が空でなく、SDK の
+  型変換（全角数字・全角マイナス・3 桁区切りは数値）で数値にならなければ拒否する（`ND`・`<0.1`・`12.5%`・日付の形など）。経路は
+  `validateCell` と同じで、入力を捨てて `cell-invalid`（`message` は `invalidMessage`・既定「数値を入力してください」）。貼り付け・
+  Ctrl+D／Ctrl+R は 1 件でも不正なら全体を拒否。数値として通ったセルはそのあと `validateCell` にも渡す。`setData`・リモートの値は検証
+  しない。`stringColumns` と同じ列・空の `invalidMessage` は mount 時に `column-types-invalid`。公開型 `GridNumberColumnType`。
 - **grid 下方向・右方向へのコピー（Ctrl+D・Ctrl+R・DD-070-3）**: Excel と同じく、範囲が 2 行以上なら一番上の行を残りの行へ
   （Ctrl+R は一番左の列を右の列へ）、1 行（1 セル）なら上の行（左の列）のセルを写す。写す値は表示文字列を貼り付けと同じ型変換に
   通したもの（コピーして貼り付けたのと同じ結果）。書き込みは貼り付けと同じ経路で、読むだけのセルを飛ばして `cells-skipped`
@@ -64,6 +69,7 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 ### Changed
 
 - **`GridEvent` に `selection-change`・`cell-dblclick` を追加**（union の拡張。`GridEvent` で網羅的に分岐している consumer は分岐を足す）。
+- **`GridColumnType` に `GridNumberColumnType` を追加（DD-070-4）**（union の拡張）。
 - **`'fill'` を union に追加（DD-070-3）**: `GridEditBlockedInput`・`cells-skipped` の `operation`・`cell-invalid` の `source`。
 - **グリッドに入力の焦点がある間の Ctrl+D・Ctrl+R はブラウザーの既定（ブックマーク・再読み込み）を起こさない（DD-070-3）**。
 
