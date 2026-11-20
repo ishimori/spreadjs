@@ -8,6 +8,7 @@
 import type { CellRange, MergeIndex } from '@nanairo-sheet/selection';
 
 import { createBackgroundBands, type CellBackgroundMark } from './background-bands';
+import { createHeaderLayer, type ColumnGroupMark, type ColumnHeaderMark } from './header-layer';
 import type { ChunkStore } from './chunk-store';
 import { drawBorders, drawHeaderBottomBorder, isPatternBorder, type BorderLayerDeps, type BoundaryBorder } from './border-layer';
 import { deviceLineWidth, normalizeDpr, snapToDevice } from './dpi';
@@ -207,6 +208,10 @@ export interface BaseLayerDeps extends BorderLayerDeps {
    * 高さの中央に名前を描く。`headerHeight` は 2 段ぶんの高さを渡す。未指定なら 1 段（現行描画と完全一致）。
    */
   readonly columnGroupBand?: ColumnGroupBand;
+  /** DD-070-6: 列の見出しの印（並べ替えの三角・絞り込みのボタン）。未指定・undefined の列は従来どおり。 */
+  readonly columnHeaderMark?: (colIndex: number) => ColumnHeaderMark | undefined;
+  /** DD-070-6: まとまりの開閉の印（columnGroupBand.groups の番号 → 印）。 */
+  readonly columnGroupMark?: (groupIndex: number) => ColumnGroupMark | undefined;
   /** 固定列数（DD-012-5 D2・オーバーフロー左外流入が pane 境界＝固定/本体境界を越えないための下限）。 */
   readonly frozenColCount?: number;
   /** wrap 折り返し行の行高（px・DD-012-5 D4/D5・自動行高計算と一致させる）。 */
@@ -247,16 +252,8 @@ export function isNumericCell(value: string): boolean {
   return NUMERIC_RE.test(value);
 }
 
-/** 列 index → A, B, ..., Z, AA, ... の列記号（DD-027-3・auto-fit のヘッダー幅測定と実描画で共有＝Fable P3）。 */
-export function columnLabel(col: number): string {
-  let n = col;
-  let label = '';
-  do {
-    label = String.fromCharCode(65 + (n % 26)) + label;
-    n = Math.floor(n / 26) - 1;
-  } while (n >= 0);
-  return label;
-}
+// 列記号（DD-027-3）は DD-070-6 で header-layer.ts へ移した。既存の import 元（base-layer）を保つため再 export する。
+export { columnLabel } from './header-layer';
 
 function findPane(panes: readonly PaneRange[], id: PaneId): PaneRange {
   const found = panes.find((p) => p.pane === id);
@@ -863,170 +860,20 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
     ctx.restore();
   };
 
-  // DD-039: ヘッダー帯の中を pane 境界で切り分けるための入れ子 clip。帯の clip の内側で呼ぶため
-  // 交差＝帯からはみ出さない。幅・高さが 0 以下の側は clip を張らずスキップする（drawPane と同じガード）
-  // ＝固定行列が 0 のときスクロール側の矩形は帯 clip と一致し、現行と同一の描画に落ちる。
-  const withBandClip = (x: number, y: number, width: number, height: number, draw: () => void): void => {
-    if (width <= 0 || height <= 0) {
-      return;
-    }
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, width, height);
-    ctx.clip();
-    draw();
-    ctx.restore();
-  };
-
-  // DD-064 K4: 2段の見出し。上の段の高さ（0＝1段）と、列 index → まとまり（列は mount 時に固定＝作成時に引く表を作る）。
-  const groupBandHeight =
-    deps.columnGroupBand !== undefined && deps.columnGroupBand.groups.length > 0 ? deps.columnGroupBand.height : 0;
-  const groupOfColumn = new Map<number, ColumnGroupSpan>();
-  for (const group of deps.columnGroupBand?.groups ?? []) {
-    for (let col = group.colStart; col < group.colEnd; col += 1) {
-      groupOfColumn.set(col, group);
-    }
-  }
-
-  const drawHeaders = (frame: FrameViewport): void => {
-    const { transform, viewportWidth, dpr } = frame;
-    const panes = transform.panes();
-    const body = findPane(panes, 'body');
-    const corner = findPane(panes, 'corner');
-
-    // 列記号ヘッダー（上帯）。
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(headerWidth, 0, Math.max(0, viewportWidth - headerWidth), headerHeight);
-    ctx.clip();
-    ctx.fillStyle = colors.headerBackground;
-    ctx.fillRect(headerWidth, 0, viewportWidth, headerHeight);
-    ctx.fillStyle = colors.headerText;
-    ctx.font = headerFont;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const drawColHeader = (col: number): void => {
-      const rect = transform.columnHeaderRect(col);
-      // DD-064 K4: まとめた列は下の段の中央、まとめていない列は 2 段ぶんの中央（1 段なら従来どおり見出しの中央）。
-      const labelY =
-        groupBandHeight > 0 && groupOfColumn.has(col)
-          ? groupBandHeight + (headerHeight - groupBandHeight) / 2
-          : headerHeight / 2;
-      // DD-033-2: キャプションフック未指定なら現行どおり列記号を素描画する（既存 consumer と完全一致・AC9）。
-      if (columnHeaderLabelFn === undefined) {
-        ctx.fillText(columnLabel(col), rect.x + rect.width / 2, labelY);
-        return;
-      }
-      // キャプションは自ヘッダーセル幅で fitText クリップ（長い業務名が隣接ヘッダーへ重ならない・AC2）。中央寄せは維持。
-      const label = columnHeaderLabelFn(col);
-      const text = textCache.fitText(label, headerFont, Math.max(0, rect.width - CELL_PADDING * 2));
-      ctx.font = headerFont; // fitText の measure コールバックが ctx.font を触るため描画前に復帰させる。
-      ctx.fillText(text, rect.x + rect.width / 2, labelY);
-    };
-    /**
-     * DD-064 K4: 帯（固定列・スクロール列のどちらか）の列範囲に交わるまとまりの名前と区切りの線を描く。まとまりは
-     * 固定列の境界をまたがない（grid が保証）ので、帯の clip の中に収まる。名前はまとまりの幅の中央（範囲と一緒に動く）。
-     */
-    const drawColumnGroups = (colStart: number, colEnd: number): void => {
-      if (groupBandHeight <= 0 || colEnd <= colStart) {
-        return;
-      }
-      for (const group of deps.columnGroupBand?.groups ?? []) {
-        if (group.colEnd <= colStart || group.colStart >= colEnd) {
-          continue;
-        }
-        const first = transform.columnHeaderRect(group.colStart);
-        const last = transform.columnHeaderRect(group.colEnd - 1);
-        const x = first.x;
-        const width = last.x + last.width - first.x;
-        const text = textCache.fitText(group.caption, headerFont, Math.max(0, width - CELL_PADDING * 2));
-        ctx.font = headerFont;
-        ctx.fillStyle = colors.headerText;
-        ctx.fillText(text, x + width / 2, groupBandHeight / 2);
-        // 区切り: まとまりの下（上の段と下の段の間）と、まとまりの左右（上の段だけ）。
-        ctx.strokeStyle = colors.gridLine;
-        ctx.lineWidth = deviceLineWidth(dpr);
-        ctx.beginPath();
-        const y = snapToDevice(groupBandHeight, dpr);
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + width, y);
-        for (const edge of [x, x + width]) {
-          const ex = snapToDevice(edge, dpr);
-          ctx.moveTo(ex, 0);
-          ctx.lineTo(ex, groupBandHeight);
-        }
-        ctx.stroke();
-      }
-    };
-    const drawScrollColHeaders = (): void => {
-      for (let col = body.cols.start; col < body.cols.end; col += 1) {
-        drawColHeader(col);
-      }
-      drawColumnGroups(body.cols.start, body.cols.end);
-    };
-    // DD-039: 固定列の見出しとスクロール列の見出しを pane 境界で切り分ける。scrollColRange() は
-    // 固定境界に半分かかる列と overscan 分の列を含むため、単一 clip だとそれらが固定帯の内側へ描かれる。
-    const frozenW = transform.frozenWidth();
-    if (frozenW <= 0) {
-      // 固定列なし＝スクロール側の矩形が帯 clip と一致するので入れ子を張らない（現行と同一の描画）。
-      drawScrollColHeaders();
-    } else {
-      withBandClip(headerWidth, 0, frozenW, headerHeight, () => {
-        for (let col = corner.cols.start; col < corner.cols.end; col += 1) {
-          drawColHeader(col);
-        }
-        drawColumnGroups(corner.cols.start, corner.cols.end);
-      });
-      withBandClip(headerWidth + frozenW, 0, viewportWidth - headerWidth - frozenW, headerHeight, drawScrollColHeaders);
-    }
-    ctx.restore();
-
-    // 行番号ヘッダー（左帯）。
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, headerHeight, headerWidth, Math.max(0, frame.viewportHeight - headerHeight));
-    ctx.clip();
-    ctx.fillStyle = colors.headerBackground;
-    ctx.fillRect(0, headerHeight, headerWidth, frame.viewportHeight);
-    ctx.fillStyle = colors.headerText;
-    ctx.font = headerFont;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const drawRowHeader = (row: number): void => {
-      const rect = transform.rowHeaderRect(row);
-      ctx.fillText(String(row + 1), headerWidth / 2, rect.y + rect.height / 2);
-    };
-    const drawScrollRowHeaders = (): void => {
-      for (let row = body.rows.start; row < body.rows.end; row += 1) {
-        drawRowHeader(row);
-      }
-    };
-    // DD-039: 行番号も同型（固定行の番号にスクロール行の番号が重なるのを pane 境界で止める）。
-    const frozenH = transform.frozenHeight();
-    if (frozenH <= 0) {
-      drawScrollRowHeaders();
-    } else {
-      withBandClip(0, headerHeight, headerWidth, frozenH, () => {
-        for (let row = corner.rows.start; row < corner.rows.end; row += 1) {
-          drawRowHeader(row);
-        }
-      });
-      withBandClip(0, headerHeight + frozenH, headerWidth, frame.viewportHeight - headerHeight - frozenH, drawScrollRowHeaders);
-    }
-    ctx.restore();
-
-    // 左上コーナー。
-    ctx.fillStyle = colors.headerBackground;
-    ctx.fillRect(0, 0, headerWidth, headerHeight);
-    // ヘッダー境界線（device snap）。
-    ctx.strokeStyle = colors.gridLine;
-    ctx.lineWidth = deviceLineWidth(dpr);
-    ctx.beginPath();
-    const hx = snapToDevice(headerWidth, dpr);
-    ctx.moveTo(hx, 0);
-    ctx.lineTo(hx, frame.viewportHeight);
-    ctx.stroke();
-  };
+  // DD-070-6: 見出し（列記号・キャプション・2 段の見出し・行番号・コーナー）と見出しの印は header-layer.ts。
+  const headerLayer = createHeaderLayer({
+    ctx,
+    headerWidth,
+    headerHeight,
+    headerFont,
+    colors,
+    textCache,
+    cellPadding: CELL_PADDING,
+    ...(columnHeaderLabelFn !== undefined ? { columnHeaderLabel: columnHeaderLabelFn } : {}),
+    ...(deps.columnGroupBand !== undefined ? { columnGroupBand: deps.columnGroupBand } : {}),
+    ...(deps.columnHeaderMark !== undefined ? { columnHeaderMark: deps.columnHeaderMark } : {}),
+    ...(deps.columnGroupMark !== undefined ? { columnGroupMark: deps.columnGroupMark } : {}),
+  });
 
   return {
     textCache,
@@ -1038,7 +885,7 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       drawPane(frame, findPane(panes, 'left'));
       drawPane(frame, findPane(panes, 'top'));
       drawPane(frame, findPane(panes, 'corner'));
-      drawHeaders(frame);
+      headerLayer.draw(frame);
       drawBorders(ctx, frame, headerWidth, headerHeight, deps);
       drawHeaderBottomBorder(ctx, frame, headerHeight, colors.headerText);
     },

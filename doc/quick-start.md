@@ -639,6 +639,39 @@ const { activeCell, range } = grid.selection(); // 今の選択（ボタンか�
 - `cell-dblclick` は本体のセルだけ（見出し・列の境界・行番号では届かない）。結合範囲は左上のセルとして届く。ダブルクリックで
   編集を始めたくない列は `readOnlyColumns` にする（読むだけのセルでは `edit-blocked` の後に `cell-dblclick` が届く）
 
+### 見出しの印と位置（`setColumnHeaderMarks`・`setColumnGroupMarks`・`header-click`・`column-group-click`・DD-070-6）
+
+並べ替え・絞り込み・列のまとまりの折りたたみは consumer が行い、SDK は見出しに印を描いて、押した場所を知らせる（両モード共通・
+view-local・開き直さない）。
+
+```ts
+let sort: { columnId: string; dir: 'asc' | 'desc' } | undefined;
+grid.subscribe((event) => {
+  if (event.type === 'header-click') {
+    if (event.target === 'filter') {
+      openFilterPopup(event.columnId, event.rect); // 見出しの矩形（stage の座標）の下に候補欄を出す
+      return;
+    }
+    sort = { columnId: event.columnId, dir: sort?.columnId === event.columnId && sort.dir === 'asc' ? 'desc' : 'asc' };
+    applySort(sort); // 並べ替えは consumer（DD-070-8 で作り直さずに並びを変えられるようになる）
+    grid.setColumnHeaderMarks({ [sort.columnId]: { sort: sort.dir }, price: { filter: 'active' }, name: { filter: 'available' } });
+  }
+  if (event.type === 'column-group-click') {
+    toggleGroup(event.groupId); // 見せる列の切り替えは DD-070-7
+    grid.setColumnGroupMarks({ [event.groupId]: { collapsed: isCollapsed(event.groupId) } });
+  }
+});
+```
+
+- 列の印は見出しの右端に、右から絞り込みのボタン（`available`＝枠と ▼・`active`＝塗り）、その左に並べ替えの三角（▲ 昇順・▼ 降順）。
+  名前は印を除いた幅の中央に置き、収まらなければ省略記号
+- `setColumnHeaderMarks`・`setColumnGroupMarks` は丸ごと置き換える（`{}` で全部消す）。mount オプション `columnHeaderMarks`・
+  `columnGroupMarks` は初期値。React は prop の値（参照）が変わったら setter を呼ぶ（開き直さない・memo 化して渡す）
+- まとまりの印は `columnGroups` の `id`（省略時は `caption`）で指す。上の段の名前の左に ▾（開いている）／▸（閉じている）
+- `header-click` の `rect` は見出しのセルの矩形（2 段の見出しでまとめた列は下の段）、`target` は絞り込みのボタンの上なら
+  `'filter'`。2 段の見出しの上の段のクリックは `column-group-click`（列の `header-click` は出ない）
+- 不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`。例外にしない）
+
 ### 表のデータを読む（`getRows`・DD-070-5）
 
 画面に出ている表の今のデータを読む（両モード共通）。共同編集モードでは他の参加者の確定も含む。

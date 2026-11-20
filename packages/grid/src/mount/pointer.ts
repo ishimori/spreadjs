@@ -2,7 +2,7 @@
 // リスナーは mount 時に scroller へ登録する（登録順は従来どおり: pointermove → pointerleave → pointerup → pointercancel →
 // lostpointercapture → pointerdown → dblclick → scroll。登録順はハンドラの実行順を決める）。destroy の abort で解除される。
 
-import { BADGE_TEXT_PADDING, CELL_TEXT_PADDING, columnLabel } from '@nanairo-sheet/render';
+import { BADGE_TEXT_PADDING, CELL_TEXT_PADDING, columnHeaderMarkLayout, columnLabel } from '@nanairo-sheet/render';
 import type { TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import { mergeAnchorOf } from '@nanairo-sheet/selection';
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
@@ -14,6 +14,7 @@ import type { DiagnosticSink } from '../diagnostics';
 import type { CompiledColumnDisplay } from '../display-format';
 import type { CompiledColumnFormats } from '../format-rules';
 import type { GridBackend } from '../grid-backend';
+import type { HeaderMarkStore } from '../header-marks';
 import type { GridEvent } from '../index';
 import type { IntegrationEditor } from '../integration-editor';
 import { autoFitColumnWidth, computeAutoFitContentWidth, computeResizeSize, resizeHitTest } from '../resize-interaction';
@@ -48,6 +49,8 @@ export interface PointerDeps {
   readonly date: Pick<DateWiring, 'isOpen' | 'close' | 'open' | 'isDblclickDateColumnIndex'>;
   readonly hover: CellHover;
   readonly link: LinkClick;
+  /** DD-070-6: 見出しの印（絞り込みのボタンの当たり判定に使う）。 */
+  readonly headerMarks: Pick<HeaderMarkStore, 'columnMark'>;
   emit(event: GridEvent): void;
   backend(): GridBackend | undefined;
   editor(): IntegrationEditor | undefined;
@@ -472,13 +475,40 @@ export function registerPointerInteraction(deps: PointerDeps): void {
   }
 
   /** セルの外（見出し・コーナー）の pointerdown。 */
-  function pointerdownOutsideCells(sync: GridBackend, editor: IntegrationEditor, hit: Hit, y: number): void {
-    // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
-    // DD-064 K4: 2段の見出しの上の段（まとまりの名前）のクリックは通知しない（列の見出しではない）。
-    if (hit.area === 'column-header' && !isGroupBandHit(hit.colIndex, y)) {
-      const columnId = sync.view.columnIdAt(hit.colIndex);
-      if (columnId !== undefined) {
-        deps.emit({ type: 'header-click', columnId: String(columnId) });
+  function pointerdownOutsideCells(
+    sync: GridBackend,
+    editor: IntegrationEditor,
+    transform: ViewportTransform,
+    hit: Hit,
+    x: number,
+    y: number,
+  ): void {
+    if (hit.area === 'column-header') {
+      // DD-070-6: 2段の見出しの上の段（まとまりの名前）のクリックは column-group-click（列の見出しの header-click ではない）。
+      const group = isGroupBandHit(hit.colIndex, y) ? columnGroupAt(hit.colIndex) : undefined;
+      if (group !== undefined) {
+        const first = transform.columnHeaderRect(group.colStart);
+        const last = transform.columnHeaderRect(group.colEnd - 1);
+        deps.emit({
+          type: 'column-group-click',
+          groupId: group.id,
+          caption: group.caption,
+          columnIds: [...group.columnIds],
+          rect: { x: first.x, y: 0, width: last.x + last.width - first.x, height: deps.groupBandHeight },
+        });
+      } else {
+        // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
+        // DD-070-6: 見出しのセルの矩形（2 段の見出しでまとめた列は下の段）と、絞り込みのボタンの上か（描画と同じ配置の関数）。
+        const columnId = sync.view.columnIdAt(hit.colIndex);
+        if (columnId !== undefined) {
+          const header = transform.columnHeaderRect(hit.colIndex);
+          const top = deps.groupBandHeight > 0 && columnGroupAt(hit.colIndex) !== undefined ? deps.groupBandHeight : 0;
+          const rect = { x: header.x, y: top, width: header.width, height: deps.headerHeight - top };
+          const button = columnHeaderMarkLayout(rect, deps.headerMarks.columnMark(String(columnId)), CELL_TEXT_PADDING).filter;
+          const onButton =
+            button !== undefined && x >= button.x && x < button.x + button.width && y >= button.y && y < button.y + button.height;
+          deps.emit({ type: 'header-click', columnId: String(columnId), rect, target: onButton ? 'filter' : 'caption' });
+        }
       }
     }
     editor.pointerdownCell(null);
@@ -556,7 +586,7 @@ export function registerPointerInteraction(deps: PointerDeps): void {
       }
       const hit = transform.hitTest(x, y);
       if (hit.area !== 'cell') {
-        pointerdownOutsideCells(sync, editor, hit, y);
+        pointerdownOutsideCells(sync, editor, transform, hit, x, y);
         return;
       }
       pointerdownCell(sync, editor, event, hit, dismissed);

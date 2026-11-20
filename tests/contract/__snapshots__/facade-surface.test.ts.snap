@@ -42,6 +42,8 @@ export type { GridMergedCell } from './merged-cell-spec';
 import type { GridMergedCell } from './merged-cell-spec';
 export type { GridColumnGroup } from './column-groups';
 import type { GridColumnGroup } from './column-groups';
+export type { GridColumnHeaderMark, GridColumnGroupMark } from './header-marks';
+import type { GridColumnGroupMark, GridColumnHeaderMark } from './header-marks';
 export type { GridColumnDisplayFormat, GridNumberDisplayFormat, GridNegativeNumberFormat, GridDateDisplayFormat, } from './display-format';
 import type { GridColumnDisplayFormat } from './display-format';
 /**
@@ -170,10 +172,27 @@ export type GridEvent = {
  * \`columnCaptions\` があればその見出し）を押下すると発火する。**並べ替えは行わない**（利用側が \`columnId\` を
  * 受けて任意の並べ替え・表示切替を実装する＝責務境界）。行番号ヘッダー・左上コーナーのクリックでは発火しない。
  * 既存のセルクリック（選択・編集開始）の挙動は変えない。
+ * DD-070-6: \`rect\` は見出しのセルの viewport 矩形（2 段の見出しでまとめた列は下の段。候補欄を見出しの下に出す位置に使う）、
+ * \`target\` は絞り込みのボタン（\`columnHeaderMarks\` の \`filter\`）の上なら \`'filter'\`、それ以外は \`'caption'\`。
+ * 2 段の見出しの上の段のクリックは \`column-group-click\`。
  */
  | {
     readonly type: 'header-click';
     readonly columnId: string;
+    readonly rect: GridCellRect;
+    readonly target: 'caption' | 'filter';
+}
+/**
+ * 2 段の見出しの上の段（列のまとまり）のクリックの通知（Experimental 0.x・DD-070-6・両モード共通）。\`groupId\` はまとまりの
+ * \`id\`（省略時は \`caption\`）、\`columnIds\` はまとめた列、\`rect\` は上の段のまとまりの矩形。折りたたみの切り替えは consumer が
+ * 行う（印は \`setColumnGroupMarks\`、見せる列は DD-070-7）。
+ */
+ | {
+    readonly type: 'column-group-click';
+    readonly groupId: string;
+    readonly caption: string;
+    readonly columnIds: readonly string[];
+    readonly rect: GridCellRect;
 }
 /**
  * セルのホバー通知（Experimental 0.x・DD-052-5 RC6・両モード共通）。ポインタの位置するセルが変わった
@@ -692,6 +711,18 @@ export interface GridCommonMountOptions {
      * - 形の誤りは mount 時に \`error\`（phase=\`config\`・code=\`column-display-invalid\`）で fail-fast する（\`columnCaptions\` と同じ経路）。
      */
     readonly columnGroups?: readonly GridColumnGroup[];
+    /**
+     * 列の見出しの印（Experimental 0.x・DD-070-6・初期値）。ColumnId → \`{ sort?: 'asc' | 'desc', filter?: 'available' | 'active' }\`。
+     * 見出しの右端に、右から絞り込みのボタン、その左に並べ替えの三角を描く（名前は印を除いた幅の中央・収まらなければ省略）。
+     * view-local・両モード共通。実行中は \`GridInstance.setColumnHeaderMarks\` で丸ごと置き換える。並べ替え・絞り込みそのものは行わない
+     * （consumer が行い、印で見せる）。不正な項目・未知の列はその項目だけ捨てて診断 warn（\`column-header-mark-invalid\`）。
+     */
+    readonly columnHeaderMarks?: Readonly<Record<string, GridColumnHeaderMark>>;
+    /**
+     * 列のまとまりの開閉の印（Experimental 0.x・DD-070-6・初期値）。まとまりの \`id\`（省略時は \`caption\`）→ \`{ collapsed }\`。
+     * 印のあるまとまりは上の段の名前の左に ▾（開いている）／▸（閉じている）を描く。実行中は \`setColumnGroupMarks\`。
+     */
+    readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
     /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
     readonly onEvent?: GridEventListener;
     /**
@@ -789,6 +820,13 @@ export interface GridInstance {
      * boot 前に呼んでもよい（最後に呼んだものが勝つ）。destroy 後は何もしない。読み取り専用でも使える（表示の設定）。
      */
     setMergedCells(mergedCells: readonly GridMergedCell[]): void;
+    /**
+     * 列の見出しの印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。\`{}\` で全部消す。開き直さない。
+     * boot 前に呼んでもよい。**同期 throw しない**: 不正な項目・未知の列はその項目だけ捨てて診断 warn（\`column-header-mark-invalid\`）。
+     */
+    setColumnHeaderMarks(marks: Readonly<Record<string, GridColumnHeaderMark>>): void;
+    /** 列のまとまりの開閉の印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。\`{}\` で全部消す。 */
+    setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>): void;
     /**
      * 行を挿入する（Experimental 0.x・DD-021-1・両モード）。\`afterRowId\` の直後へ \`count\` 行（既定 1）を挿入する
      * （\`afterRowId=null\` で先頭へ）。新 RowId は \`crypto.randomUUID\` で採番し \`row-structure-change\`（kind=insert）で
@@ -949,12 +987,21 @@ export interface GridColumnGroup {
     readonly caption: string;
     /** まとめる列（columnOrder の中で隣り合う 1 列以上。並べる順は問わない）。 */
     readonly columnIds: readonly string[];
+    /**
+     * まとまりの識別子（DD-070-6・任意）。開閉の印（\`columnGroupMarks\`・\`setColumnGroupMarks\`）と \`column-group-click\` の
+     * \`groupId\` に使う。省略すると \`caption\`。空・空白だけは不可。
+     */
+    readonly id?: string;
 }
 /** 列 index に解決したまとまり（半開区間・render の ColumnGroupSpan と同じ形）。 */
 export interface CompiledColumnGroup {
     readonly colStart: number;
     readonly colEnd: number;
     readonly caption: string;
+    /** DD-070-6: 識別子（省略時は caption）。 */
+    readonly id: string;
+    /** DD-070-6: まとめた列（columnOrder の並び）。 */
+    readonly columnIds: readonly string[];
 }
 /**
  * 形の検査と列 index への解決（contract §6）。未指定・空の配列は [] を返す（見出しは 1 段のまま）。
@@ -1364,6 +1411,33 @@ export interface CompiledRowBackgrounds {
  */
 export declare function compileRowBackgrounds(rowBackgrounds: Readonly<Record<string, string>> | undefined): CompiledRowBackgrounds;
 
+// ==== packages/grid/src/header-marks.ts ====
+import type { DiagnosticSink } from './diagnostics';
+/** 列の見出しの印（DD-070-6・Experimental 0.x）。 */
+export interface GridColumnHeaderMark {
+    /** 並べ替えの向き（▲ 昇順・▼ 降順を見出しの右端に描く）。 */
+    readonly sort?: 'asc' | 'desc';
+    /** 絞り込みのボタン（\`available\`＝枠と ▼・\`active\`＝絞り込み中の塗り）。押すと \`header-click\` の \`target\` が \`'filter'\`。 */
+    readonly filter?: 'available' | 'active';
+}
+/** 列のまとまりの開閉の印（DD-070-6・Experimental 0.x）。上の段の名前の左に ▾（開いている）／▸（閉じている）を描く。 */
+export interface GridColumnGroupMark {
+    readonly collapsed: boolean;
+}
+export interface HeaderMarkStore {
+    /** 列の見出しの印を丸ごと置き換える（不正な項目は捨てて warn）。 */
+    setColumnMarks(raw: unknown, source: string): void;
+    /** まとまりの印を丸ごと置き換える（不正な項目は捨てて warn）。 */
+    setGroupMarks(raw: unknown, source: string): void;
+    columnMark(columnId: string): GridColumnHeaderMark | undefined;
+    groupMark(groupId: string): GridColumnGroupMark | undefined;
+    /** 置き換えのたびに増える版（描き直しの要否の判定に使う）。 */
+    revision(): number;
+}
+export declare function createHeaderMarkStore(diag: DiagnosticSink,
+/** 今わかっている列（ColumnId）。boot 前で列の並びが分からなければ undefined（未知の列の検査をしない）。 */
+knownColumns: () => ReadonlySet<string> | undefined): HeaderMarkStore;
+
 // ==== packages/grid/src/merged-cell-spec.ts ====
 /** 結合する範囲（DD-064・Experimental 0.x）。左上のセルと、そこから下・右へ何行・何列を 1 つにするかで指定する。 */
 export interface GridMergedCell {
@@ -1412,7 +1486,7 @@ export declare function describeMergeIssues(issues: readonly MergeSpecIssue[]): 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridAppearance, type GridCellBackgroundRow, type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnGroup, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridMergedCell, type GridPresenceUser, type GridReadRowsOptions, type GridRemoteChange, type GridRowData, type GridSelection, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
+import { type GridAppearance, type GridCellBackgroundRow, type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnGroup, type GridColumnGroupMark, type GridColumnHeaderMark, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridMergedCell, type GridPresenceUser, type GridReadRowsOptions, type GridRemoteChange, type GridRowData, type GridSelection, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -1479,6 +1553,13 @@ export interface NanairoSheetViewCommonProps {
     readonly mergedCells?: readonly GridMergedCell[];
     /** 2段の見出し（grid columnGroups・DD-064）。mount 固定の表示設定（値が変われば開き直す・columnCaptions と同じ）。 */
     readonly columnGroups?: readonly GridColumnGroup[];
+    /**
+     * 列の見出しの印（grid columnHeaderMarks・DD-070-6）。**値（参照）が変わっても開き直さない**: 同じ grid の
+     * \`setColumnHeaderMarks\` を呼ぶ（mergedCells と同じ）。毎 render 新しいオブジェクトを渡すと毎回置き換えるので memo 化する。
+     */
+    readonly columnHeaderMarks?: Readonly<Record<string, GridColumnHeaderMark>>;
+    /** 列のまとまりの開閉の印（grid columnGroupMarks・DD-070-6）。開き直さずに \`setColumnGroupMarks\` を呼ぶ（同上）。 */
+    readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
     /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
     readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
     /** レイアウト確定通知（GridEvent 'layout' の写像）。 */

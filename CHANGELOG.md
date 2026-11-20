@@ -53,6 +53,14 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 - **grid セルのダブルクリックの通知（イベント `cell-dblclick`・DD-070-2）**: `{ type: 'cell-dblclick', rowId, columnId }`。本体の
   セルのダブルクリックで、SDK の既定の動き（編集の開始・候補欄・カレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは
   止めない）。結合範囲は左上のセル。見出し・列の境界（幅の自動調整）・行番号では出さない。
+- **grid 見出しの印と位置（DD-070-6）**: 列の見出しの印 `columnHeaderMarks`（mount）・`setColumnHeaderMarks(marks)`（ColumnId →
+  `{ sort?: 'asc' | 'desc', filter?: 'available' | 'active' }`。見出しの右端に、右から絞り込みのボタン〔available＝枠と ▼・active＝塗り〕、
+  その左に並べ替えの三角。名前は印を除いた幅の中央）と、列のまとまりの開閉の印 `columnGroupMarks`・`setColumnGroupMarks(marks)`
+  （まとまりの id → `{ collapsed }`。上の段の名前の左に ▾／▸）。`GridColumnGroup` に任意の `id`（既定は `caption`）。どれも
+  view-local・両モード・開き直さない（React は prop の変化で setter を呼ぶ）。並べ替え・絞り込み・折りたたみそのものは consumer が行う。
+  不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`）。`header-click` に `rect`（見出しのセルの
+  矩形）と `target`（`'filter'`＝絞り込みのボタンの上・`'caption'`）。新しいイベント `column-group-click`（`groupId`・`caption`・
+  `columnIds`・`rect`。2 段の見出しの上の段のクリック）。公開型 `GridColumnHeaderMark`・`GridColumnGroupMark`。
 - **grid 表のデータを読む（`GridInstance.getRows(options?)`・DD-070-5）**: 文書の並びで全部の行を `{ rowId, cells }`（ColumnId →
   表示文字列・空のセルは無し）で返す。`setData` の行と同じ形で、そのまま渡せば同じ表になる。値は自分の未確定の変更を含む今の値で、
   共同編集モードでは他の参加者の確定も含む（画面側の consumer が並べ替え・絞り込み・CSV の書き出しの材料を得る手段）。
@@ -79,6 +87,8 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 - **共同編集モードの `rejected` は、拒否した操作を除いて画面の値を作り直した後に出す（DD-070-5）**: 購読者がその場で `getRows()`
   などを読んでも拒否した値が残らない。依存の競合より先に拒否そのものを知らせる順は従来どおり。
 - **`GridEvent` に `selection-change`・`cell-dblclick` を追加**（union の拡張。`GridEvent` で網羅的に分岐している consumer は分岐を足す）。
+- **`header-click` に `rect`・`target` を追加、`GridEvent` に `column-group-click` を追加（DD-070-6）**（項目と union の追加）。
+- **render の見出しの描画を `header-layer` へ移した（DD-070-6）**: 印の無い見出しの描き方は変わらない。
 - **`GridColumnType` に `GridNumberColumnType` を追加（DD-070-4）**（union の拡張）。
 - **`'fill'` を union に追加（DD-070-3）**: `GridEditBlockedInput`・`cells-skipped` の `operation`・`cell-invalid` の `source`。
 - **グリッドに入力の焦点がある間の Ctrl+D・Ctrl+R はブラウザーの既定（ブックマーク・再読み込み）を起こさない（DD-070-3）**。

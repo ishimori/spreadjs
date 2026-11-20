@@ -4,9 +4,6 @@
     "packages/collab/src/session.ts": {
       "lines": 1006
     },
-    "packages/render/src/base-layer.ts": {
-      "lines": 1046
-    },
     "packages/server-hono/src/server.ts": {
       "lines": 1935
     }

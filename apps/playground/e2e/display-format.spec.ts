@@ -137,7 +137,8 @@ test('AC2: 長いキャプションは自ヘッダーセル幅で省略記号ク
       .toBe(true);
     // 隣接ヘッダー（col-5）の左端 12px にはキャプション文字がはみ出さない（自セル内 fitText クリップ・AC2）。
     // col-5 の列記号は中央寄せゆえ左端ストリップは背景のみ。はみ出せばここに文字ピクセルが出る。
-    const neighborLeftStrip: CellRect = { x: neighborRect.x + 1, y: neighborRect.y, width: 12, height: neighborRect.height };
+    // DD-068 で見出しの下端に見出しの文字色の 3px の線を引くようになったため、下端の 4px は見ない（DD-070-6 で直した既存のテストの不備）。
+    const neighborLeftStrip: CellRect = { x: neighborRect.x + 1, y: neighborRect.y, width: 12, height: neighborRect.height - 4 };
     expect(await hasColor(page, neighborLeftStrip, HEADER_TEXT, 60)).toBe(false);
   } finally {
     await context.close();

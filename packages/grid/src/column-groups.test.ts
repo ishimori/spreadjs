@@ -29,9 +29,14 @@ describe('compileColumnGroups', () => {
         2,
       ),
     ).toEqual([
-      { colStart: 2, colEnd: 5, caption: '上期' },
-      { colStart: 5, colEnd: 7, caption: '下期' },
+      { colStart: 2, colEnd: 5, caption: '上期', id: '上期', columnIds: ['m04', 'm05', 'm06'] },
+      { colStart: 5, colEnd: 7, caption: '下期', id: '下期', columnIds: ['m10', 'm11'] },
     ]);
+  });
+
+  it('DD-070-6: id を指定すればそれを、省略すれば caption を識別子にする。空の id は fail-fast', () => {
+    expect(compileColumnGroups([{ caption: '上期', columnIds: ['m04'], id: 'h1' }], COLUMNS, 2)[0]!.id).toBe('h1');
+    expect(() => compileColumnGroups([{ caption: '上期', columnIds: ['m04'], id: ' ' }], COLUMNS, 2)).toThrow();
   });
 
   it('未指定・空の配列は 1 段のまま', () => {

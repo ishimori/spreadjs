@@ -34,6 +34,8 @@ import {
   type GridBorder,
   type GridColumnBorders,
   type GridColumnGroup,
+  type GridColumnGroupMark,
+  type GridColumnHeaderMark,
   type GridColumnType,
   type GridCommonMountOptions,
   type GridConnectionState,
@@ -125,6 +127,13 @@ export interface NanairoSheetViewCommonProps {
   readonly mergedCells?: readonly GridMergedCell[];
   /** 2段の見出し（grid columnGroups・DD-064）。mount 固定の表示設定（値が変われば開き直す・columnCaptions と同じ）。 */
   readonly columnGroups?: readonly GridColumnGroup[];
+  /**
+   * 列の見出しの印（grid columnHeaderMarks・DD-070-6）。**値（参照）が変わっても開き直さない**: 同じ grid の
+   * `setColumnHeaderMarks` を呼ぶ（mergedCells と同じ）。毎 render 新しいオブジェクトを渡すと毎回置き換えるので memo 化する。
+   */
+  readonly columnHeaderMarks?: Readonly<Record<string, GridColumnHeaderMark>>;
+  /** 列のまとまりの開閉の印（grid columnGroupMarks・DD-070-6）。開き直さずに `setColumnGroupMarks` を呼ぶ（同上）。 */
+  readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
   // --- callback 系（内部 ref 保持・差し替えで remount しない・契約 §4 分類3） ---
   /** セル確定通知（GridEvent 'cell-commit' の写像）。 */
   readonly onCellCommit?: (changes: readonly GridCellCommitChange[]) => void;
@@ -252,7 +261,9 @@ type ExcludedGridInstanceKeys =
   | 'subscribe' // React は onEvent/onXxx props で個別配信する別経路（契約 §2）。ref handle には出さない
   | 'destroy' // lifecycle は effect cleanup が管理する（契約冒頭）。consumer に直接 destroy させない
   | 'setReadOnly' // readOnly prop の変化で呼ぶ（DD-056）。handle からも切り替えられると prop と食い違うため出さない
-  | 'setMergedCells'; // mergedCells prop の変化で呼ぶ（DD-064）。setReadOnly と同じ理由で handle に出さない
+  | 'setMergedCells' // mergedCells prop の変化で呼ぶ（DD-064）。setReadOnly と同じ理由で handle に出さない
+  | 'setColumnHeaderMarks' // columnHeaderMarks prop の変化で呼ぶ（DD-070-6）。同上
+  | 'setColumnGroupMarks'; // columnGroupMarks prop の変化で呼ぶ（DD-070-6）。同上
 /** GridInstance のメンバーのうち、React handle に無いもの（除外リスト適用後・空集合であるべき）。 */
 type MissingHandleKeys = Exclude<keyof GridInstance, ExcludedGridInstanceKeys | keyof NanairoSheetViewHandle>;
 
@@ -429,6 +440,9 @@ function toMountOptions(
     // DD-064: mergedCells は mount 時の値を初期値として渡す（以後の変化は setMergedCells）。columnGroups は mount 固定。
     mergedCells: props.mergedCells,
     columnGroups: props.columnGroups,
+    // DD-070-6: 見出しの印は mount 時の値を初期値として渡す（以後の変化は setter）。
+    columnHeaderMarks: props.columnHeaderMarks,
+    columnGroupMarks: props.columnGroupMarks,
     onEvent,
     onDiagnostic,
     validateCell,
@@ -477,6 +491,9 @@ function NanairoSheetViewImpl(
   const appliedReadOnlyRef = useRef<boolean>(false);
   /** 現在の instance が持っている mergedCells（mount 時の値か、直近に setMergedCells で写した値・DD-064）。参照で比べる。 */
   const appliedMergedCellsRef = useRef<readonly GridMergedCell[] | undefined>(undefined);
+  /** DD-070-6: 現在の instance が持っている見出しの印（mount 時の値か、直近に写した値）。参照で比べる。 */
+  const appliedHeaderMarksRef = useRef<NanairoSheetViewCommonProps['columnHeaderMarks']>(undefined);
+  const appliedGroupMarksRef = useRef<NanairoSheetViewCommonProps['columnGroupMarks']>(undefined);
 
   // 最新の callback / props / diagnostic を **commit 後**に ref へ反映する（差し替えで remount しない・契約 §4 分類3）。
   // render 中ではなく useLayoutEffect で更新する: Concurrent React（startTransition/Suspense）で **未 commit の
@@ -666,6 +683,8 @@ function NanairoSheetViewImpl(
     instanceRef.current = instance;
     appliedReadOnlyRef.current = propsRef.current.readOnly === true; // DD-056 H12: この mount が持つ readOnly
     appliedMergedCellsRef.current = propsRef.current.mergedCells; // DD-064: この mount が持つ mergedCells
+    appliedHeaderMarksRef.current = propsRef.current.columnHeaderMarks; // DD-070-6
+    appliedGroupMarksRef.current = propsRef.current.columnGroupMarks; // DD-070-6
     // 接続状態キャッシュを instance の実値で初期化する（remount で旧状態を引き継がず、
     // 初回 connection 前の pending も現 instance の状態で通知する・Codex P2）。
     lastConnStateRef.current = instance.connectionState();
@@ -703,6 +722,26 @@ function NanairoSheetViewImpl(
     appliedMergedCellsRef.current = mergedCellsProp;
     instance.setMergedCells(mergedCellsProp ?? []);
   }, [mergedCellsProp]);
+
+  // DD-070-6: 見出しの印の変化も開き直さずに同じ instance の setter へ写す（mergedCells と同じ形。未指定へ戻したら {} で消す）。
+  const headerMarksProp = props.columnHeaderMarks;
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (instance === null || appliedHeaderMarksRef.current === headerMarksProp) {
+      return;
+    }
+    appliedHeaderMarksRef.current = headerMarksProp;
+    instance.setColumnHeaderMarks(headerMarksProp ?? {});
+  }, [headerMarksProp]);
+  const groupMarksProp = props.columnGroupMarks;
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (instance === null || appliedGroupMarksRef.current === groupMarksProp) {
+      return;
+    }
+    appliedGroupMarksRef.current = groupMarksProp;
+    instance.setColumnGroupMarks(groupMarksProp ?? {});
+  }, [groupMarksProp]);
 
   // 初期値系（initialData/initialColumnWidths/initialRowHeights）の変更は無視＋診断 warn（契約 §4 分類2）。
   // **参照比較**で判定する（毎 render の直列化なし・Codex P1）。mountKey 変更に伴う remount では mount effect が

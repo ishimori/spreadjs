@@ -10,6 +10,11 @@ export interface GridColumnGroup {
   readonly caption: string;
   /** まとめる列（columnOrder の中で隣り合う 1 列以上。並べる順は問わない）。 */
   readonly columnIds: readonly string[];
+  /**
+   * まとまりの識別子（DD-070-6・任意）。開閉の印（`columnGroupMarks`・`setColumnGroupMarks`）と `column-group-click` の
+   * `groupId` に使う。省略すると `caption`。空・空白だけは不可。
+   */
+  readonly id?: string;
 }
 
 /** 列 index に解決したまとまり（半開区間・render の ColumnGroupSpan と同じ形）。 */
@@ -17,6 +22,10 @@ export interface CompiledColumnGroup {
   readonly colStart: number;
   readonly colEnd: number;
   readonly caption: string;
+  /** DD-070-6: 識別子（省略時は caption）。 */
+  readonly id: string;
+  /** DD-070-6: まとめた列（columnOrder の並び）。 */
+  readonly columnIds: readonly string[];
 }
 
 function fail(columnId: string, message: string): never {
@@ -51,9 +60,12 @@ export function compileColumnGroups(
     if (typeof entry !== 'object' || entry === null) {
       fail('', `[${position}] が { caption, columnIds } のオブジェクトではない`);
     }
-    const record = entry as { caption?: unknown; columnIds?: unknown };
+    const record = entry as { caption?: unknown; columnIds?: unknown; id?: unknown };
     if (typeof record.caption !== 'string' || record.caption.trim() === '') {
       fail('', `[${position}] の caption が空・空白だけ・文字列でない`);
+    }
+    if (record.id !== undefined && (typeof record.id !== 'string' || record.id.trim() === '')) {
+      fail('', `[${position}]「${record.caption}」の id が空・空白だけ・文字列でない`);
     }
     const columnIds = record.columnIds;
     if (!Array.isArray(columnIds) || columnIds.length === 0 || columnIds.some((id) => typeof id !== 'string')) {
@@ -86,7 +98,13 @@ export function compileColumnGroups(
       }
       owner.set(col, position);
     }
-    groups.push({ colStart, colEnd, caption: record.caption });
+    groups.push({
+      colStart,
+      colEnd,
+      caption: record.caption,
+      id: typeof record.id === 'string' ? record.id : record.caption,
+      columnIds: columnOrder.slice(colStart, colEnd),
+    });
   });
   return groups;
 }

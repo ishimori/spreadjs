@@ -14,6 +14,7 @@ import type { CompiledColumnGroup } from '../column-groups';
 import type { CompiledColumnDisplay } from '../display-format';
 import type { CompiledColumnBackgrounds, CompiledColumnFormats, CompiledRowBackgrounds } from '../format-rules';
 import type { GridBackend } from '../grid-backend';
+import type { HeaderMarkStore } from '../header-marks';
 import type { GridCellStatusColors } from '../index';
 import { HEADER_WIDTH } from './constants';
 
@@ -31,6 +32,8 @@ export interface BaseLayerConfig {
   readonly cellStatusStore: CellStatusStore;
   /** DD-069: セルごとの背景色の置き場。 */
   readonly cellBackgroundStore: CellBackgroundStore;
+  /** DD-070-6: 見出しの印の置き場（ID → 印。描画のたびに表示 index から引く）。 */
+  readonly headerMarks: Pick<HeaderMarkStore, 'columnMark' | 'groupMark'>;
   /** 直前の描画の前に張った結合範囲。 */
   currentMerges(): MergeIndex;
   isLinkColumnIndex(colIndex: number): boolean;
@@ -107,6 +110,15 @@ export function createMountBaseLayer(backend: GridBackend, cfg: BaseLayerConfig)
     ...(compiledColumnGroups.length > 0
       ? { columnGroupBand: { height: cfg.groupBandHeight, groups: compiledColumnGroups } }
       : {}),
+    // DD-070-6: 見出しの印（実行中に付け外しするので常に束縛する。印の無い列・まとまりは従来どおりの描画）。
+    columnHeaderMark: (colIndex) => {
+      const id = backend.view.columnIdAt(colIndex);
+      return id === undefined ? undefined : cfg.headerMarks.columnMark(String(id));
+    },
+    columnGroupMark: (groupIndex) => {
+      const group = compiledColumnGroups[groupIndex];
+      return group === undefined ? undefined : cfg.headerMarks.groupMark(group.id);
+    },
     // DD-012-5: 共有キャッシュ・wrap 判定・pane 境界・折り返し行高を渡す（オーバーフロー／折り返し描画）。
     cellFont: appearance.cellFont,
     headerFont: appearance.headerFont,

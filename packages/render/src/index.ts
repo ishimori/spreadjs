@@ -12,6 +12,16 @@ export * from './data-gen';
 export * from './prng';
 export * from './presence-sim';
 export * from './base-layer';
+// DD-070-6: 見出しの印の型と配置（grid の当たり判定が描画と同じ関数を使う）。列記号は base-layer から再 export 済み。
+export {
+  columnGroupMarkLayout,
+  columnHeaderMarkLayout,
+  createHeaderLayer,
+  type ColumnGroupMark,
+  type ColumnHeaderMark,
+  type ColumnHeaderMarkLayout,
+  type HeaderLayerDeps,
+} from './header-layer';
 export * from './background-bands';
 export * from './overlay-layer';
 export * from './metrics';

@@ -204,6 +204,14 @@
       "meta": "selection-change / cell-dblclick / selection() ／ unit＋実ブラウザーE2E 検証済み"
     },
     {
+      "id": "header-marks",
+      "title": "見出しの印と位置（並べ替え・絞り込み・折りたたみの表示）",
+      "status": "available",
+      "summary": "利用側が行う並べ替え・絞り込み・列のまとまりの折りたたみを、見出しで見せられます。列の見出しの右端に並べ替えの三角（▲▼）と絞り込みのボタン（押せる・絞り込み中）、2 段の見出しの上の段に開閉の印（▾▸）を描き、表を作り直さずに付け外しできます。見出しのクリックは押した見出しの矩形と、絞り込みのボタンの上かどうかを知らせるので、候補欄を見出しの下に出せます。上の段のクリックはまとまりのクリックとして届きます。",
+      "source": "DD-070-6",
+      "meta": "columnHeaderMarks / columnGroupMarks / header-click の rect・target / column-group-click ／ unit＋実ブラウザーE2E 検証済み"
+    },
+    {
       "id": "list-ops",
       "title": "一覧の並べ替え・絞り込み・列の切り替え",
       "status": "planned",

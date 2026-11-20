@@ -36,6 +36,9 @@ export type { GridMergedCell } from './merged-cell-spec';
 import type { GridMergedCell } from './merged-cell-spec';
 export type { GridColumnGroup } from './column-groups';
 import type { GridColumnGroup } from './column-groups';
+// 見出しの印（DD-070-6・Experimental 0.x）。公開型は grid 自身（header-marks.ts）で定義する（R7）。
+export type { GridColumnHeaderMark, GridColumnGroupMark } from './header-marks';
+import type { GridColumnGroupMark, GridColumnHeaderMark } from './header-marks';
 
 // 列見出しキャプション＋数値/日付の表示書式（DD-033-2・Experimental 0.x）。Canvas 描画テキストのみを整形する
 // view-local 書式（raw 契約不変）。公開型は grid 自身（display-format.ts）で定義する（R7 に反さない）。
@@ -149,8 +152,28 @@ export type GridEvent =
    * `columnCaptions` があればその見出し）を押下すると発火する。**並べ替えは行わない**（利用側が `columnId` を
    * 受けて任意の並べ替え・表示切替を実装する＝責務境界）。行番号ヘッダー・左上コーナーのクリックでは発火しない。
    * 既存のセルクリック（選択・編集開始）の挙動は変えない。
+   * DD-070-6: `rect` は見出しのセルの viewport 矩形（2 段の見出しでまとめた列は下の段。候補欄を見出しの下に出す位置に使う）、
+   * `target` は絞り込みのボタン（`columnHeaderMarks` の `filter`）の上なら `'filter'`、それ以外は `'caption'`。
+   * 2 段の見出しの上の段のクリックは `column-group-click`。
    */
-  | { readonly type: 'header-click'; readonly columnId: string }
+  | {
+      readonly type: 'header-click';
+      readonly columnId: string;
+      readonly rect: GridCellRect;
+      readonly target: 'caption' | 'filter';
+    }
+  /**
+   * 2 段の見出しの上の段（列のまとまり）のクリックの通知（Experimental 0.x・DD-070-6・両モード共通）。`groupId` はまとまりの
+   * `id`（省略時は `caption`）、`columnIds` はまとめた列、`rect` は上の段のまとまりの矩形。折りたたみの切り替えは consumer が
+   * 行う（印は `setColumnGroupMarks`、見せる列は DD-070-7）。
+   */
+  | {
+      readonly type: 'column-group-click';
+      readonly groupId: string;
+      readonly caption: string;
+      readonly columnIds: readonly string[];
+      readonly rect: GridCellRect;
+    }
   /**
    * セルのホバー通知（Experimental 0.x・DD-052-5 RC6・両モード共通）。ポインタの位置するセルが変わった
    * ときだけ発火する（同一セル内の移動では再発火しない＝間引き済み）。グリッド外・見出し領域・ドラッグ中
@@ -678,6 +701,18 @@ export interface GridCommonMountOptions {
    * - 形の誤りは mount 時に `error`（phase=`config`・code=`column-display-invalid`）で fail-fast する（`columnCaptions` と同じ経路）。
    */
   readonly columnGroups?: readonly GridColumnGroup[];
+  /**
+   * 列の見出しの印（Experimental 0.x・DD-070-6・初期値）。ColumnId → `{ sort?: 'asc' | 'desc', filter?: 'available' | 'active' }`。
+   * 見出しの右端に、右から絞り込みのボタン、その左に並べ替えの三角を描く（名前は印を除いた幅の中央・収まらなければ省略）。
+   * view-local・両モード共通。実行中は `GridInstance.setColumnHeaderMarks` で丸ごと置き換える。並べ替え・絞り込みそのものは行わない
+   * （consumer が行い、印で見せる）。不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`）。
+   */
+  readonly columnHeaderMarks?: Readonly<Record<string, GridColumnHeaderMark>>;
+  /**
+   * 列のまとまりの開閉の印（Experimental 0.x・DD-070-6・初期値）。まとまりの `id`（省略時は `caption`）→ `{ collapsed }`。
+   * 印のあるまとまりは上の段の名前の左に ▾（開いている）／▸（閉じている）を描く。実行中は `setColumnGroupMarks`。
+   */
+  readonly columnGroupMarks?: Readonly<Record<string, GridColumnGroupMark>>;
   /** 初期イベント購読（mount 直後の connection/error/cell-commit を取りこぼさない）。 */
   readonly onEvent?: GridEventListener;
   /**
@@ -779,6 +814,13 @@ export interface GridInstance {
    * boot 前に呼んでもよい（最後に呼んだものが勝つ）。destroy 後は何もしない。読み取り専用でも使える（表示の設定）。
    */
   setMergedCells(mergedCells: readonly GridMergedCell[]): void;
+  /**
+   * 列の見出しの印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。`{}` で全部消す。開き直さない。
+   * boot 前に呼んでもよい。**同期 throw しない**: 不正な項目・未知の列はその項目だけ捨てて診断 warn（`column-header-mark-invalid`）。
+   */
+  setColumnHeaderMarks(marks: Readonly<Record<string, GridColumnHeaderMark>>): void;
+  /** 列のまとまりの開閉の印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。`{}` で全部消す。 */
+  setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>): void;
   /**
    * 行を挿入する（Experimental 0.x・DD-021-1・両モード）。`afterRowId` の直後へ `count` 行（既定 1）を挿入する
    * （`afterRowId=null` で先頭へ）。新 RowId は `crypto.randomUUID` で採番し `row-structure-change`（kind=insert）で

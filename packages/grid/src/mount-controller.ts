@@ -16,12 +16,15 @@ import { createUndoController } from './undo-stack';
 import { createDiagnosticSink } from './diagnostics';
 import { debugRegistry } from './internal';
 import { createCellBackgroundStore } from './cell-background';
+import { createHeaderMarkStore } from './header-marks';
 import { createEditBlocked } from './mount/edit-blocked';
 import { createCellStatusStore } from './cell-status';
 import type {
   GridCellBackgroundRow,
   GridCellStatusRow,
   GridCollaborationMountOptions,
+  GridColumnGroupMark,
+  GridColumnHeaderMark,
   GridConnectionState,
   GridFlushOptions,
   GridFlushResult,
@@ -146,6 +149,18 @@ export function createGridController(target: GridMountTarget, options: GridMount
     frozenColCount: () => frozenColCount,
   });
   const { current: currentMerges } = merges;
+  // DD-070-6: 見出しの印（並べ替えの三角・絞り込みのボタン・まとまりの開閉）の置き場。view-local・ID で持ち描画のたびに解決する。
+  // 未知の列の検査は、列の並びが分かっていれば行う（共同編集の boot 前は /config の前なので検査しない）。
+  const headerMarks = createHeaderMarkStore(diag, () => {
+    const sync = lifecycle.backend();
+    return sync === undefined ? undefined : new Set(sync.session.committedDocument.columnOrder.map((id) => String(id)));
+  });
+  if (options.columnHeaderMarks !== undefined) {
+    headerMarks.setColumnMarks(options.columnHeaderMarks, 'columnHeaderMarks');
+  }
+  if (options.columnGroupMarks !== undefined) {
+    headerMarks.setGroupMarks(options.columnGroupMarks, 'columnGroupMarks');
+  }
 
   // DD-033-1・DD-056 H12: 読み取り専用の切り替え（setReadOnly・flush・変換の終わり待ち）は mount/readonly-switch.ts。
   // 生成時に mount オプションの readOnly を検査して診断を出す（readonly-invalid・readonly-mode）。
@@ -302,6 +317,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
         cellTextCache,
         cellStatusStore,
         cellBackgroundStore,
+        headerMarks,
         currentMerges,
         isLinkColumnIndex: (colIndex) => link.isLinkColumnIndex(colIndex),
         appearance: () => config.appearance(),
@@ -454,6 +470,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     date,
     hover,
     link,
+    headerMarks,
     emit,
     backend: () => lifecycle.backend(),
     editor: () => editorWiring.get(),
@@ -567,6 +584,21 @@ export function createGridController(target: GridMountTarget, options: GridMount
         return;
       }
       merges.setFromCommand(mergedCells);
+    },
+    setColumnHeaderMarks(marks: Readonly<Record<string, GridColumnHeaderMark>>) {
+      // DD-070-6: 丸ごと置き換え（不正な項目は捨てて warn・同期 throw しない）。描き直しを要求する。
+      if (destroyed) {
+        return;
+      }
+      headerMarks.setColumnMarks(marks, 'setColumnHeaderMarks');
+      lifecycle.backend()?.view.markViewportDirty();
+    },
+    setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>) {
+      if (destroyed) {
+        return;
+      }
+      headerMarks.setGroupMarks(marks, 'setColumnGroupMarks');
+      lifecycle.backend()?.view.markViewportDirty();
     },
     insertRows(options: { readonly afterRowId: string | null; readonly count?: number }) {
       performInsertRows(options.afterRowId, options.count ?? 1);
