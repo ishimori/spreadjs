@@ -12,6 +12,8 @@ import { EMPTY_MERGE_INDEX, moveAcrossMerges, stepAcrossMerges } from '@nanairo-
 import type { MergeMoveDirection } from '@nanairo-sheet/selection';
 
 import { decideDateKey } from '../date-editor';
+import { decideFillKey } from '../fill-ops';
+import type { FillDirection } from '../fill-ops';
 import type { DiagnosticSink } from '../diagnostics';
 import type { GridBackend } from '../grid-backend';
 import type { IntegrationEditor, KeydownInterceptInput } from '../integration-editor';
@@ -33,13 +35,14 @@ export type KeyOutcome = 'consume' | 'pass' | 'continue';
 /** キー入力の裁定の優先順位（上ほど先に裁く）。ここを変えると挙動が変わる（順序は単体テストで固定している）。 */
 export const KEY_HANDLER_ORDER = [
   'readOnly', // 1. 読み取り専用（グリッド全体）の編集キーの抑止
-  'readOnlyCells', // 2. 読み取り専用の列・行・セルと結合範囲の編集キーの抑止（範囲があるときの Delete は 8 へ流す）
+  'readOnlyCells', // 2. 読み取り専用の列・行・セルと結合範囲の編集キーの抑止（範囲があるときの Delete は 9 へ流す）
   'datePicker', // 3. 日付カレンダー
   'selectDropdown', // 4. 候補欄
   'undoRedo', // 5. Undo / Redo
-  'rowStructure', // 6. 行の挿入・削除のショートカット
-  'mergeMove', // 7. 結合セルを 1 つのセルとして動く移動
-  'rangeOperations', // 8. 範囲の操作（Shift＋矢印の拡張・Escape の解除・範囲の Delete）
+  'fill', // 6. Ctrl+D・Ctrl+R（上・左のセルを写す。DD-070-3）
+  'rowStructure', // 7. 行の挿入・削除のショートカット
+  'mergeMove', // 8. 結合セルを 1 つのセルとして動く移動
+  'rangeOperations', // 9. 範囲の操作（Shift＋矢印の拡張・Escape の解除・範囲の Delete）
 ] as const;
 
 export type KeyHandlerName = (typeof KEY_HANDLER_ORDER)[number];
@@ -78,6 +81,8 @@ export interface KeyboardDeps {
   performInsertRows(afterRowId: string | null, count: number): void;
   performDeleteRows(rowIds: readonly string[]): void;
   performRangeClear(): void;
+  /** DD-070-3: Ctrl+D（down）・Ctrl+R（right）。 */
+  performFill(direction: FillDirection): void;
   ensureCellVisible(cell: CellPosition): void;
 }
 
@@ -351,6 +356,28 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
         return 'consume';
       }
       return 'continue';
+    },
+
+    // DD-070-3: Ctrl+D=上のセルを下へ・Ctrl+R=左のセルを右へ（Navigation 位相かつ非 composing のみ写す）。編集中は何もせず
+    // ブラウザーの既定（ブックマーク・再読み込み＝入力中の内容を失う）だけを止める。変換中は decideFillKey が 'none'（I-3）。
+    fill({ input, editor }) {
+      const fill = decideFillKey({
+        key: input.key,
+        ctrlKey: input.ctrlKey,
+        metaKey: input.metaKey,
+        shiftKey: input.shiftKey,
+        altKey: input.altKey,
+        eventComposing: input.isComposing,
+        sessionComposing: editor.session.isComposing(),
+        phase: editor.session.getPhase(),
+      });
+      if (fill === 'none') {
+        return 'continue';
+      }
+      if (fill !== 'block') {
+        deps.performFill(fill);
+      }
+      return 'consume';
     },
 
     // DD-021-1: Ctrl+Shift+'+'=アクティブ行の上へ挿入・Ctrl+'-'=選択行削除（Navigation 位相かつ非 composing のみ・親⑦）。

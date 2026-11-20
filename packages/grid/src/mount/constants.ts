@@ -8,7 +8,7 @@ export const HEADER_HEIGHT = 24;
 export const ROW_HEIGHT = 22;
 export const COL_WIDTH = 80;
 /** DD-063: 確定前の検証をする経路（`cell-invalid` の `source`）。 */
-export type CellValidationSource = 'edit' | 'select' | 'date' | 'paste';
+export type CellValidationSource = 'edit' | 'select' | 'date' | 'paste' | 'fill';
 export const TICK_INTERVAL_MS = 1_000;
 // リンク列 dblclick の2打目抑止窓（ms・DD-027-2）。同一セルでこの間隔内の連打は「2打目」と見なし link-open を再発火しない
 // （実ブラウザーは PointerEvent.detail>=2 が主判定・本窓は detail=0 固定の synthetic 環境を補完する）。標準 dblclick 相当。

@@ -58,7 +58,7 @@ export interface EditBlocked {
   /** 表示 index のセルで止めた（ダブルクリック）。結合範囲の中なら左上のセルとして知らせる。読むだけでなければ出さない。 */
   atCell(row: number, col: number, input: GridEditBlockedInput): void;
   /** 範囲の操作で飛ばしたセル（0 件なら出さない）。 */
-  skipped(operation: 'paste' | 'cut' | 'clear', cells: readonly GridCellRef[]): void;
+  skipped(operation: 'paste' | 'cut' | 'clear' | 'fill', cells: readonly GridCellRef[]): void;
 }
 
 export function createEditBlocked(deps: EditBlockedDeps): EditBlocked {

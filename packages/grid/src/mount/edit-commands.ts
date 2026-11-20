@@ -10,6 +10,8 @@ import type { ClipboardDocumentPort, PasteRect } from '../clipboard-controller';
 import type { DiagnosticSink } from '../diagnostics';
 import type { GridConflictCode } from '../error-codes';
 import type { GridBackend } from '../grid-backend';
+import { buildFill } from '../fill-ops';
+import type { FillDirection } from '../fill-ops';
 import type { EditingDocumentPort } from '../ime-editing-session';
 import type { GridCellRef, GridEvent } from '../index';
 import type { IntegrationEditor } from '../integration-editor';
@@ -49,6 +51,8 @@ export interface EditCommands {
   performCopy(): string | null;
   performCut(): string | null;
   performPaste(text: string): boolean;
+  /** DD-070-3: Ctrl+D（down）・Ctrl+R（right）。 */
+  performFill(direction: FillDirection): void;
   performUndo(): void;
   performRedo(): void;
 }
@@ -287,6 +291,54 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     }
   }
 
+  /**
+   * DD-070-3: Ctrl+D（down）・Ctrl+R（right）。選択範囲（1 セルなら上・左のセルから）を写す原子 SetCells を作り、貼り付けと同じ
+   * 経路（読むだけのセルを飛ばす・validateCell は全体を拒否・Undo 1 回・OCC）で書く。選択は動かさない。
+   * 呼ぶのは Navigation 位相かつ非 composing のときだけ（keyboard の段 fill が判定済み）。
+   */
+  function performFill(direction: FillDirection): void {
+    if (backend === undefined || docPort === undefined) {
+      return;
+    }
+    if (deps.isReadOnly()) {
+      diag.emit('info', 'readonly-blocked', `readOnly: ${direction === 'down' ? 'Ctrl+D' : 'Ctrl+R'} を抑止（文書無変更）`);
+      deps.editBlocked.atActive('fill');
+      return;
+    }
+    const editor = deps.editor();
+    if (editor === undefined) {
+      return;
+    }
+    const range = selectionCtrl.selectedRange(editor.session.getActiveCell());
+    const outcome = buildFill(docPort, range, direction, (columnId) => deps.stringColumnStrings.has(columnId));
+    switch (outcome.kind) {
+      case 'noop':
+        return;
+      case 'too-large':
+        notifyPreExecutionReject(
+          'range-too-large',
+          'fill-too-large',
+          `${direction === 'down' ? 'Ctrl+D' : 'Ctrl+R'} の範囲 ${outcome.cellCount} セル > 上限 ${outcome.limit}（拒否）`,
+        );
+        return;
+      case 'submit': {
+        const skipped: GridCellRef[] = [];
+        const op = cellLock.filterReadOnlyCells(outcome.operation, direction === 'down' ? 'Ctrl+D' : 'Ctrl+R', skipped);
+        if (op === null) {
+          deps.editBlocked.skipped('fill', skipped); // 全部を飛ばした（文書は変わらない）
+          return;
+        }
+        if (editSubmit.rejectInvalidCells(op, 'fill')) {
+          return; // 1 件でも拒否したら全体を拒否（貼り付けと同じ）
+        }
+        editSubmit.submitSetCells(op);
+        backend.view.markCellDirty();
+        deps.editBlocked.skipped('fill', skipped); // 一部を飛ばした通知は書き込みの後
+        return;
+      }
+    }
+  }
+
   // ---- DD-020-3 Undo/Redo（補償 SetCells・親③）----
   /**
    * 補償 SetCells（undo/redo が生成した逆/順値の op）を submit する。**submitSetCells とは別経路**で、
@@ -413,6 +465,7 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     performCopy,
     performCut,
     performPaste,
+    performFill,
     performUndo,
     performRedo,
   };

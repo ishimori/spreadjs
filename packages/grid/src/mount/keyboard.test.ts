@@ -130,6 +130,7 @@ function setup(overrides: Partial<Env> = {}) {
     performInsertRows: (afterRowId, count) => calls.push(`insertRows(${afterRowId},${count})`),
     performDeleteRows: (rowIds) => calls.push(`deleteRows(${rowIds.join(',')})`),
     performRangeClear: () => calls.push('rangeClear'),
+    performFill: (direction) => calls.push(`fill(${direction})`),
     ensureCellVisible: () => calls.push('ensureCellVisible'),
   });
   return { keyboard, env, calls, blocked, deferred, flushes, codes: () => diagnostics.map((d) => d.code) };
@@ -140,13 +141,14 @@ function key(k: string, mods: Partial<KeydownInterceptInput> = {}): KeydownInter
 }
 
 describe('mount/keyboard: 優先順位', () => {
-  it('段の順番は 1 か所の配列で決まる（読み取り専用 → 読み取り専用のセル → 日付 → 候補欄 → Undo/Redo → 行操作 → 結合の移動 → 範囲の操作）', () => {
+  it('段の順番は 1 か所の配列で決まる（読み取り専用 → 読み取り専用のセル → 日付 → 候補欄 → Undo/Redo → Ctrl+D・Ctrl+R → 行操作 → 結合の移動 → 範囲の操作）', () => {
     expect(KEY_HANDLER_ORDER).toEqual([
       'readOnly',
       'readOnlyCells',
       'datePicker',
       'selectDropdown',
       'undoRedo',
+      'fill',
       'rowStructure',
       'mergeMove',
       'rangeOperations',
@@ -193,6 +195,21 @@ describe('mount/keyboard: 各段の結果', () => {
     const del = setup();
     expect(del.keyboard.dispatch(key('-', { ctrlKey: true }))).toEqual({ handler: 'rowStructure', outcome: 'consume' });
     expect(del.calls).toEqual(['deleteRows(r1)']);
+  });
+
+  it('DD-070-3: Ctrl+D・Ctrl+R は fill の段が消費して写す。編集中は写さずに消費だけ（ブラウザーの既定を止める）。変換中・Shift つきは裁かない', () => {
+    const nav = setup();
+    expect(nav.keyboard.dispatch(key('d', { ctrlKey: true }))).toEqual({ handler: 'fill', outcome: 'consume' });
+    expect(nav.keyboard.dispatch(key('R', { ctrlKey: true }))).toEqual({ handler: 'fill', outcome: 'consume' });
+    expect(nav.calls).toEqual(['fill(down)', 'fill(right)']);
+    const editing = setup({ phase: 'Editing' });
+    expect(editing.keyboard.dispatch(key('d', { ctrlKey: true }))).toEqual({ handler: 'fill', outcome: 'consume' });
+    expect(editing.calls).toEqual([]);
+    const composing = setup({ composing: true, phase: 'Composing' });
+    expect(composing.keyboard.dispatch(key('d', { ctrlKey: true, isComposing: true }))).toEqual({ handler: null, outcome: 'continue' });
+    const shifted = setup();
+    expect(shifted.keyboard.dispatch(key('D', { ctrlKey: true, shiftKey: true })).handler).not.toBe('fill');
+    expect(shifted.calls).toEqual([]);
   });
 
   it('Escape は範囲を解除したうえで状態機械へも流す（処理したうえで流す）', () => {

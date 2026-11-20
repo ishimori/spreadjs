@@ -382,6 +382,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     performInsertRows,
     performDeleteRows,
     performRangeClear: () => editCommands.performRangeClear(),
+    performFill: (direction) => editCommands.performFill(direction),
     ensureCellVisible: (cell) => render.ensureCellVisible(cell),
   });
   // editor（常駐 textarea＋IME）の結線（区画①・mount/editor-wiring.ts）。editor の状態の持ち主。

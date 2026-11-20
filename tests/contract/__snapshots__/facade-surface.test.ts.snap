@@ -194,19 +194,20 @@ export type GridEvent = {
 /**
  * 確定前の検証（mount オプション \`validateCell\`）で拒否された通知（Experimental 0.x・DD-063・両モード共通）。
  * 拒否された入力は捨てられ（文書・サーバー・Undo は変わらない）、編集は閉じる。\`source\` は確定の経路
- * （\`edit\`=IME/textarea・\`select\`=選択式の候補・\`date\`=日付のカレンダー・\`paste\`=貼り付け）。貼り付けは 1 件でも
- * 不正なら全体を拒否し、不正なセルを全部 \`cells\` に載せる。確定処理が終わった後（microtask）に出るので、
+ * （\`edit\`=IME/textarea・\`select\`=選択式の候補・\`date\`=日付のカレンダー・\`paste\`=貼り付け・\`fill\`=Ctrl+D／Ctrl+R〔DD-070-3〕）。貼り付けと
+ * fill は 1 件でも不正なら全体を拒否し、不正なセルを全部 \`cells\` に載せる。確定処理が終わった後（microtask）に出るので、
  * 購読者から \`setActiveCell\` 等を呼んでも後続の移動に上書きされない。
  */
  | {
     readonly type: 'cell-invalid';
-    readonly source: 'edit' | 'select' | 'date' | 'paste';
+    readonly source: 'edit' | 'select' | 'date' | 'paste' | 'fill';
     readonly cells: readonly GridInvalidCell[];
 }
 /**
  * 読むだけのセルへの編集を止めた通知（Experimental 0.x・DD-069・両モード共通）。選択中のセルで印字キー（日本語入力オンの
  * 打鍵を含む）・Delete／Backspace・F2 を、ダブルクリックしたセルで編集の開始を止めたときと、表全体が読み取り専用
- * （\`readOnly\`）で貼り付け・切り取り・範囲の消去を止めたときに、1 回の操作で 1 回出す。文書は変わらない。
+ * （\`readOnly\`）で貼り付け・切り取り・範囲の消去・Ctrl+D／Ctrl+R（\`fill\`・DD-070-3）を止めたときに、1 回の操作で 1 回出す。
+ * 文書は変わらない。
  * consumer が止めた理由と直す先を利用者に示すために使う。印字キー（\`input: 'key'\`）は打鍵の処理が済んだ後（次のキー・クリックの
  * 処理より前）に、それ以外は止めたその場で出すので、受け取ってすぐ \`setActiveCell\` などを呼んでよい（届く順は操作の順）。
  * 変換中・編集中（Navigation でない位相）と、選択式の候補欄・日付のカレンダーを開くのを止めたときは出さない。
@@ -220,12 +221,12 @@ export type GridEvent = {
 }
 /**
  * 範囲の操作で読むだけのセルを飛ばした通知（Experimental 0.x・DD-069・両モード共通）。貼り付け・切り取りのクリア・範囲の
- * 消去が、読み取り専用の列・行・セルや結合範囲にかかって変えずに残したセルを \`cells\` に載せる（範囲が 1 セルでも同じ。
+ * 消去・Ctrl+D／Ctrl+R（\`fill\`・DD-070-3）が、読み取り専用の列・行・セルや結合範囲にかかって変えずに残したセルを \`cells\` に載せる（範囲が 1 セルでも同じ。
  * 変える値の無い空のセルは載せない）。ほかのセルへの適用は従来どおり行う（全部を飛ばしたら文書は変わらない）。
  */
  | {
     readonly type: 'cells-skipped';
-    readonly operation: 'paste' | 'cut' | 'clear';
+    readonly operation: 'paste' | 'cut' | 'clear' | 'fill';
     readonly cells: readonly GridCellRef[];
 }
 /**
@@ -290,8 +291,8 @@ export interface GridCellRef {
     readonly rowId: string;
     readonly columnId: string;
 }
-/** \`edit-blocked\` で止めた操作（DD-069）。\`key\` は印字キー（日本語入力オンの打鍵を含む）、\`delete\` は Delete／Backspace。 */
-export type GridEditBlockedInput = 'key' | 'delete' | 'f2' | 'dblclick' | 'paste' | 'cut' | 'clear';
+/** \`edit-blocked\` で止めた操作（DD-069）。\`key\` は印字キー（日本語入力オンの打鍵を含む）、\`delete\` は Delete／Backspace、\`fill\` は Ctrl+D／Ctrl+R（DD-070-3）。 */
+export type GridEditBlockedInput = 'key' | 'delete' | 'f2' | 'dblclick' | 'paste' | 'cut' | 'clear' | 'fill';
 /**
  * \`edit-blocked\` の理由（DD-069）。\`readonly-column\`=mount の \`readOnlyColumns\`・\`readonly-row\`=\`readOnlyRows\`・
  * \`readonly-cell\`=行データの \`readOnlyColumns\`・\`merged\`=結合範囲・\`grid-readonly\`=表全体の \`readOnly\`。

@@ -639,6 +639,16 @@ const { activeCell, range } = grid.selection(); // 今の選択（ボタンか�
 - `cell-dblclick` は本体のセルだけ（見出し・列の境界・行番号では届かない）。結合範囲は左上のセルとして届く。ダブルクリックで
   編集を始めたくない列は `readOnlyColumns` にする（読むだけのセルでは `edit-blocked` の後に `cell-dblclick` が届く）
 
+### 下方向・右方向へのコピー（Ctrl+D・Ctrl+R・DD-070-3）
+
+設定は要らない（両モード共通）。Excel と同じく、範囲が 2 行以上なら一番上の行を残りの行へ、1 セル（1 行）なら上のセルを写す
+（Ctrl+R は列の向き）。コピーして貼り付けたのと同じ扱いで、読むだけのセルは飛ばして `cells-skipped`（`operation: 'fill'`）、
+`validateCell` の拒否は全体を拒否（`cell-invalid` の `source: 'fill'`）、Ctrl+Z の 1 回で戻る。確定は `cell-commit`
+（単独モード）で 1 回届く。表全体が `readOnly` なら `edit-blocked`（`input: 'fill'`）。
+
+- 選択は動かない。写す先の値が同じセルは書かない（変わるセルが無ければ `cell-commit` も出ない）。空のセルを写すと空になる
+- 編集中に押しても何もしない（ブラウザーのブックマーク・再読み込みは起きない）。日本語の変換中は触らない
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と
