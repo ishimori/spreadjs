@@ -46,7 +46,9 @@ import {
   type GridMergedCell,
   type GridMountOptions,
   type GridPresenceUser,
+  type GridReadRowsOptions,
   type GridRemoteChange,
+  type GridRowData,
   type GridSelection,
   type GridStandaloneData,
   type GridStandaloneRow,
@@ -212,6 +214,8 @@ export interface NanairoSheetViewHandle {
   presences(): readonly GridPresenceUser[];
   /** 今の選択（grid GridInstance.selection 直結・DD-070-2）。未 mount 時は両方 null（warn しない）。 */
   selection(): GridSelection;
+  /** 表のデータを読む（grid GridInstance.getRows 直結・DD-070-5）。未 mount 時は []（warn しない）。 */
+  getRows(options?: GridReadRowsOptions): readonly GridRowData[];
   /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
   pendingCount(): number;
   /**
@@ -590,6 +594,10 @@ function NanairoSheetViewImpl(
       // DD-070-2: 読み取り系（未 mount でも warn しない）。
       selection(): GridSelection {
         return instanceRef.current?.selection() ?? { activeCell: null, range: null };
+      },
+      // DD-070-5: 読み取り系（未 mount でも warn しない）。
+      getRows(options?: GridReadRowsOptions): readonly GridRowData[] {
+        return instanceRef.current?.getRows(options) ?? [];
       },
       // DD-056 H12: 読み取り系（未 mount でも warn しない）。未 mount は送るものがない＝0／flushed。
       pendingCount(): number {

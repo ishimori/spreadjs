@@ -53,6 +53,11 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 - **grid セルのダブルクリックの通知（イベント `cell-dblclick`・DD-070-2）**: `{ type: 'cell-dblclick', rowId, columnId }`。本体の
   セルのダブルクリックで、SDK の既定の動き（編集の開始・候補欄・カレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは
   止めない）。結合範囲は左上のセル。見出し・列の境界（幅の自動調整）・行番号では出さない。
+- **grid 表のデータを読む（`GridInstance.getRows(options?)`・DD-070-5）**: 文書の並びで全部の行を `{ rowId, cells }`（ColumnId →
+  表示文字列・空のセルは無し）で返す。`setData` の行と同じ形で、そのまま渡せば同じ表になる。値は自分の未確定の変更を含む今の値で、
+  共同編集モードでは他の参加者の確定も含む（画面側の consumer が並べ替え・絞り込み・CSV の書き出しの材料を得る手段）。
+  `options.columnIds`・`rowIds` で絞れる（未知は無視）。同期で返す。boot 前・destroy 後は `[]`。180 列 × 数万行を全部読むと文字列を
+  全部作るので重い（並べ替えにはキーの列だけを読む）。公開型 `GridRowData`・`GridReadRowsOptions`。React の ref handle にも。
 - **grid 数値の列（`columnTypes` の `{ type: 'number', invalidMessage? }`・DD-070-4）**: 確定しようとしている値が空でなく、SDK の
   型変換（全角数字・全角マイナス・3 桁区切りは数値）で数値にならなければ拒否する（`ND`・`<0.1`・`12.5%`・日付の形など）。経路は
   `validateCell` と同じで、入力を捨てて `cell-invalid`（`message` は `invalidMessage`・既定「数値を入力してください」）。貼り付け・

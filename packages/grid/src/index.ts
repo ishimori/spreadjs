@@ -231,6 +231,20 @@ export interface GridCellRange {
   readonly endColumnId: string;
 }
 
+/** `GridInstance.getRows` の 1 行（DD-070-5）。単独モードの行データと同じ形（`cells` は ColumnId → 表示文字列・空のセルは無し）。 */
+export interface GridRowData {
+  readonly rowId: string;
+  readonly cells: Readonly<Record<string, string>>;
+}
+
+/** `GridInstance.getRows` の絞り込み（DD-070-5）。未知の列・未知や削除済みの行は無視する。 */
+export interface GridReadRowsOptions {
+  /** 読む列（既定は全部の列）。並べ替え・絞り込みにはキーの列だけを読むと軽い。 */
+  readonly columnIds?: readonly string[];
+  /** 読む行（既定は全部の行）。返す並びは文書の並び。 */
+  readonly rowIds?: readonly string[];
+}
+
 /** 今の選択（DD-070-2）。`selection-change` イベントと同じ形。行が無い・boot 前・destroy 後は両方 null。 */
 export interface GridSelection {
   readonly activeCell: GridCellRef | null;
@@ -815,6 +829,14 @@ export interface GridInstance {
    * （イベントは描画のループで出るため、直前の操作の結果はイベントより先にここへ現れる）。行が無い・boot 前・destroy 後は両方 null。
    */
   selection(): GridSelection;
+  /**
+   * 表のデータを読む（Experimental 0.x・DD-070-5・両モード）。文書の並びで全部の行（削除した行は除く）を `{ rowId, cells }` で返す
+   * （`cells` は ColumnId → 表示文字列・空のセルは無し＝`setData` の行と同じ形で、そのまま渡せば同じ表になる。数値は桁区切りなし・
+   * 日付は `YYYY-MM-DD`）。値は自分の未確定の変更を含む今の値（編集中のセルの下書きは含めない）。共同編集モードでは他の参加者の
+   * 確定も含む。`options.columnIds`・`rowIds` で絞れる（大きい表では並べ替えのキーの列だけを読むと軽い）。画面だけの並べ替え・
+   * 絞り込み（DD-070-8）の影響は受けない。同期で返す（`setData` の直後に読めば新しい行）。boot 前・destroy 後は `[]`。
+   */
+  getRows(options?: GridReadRowsOptions): readonly GridRowData[];
   /**
    * 表示専用モード（`readOnly`）を実行中に切り替える（Experimental 0.x・DD-056 H12・両モード）。**開き直さない**: 共同編集セッション・
    * 未送信の操作・スクロール位置・選択・列幅を保ち、未送信の操作は通常どおりサーバーへ届く（拒否されれば `rejected`）。

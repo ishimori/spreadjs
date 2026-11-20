@@ -257,6 +257,18 @@ export interface GridCellRange {
     readonly endRowId: string;
     readonly endColumnId: string;
 }
+/** \`GridInstance.getRows\` の 1 行（DD-070-5）。単独モードの行データと同じ形（\`cells\` は ColumnId → 表示文字列・空のセルは無し）。 */
+export interface GridRowData {
+    readonly rowId: string;
+    readonly cells: Readonly<Record<string, string>>;
+}
+/** \`GridInstance.getRows\` の絞り込み（DD-070-5）。未知の列・未知や削除済みの行は無視する。 */
+export interface GridReadRowsOptions {
+    /** 読む列（既定は全部の列）。並べ替え・絞り込みにはキーの列だけを読むと軽い。 */
+    readonly columnIds?: readonly string[];
+    /** 読む行（既定は全部の行）。返す並びは文書の並び。 */
+    readonly rowIds?: readonly string[];
+}
 /** 今の選択（DD-070-2）。\`selection-change\` イベントと同じ形。行が無い・boot 前・destroy 後は両方 null。 */
 export interface GridSelection {
     readonly activeCell: GridCellRef | null;
@@ -831,6 +843,14 @@ export interface GridInstance {
      */
     selection(): GridSelection;
     /**
+     * 表のデータを読む（Experimental 0.x・DD-070-5・両モード）。文書の並びで全部の行（削除した行は除く）を \`{ rowId, cells }\` で返す
+     * （\`cells\` は ColumnId → 表示文字列・空のセルは無し＝\`setData\` の行と同じ形で、そのまま渡せば同じ表になる。数値は桁区切りなし・
+     * 日付は \`YYYY-MM-DD\`）。値は自分の未確定の変更を含む今の値（編集中のセルの下書きは含めない）。共同編集モードでは他の参加者の
+     * 確定も含む。\`options.columnIds\`・\`rowIds\` で絞れる（大きい表では並べ替えのキーの列だけを読むと軽い）。画面だけの並べ替え・
+     * 絞り込み（DD-070-8）の影響は受けない。同期で返す（\`setData\` の直後に読めば新しい行）。boot 前・destroy 後は \`[]\`。
+     */
+    getRows(options?: GridReadRowsOptions): readonly GridRowData[];
+    /**
      * 表示専用モード（\`readOnly\`）を実行中に切り替える（Experimental 0.x・DD-056 H12・両モード）。**開き直さない**: 共同編集セッション・
      * 未送信の操作・スクロール位置・選択・列幅を保ち、未送信の操作は通常どおりサーバーへ届く（拒否されれば \`rejected\`）。
      * - \`true\`: 編集中のセルは「確定して移動しない」で確定してから切り替える（入力を捨てない。変換を確定した直後の状態も確定する）。
@@ -1390,7 +1410,7 @@ export declare function describeMergeIssues(issues: readonly MergeSpecIssue[]): 
 exports[`contract: Facade 公開 .d.ts snapshot（型シグネチャ全文・DD-028 S2-3） > @nanairo-sheet/react の公開宣言 closure 1`] = `
 "// ==== packages/react/src/index.ts ====
 import { type CSSProperties } from 'react';
-import { type GridAppearance, type GridCellBackgroundRow, type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnGroup, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridMergedCell, type GridPresenceUser, type GridRemoteChange, type GridSelection, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
+import { type GridAppearance, type GridCellBackgroundRow, type GridCellCommitChange, type GridCellStatusColors, type GridCellStatusRow, type GridCellValidationInput, type GridColumnDisplayFormat, type GridColumnFormatRule, type GridRowBorders, type GridBorder, type GridColumnBorders, type GridColumnGroup, type GridColumnType, type GridConnectionState, type GridDiagnosticHook, type GridErrorCode, type GridEvent, type GridFlushOptions, type GridFlushResult, type GridMergedCell, type GridPresenceUser, type GridReadRowsOptions, type GridRemoteChange, type GridRowData, type GridSelection, type GridStandaloneData, type GridStandaloneRow } from '@nanairo-sheet/grid';
 /** 公開 API バージョン（Experimental 0.x・ADR-0015。grid の GRID_API_VERSION と対で版数表記する）。 */
 export declare const REACT_API_VERSION: "0.1.0-experimental";
 /** error callback へ渡す整形済みエラー（GridEvent 'error' の写像・R7: 内部型を出さない）。 */
@@ -1537,6 +1557,8 @@ export interface NanairoSheetViewHandle {
     presences(): readonly GridPresenceUser[];
     /** 今の選択（grid GridInstance.selection 直結・DD-070-2）。未 mount 時は両方 null（warn しない）。 */
     selection(): GridSelection;
+    /** 表のデータを読む（grid GridInstance.getRows 直結・DD-070-5）。未 mount 時は []（warn しない）。 */
+    getRows(options?: GridReadRowsOptions): readonly GridRowData[];
     /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
     pendingCount(): number;
     /**

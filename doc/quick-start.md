@@ -639,6 +639,20 @@ const { activeCell, range } = grid.selection(); // 今の選択（ボタンか�
 - `cell-dblclick` は本体のセルだけ（見出し・列の境界・行番号では届かない）。結合範囲は左上のセルとして届く。ダブルクリックで
   編集を始めたくない列は `readOnlyColumns` にする（読むだけのセルでは `edit-blocked` の後に `cell-dblclick` が届く）
 
+### 表のデータを読む（`getRows`・DD-070-5）
+
+画面に出ている表の今のデータを読む（両モード共通）。共同編集モードでは他の参加者の確定も含む。
+
+```ts
+const rows = grid.getRows(); // [{ rowId, cells: { colId: '表示文字列', ... } }, ...]（文書の並び・空のセルは無し）
+const keys = grid.getRows({ columnIds: ['price'] }); // 並べ替えのキーの列だけ（大きい表ではこちら）
+const csv = toCsv(rows); // CSV は consumer が組み立てる（列見出し・書式は consumer が知っている）
+```
+
+- 返す形は `setData` の行と同じ（`setData({ rows: grid.getRows() })` で同じ表）。数値は桁区切りなしの正準形・日付は `YYYY-MM-DD`
+- 値は自分の未確定の変更を含む今の値。編集中のセルの下書きは含めない。同期で返すので `setData` の直後に読めば新しい行
+- 180 列 × 数万行を全部読むと重い（全部のセルの文字列を作る）。必要な列だけを `columnIds` で読む
+
 ### 数値の列（`columnTypes` の `type: 'number'`・DD-070-4）
 
 wt%・比率・単価など、数値だけを入れる列に付ける（両モード共通）。
