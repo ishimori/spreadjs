@@ -7,12 +7,16 @@ import { createDiagnosticSink } from '../diagnostics';
 import type { GridDiagnostic } from '../diagnostics';
 import { createRowViewSwitch } from './row-view-switch';
 
-function setup(options: { attached?: boolean; phase?: string; composing?: boolean; unknown?: number } = {}) {
+function setup(
+  options: { attached?: boolean; phase?: string; composing?: boolean; unknown?: number; standaloneBoot?: boolean } = {},
+) {
   const diagnostics: GridDiagnostic[] = [];
   const applied: Array<readonly string[] | null> = [];
+  const knowns: Array<string[] | null> = [];
   let commits = 0;
   let closes = 0;
-  let flushes = 0;
+  const queued: Array<() => void> = [];
+  let docRows = ['r0', 'r1', 'r2'];
   let composing = options.composing === true;
   let phase = options.phase ?? 'Navigation';
   let attached = options.attached ?? true;
@@ -20,11 +24,15 @@ function setup(options: { attached?: boolean; phase?: string; composing?: boolea
   const axisIds = ['r2', 'r0'];
   const backend = {
     view: {
-      setRowView: (order: readonly RowId[] | null) => {
-        applied.push(order === null ? null : order.map(String));
-        return options.unknown ?? 0;
+      createRowViewSpec: (order: readonly RowId[]) => ({
+        spec: { order: [...order], known: new Set(docRows) },
+        unknown: options.unknown ?? 0,
+      }),
+      setRowView: (spec: { order: readonly RowId[]; known: ReadonlySet<string> } | null) => {
+        applied.push(spec === null ? null : spec.order.map(String));
+        knowns.push(spec === null ? null : [...spec.known]);
       },
-      rowAxis: { count: () => axisIds.length, getId: (i: number) => axisIds[i] },
+      pendingRowOrder: () => axisIds,
     },
     session: { isStopped: false },
   };
@@ -43,8 +51,10 @@ function setup(options: { attached?: boolean; phase?: string; composing?: boolea
     closePopups: () => {
       closes += 1;
     },
-    flushPendingStructure: () => {
-      flushes += 1;
+    deferUntilStandaloneBoot: (run: () => void) => {
+      if (options.standaloneBoot !== true) return false;
+      queued.push(run);
+      return true;
     },
   });
   return {
@@ -54,7 +64,11 @@ function setup(options: { attached?: boolean; phase?: string; composing?: boolea
     codes: () => diagnostics.map((d) => d.code),
     commits: () => commits,
     closes: () => closes,
-    flushes: () => flushes,
+    knowns,
+    queued,
+    setDocRows: (rows: string[]) => {
+      docRows = rows;
+    },
     attach: () => {
       attached = true;
     },
@@ -76,16 +90,18 @@ describe('DD-070-8 row-view-switch', () => {
     vi.useRealTimers();
   });
 
-  it('配列でも null でもなければ何も変えずに warn。文字列でない要素は除いて warn。null は戻す', () => {
+  it('配列でも null でもない・文字列でない要素を含むなら何も変えずに warn（Codex P2）。null は戻す', () => {
     const t = setup();
     t.sw.set('r0');
     expect(t.applied).toEqual([]);
     expect(t.codes()).toEqual(['row-view-invalid']);
     t.sw.set(['r0', 1, 'r1']);
-    expect(t.applied).toEqual([['r0', 'r1']]);
-    expect(t.codes()).toEqual(['row-view-invalid', 'row-view-invalid']);
+    t.sw.set([null]);
+    expect(t.applied).toEqual([]);
+    expect(t.codes()).toEqual(['row-view-invalid', 'row-view-invalid', 'row-view-invalid']);
+    t.sw.set(['r0', 'r1']);
     t.sw.set(null);
-    expect(t.applied.at(-1)).toBeNull();
+    expect(t.applied).toEqual([['r0', 'r1'], null]);
     expect(t.closes()).toBe(2); // 反映のたびに候補欄・日付を閉じる
   });
 
@@ -119,16 +135,30 @@ describe('DD-070-8 row-view-switch', () => {
     t.sw.scheduleCheck();
     vi.runAllTimers();
     expect(t.applied).toEqual([]); // まだ変換中
+    t.setDocRows(['r0', 'r1', 'r2', 'n']); // 変換を待つ間に行ができた（Codex P2: 呼んだ時点の行は呼んだ時に決める）
     t.endComposition();
     t.sw.scheduleCheck();
     vi.runAllTimers();
     expect(t.applied).toEqual([['r0']]);
+    expect(t.knowns.at(-1)).toEqual(['r0', 'r1', 'r2']); // n は「後からできた行」
   });
 
-  it('destroy の後は何もしない。visibleRowIds は保留中の構造を反映してから Axis の並びを返す', () => {
+  it('単独モードの boot 前は setData と同じ queue に積む（Codex P2: 保留した setData の後に呼んだ時点の行を決める）', () => {
+    const t = setup({ attached: false, standaloneBoot: true });
+    t.sw.set(['r1']);
+    expect(t.queued).toHaveLength(1);
+    t.attach();
+    t.sw.attach(t.backend as never); // 結線では反映しない（queue の再生で反映する）
+    expect(t.applied).toEqual([]);
+    t.setDocRows(['r0', 'r1']); // 保留した setData が先に再生された
+    t.queued[0]!();
+    expect(t.applied).toEqual([['r1']]);
+    expect(t.knowns.at(-1)).toEqual(['r0', 'r1']);
+  });
+
+  it('destroy の後は何もしない。visibleRowIds は保留中の構造を反映した並びを返す', () => {
     const t = setup();
     expect(t.sw.visibleRowIds()).toEqual(['r2', 'r0']);
-    expect(t.flushes()).toBe(1);
     t.destroy();
     t.sw.set(['r0']);
     expect(t.applied).toEqual([]);

@@ -20,8 +20,12 @@ async function open(page: Page, query = ''): Promise<void> {
   await sa.waitReady(page);
 }
 
+/** setRowView を呼び、行の Axis が作り直される次の描画まで待つ（visibleRowIds は描画を待たずに新しい並びを返す）。 */
 async function view(page: Page, ids: string[] | null): Promise<void> {
-  await page.evaluate((list) => (window as Window & { __gridInstance?: Grid }).__gridInstance!.setRowView(list), ids);
+  await page.evaluate((list) => {
+    (window as Window & { __gridInstance?: Grid }).__gridInstance!.setRowView(list);
+    return new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }, ids);
 }
 
 async function visible(page: Page): Promise<string[]> {
@@ -178,6 +182,45 @@ test('AC1 補足: 並びを変えても横スクロールは残る。setData で
     });
     expect(after.same).toEqual(['r5', 'r3', 'r1']);
     expect(after.fresh).toEqual(['n0', 'n1']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P2: boot 前に setData → setRowView の順で呼ぶと、注入した行で並ぶ（setData より先に反映しない）', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await page.goto('/standalone.html?prebootrowview=1');
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await expect.poll(() => visible(page)).toEqual(['r3', 'r1']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P1・P2: 外の入力欄で打ちながら絞り込んでもフォーカスを奪わない。共通の行が無い絞り込みでも見えている行を選ぶ', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await open(page);
+    await sa.selectCell(page, 5, 0);
+    await page.evaluate(() => {
+      const input = document.createElement('input');
+      input.id = 'search';
+      document.body.appendChild(input);
+      input.focus();
+    });
+    await view(page, ['r9', 'r5']); // 選択中の r5 の番号が変わる（5 → 1）
+    await expect.poll(() => visible(page)).toEqual(['r9', 'r5']);
+    await page.keyboard.type('abc');
+    expect(await page.evaluate(() => (document.getElementById('search') as HTMLInputElement).value)).toBe('abc');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('search');
+    expect(await page.evaluate(() => (window as Window & { __gridInstance?: Grid }).__gridInstance!.selection().activeCell?.rowId)).toBe('r5');
+    // 共通の行が無い絞り込み → 見えている行（同じ番号・末尾を越えたら末尾）を選ぶ。
+    await view(page, ['r12']);
+    await expect.poll(() => page.evaluate(() => (window as Window & { __gridInstance?: Grid }).__gridInstance!.selection().activeCell?.rowId)).toBe('r12');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('search');
   } finally {
     await context.close();
   }

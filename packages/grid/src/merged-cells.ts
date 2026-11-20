@@ -32,7 +32,7 @@ export interface MergeRegistry {
    * 描画の時に行へ張り直す（行 Axis・指定が前回と同じなら何もしない）。張った結合が変わったら true。
    * frozenRowCount は固定行数（境界をまたぐ結合は描かない）。
    */
-  resolve(rowAxis: Axis<RowId>, frozenRowCount: number): boolean;
+  resolve(rowAxis: Axis<RowId>, frozenRowCount: number, isRowHidden?: (rowId: RowId) => boolean): boolean;
   /** 直前に張った結合（描画・クリック・キーの判定はこれを使う）。 */
   index(): MergeIndex;
 }
@@ -119,7 +119,7 @@ export function createMergeRegistry(warn: MergeDiagnosticSink): MergeRegistry {
       generation += 1;
     },
     hasSpecs: () => entries.length > 0,
-    resolve(rowAxis, frozenRowCount) {
+    resolve(rowAxis, frozenRowCount, isRowHidden) {
       if (rowAxis === resolvedAxis && generation === resolvedGeneration && frozenRowCount === resolvedFrozen) {
         return false;
       }
@@ -172,6 +172,11 @@ export function createMergeRegistry(warn: MergeDiagnosticSink): MergeRegistry {
           }
           top = anchor;
         } else {
+          // DD-070-8（Codex P2）: 覚えた行が全部、見せる並びで隠れているだけ（文書にある）なら捨てずに描かない（見せたら張り直す）。
+          // 一部だけ隠れた・並びが変わった行をまたぐ結合は従来どおり捨てる（DD-070-8 決定 7）。
+          if (isRowHidden !== undefined && entry.boundIds.every((id) => rowAxis.getIndex(id) < 0 && isRowHidden(id))) {
+            continue;
+          }
           top = contiguousTop(rowAxis, entry.boundIds);
           if (top < 0) {
             entry.broken = true;

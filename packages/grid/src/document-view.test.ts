@@ -477,13 +477,23 @@ describe('DD-070-8 見せる行と並び（view-local・文書は変えない）
   function ids(view: DocumentView): string[] {
     return Array.from({ length: view.rowAxis.count() }, (_v, i) => String(view.rowAxis.getId(i)));
   }
+  /** 今の文書で指定を組み立てて反映する（mount の row-view-switch と同じ手順）。戻り値は文書に無い行 ID の数。 */
+  function setView(view: DocumentView, order: string[] | null): number {
+    if (order === null) {
+      view.setRowView(null);
+      return 0;
+    }
+    const { spec, unknown } = view.createRowViewSpec(order.map((id) => row(id)));
+    view.setRowView(spec);
+    return unknown;
+  }
 
   it('渡した順に並び、渡さなかった行は隠す。null で文書の並びへ戻す。文書に無い行 ID の数を返す', () => {
     const { view, apply, doc } = createDocHolder();
     apply(insertRows(null, ['r0', 'r1', 'r2', 'r3']));
     view.markFullRebuild();
     view.flush();
-    expect(view.setRowView([row('r3'), row('r1'), row('nope')])).toBe(1);
+    expect(setView(view, ['r3', 'r1', 'nope'])).toBe(1);
     expect(view.hasStructuralDirty()).toBe(true);
     expect(view.flush().structuralRebuilt).toBe(true);
     expect(ids(view)).toEqual(['r3', 'r1']);
@@ -491,11 +501,11 @@ describe('DD-070-8 見せる行と並び（view-local・文書は変えない）
     expect(view.isRowHiddenByView(row('r1'))).toBe(false); // 見えている
     expect(view.isRowHiddenByView(row('nope'))).toBe(false); // 文書に無い
     expect(doc().rowOrder.map(String)).toEqual(['r0', 'r1', 'r2', 'r3']); // 文書は同じ
-    expect(view.setRowView(null)).toBe(0);
+    setView(view, null);
     view.flush();
     expect(ids(view)).toEqual(['r0', 'r1', 'r2', 'r3']);
     expect(view.isRowHiddenByView(row('r0'))).toBe(false); // 指定が無ければ隠れていない
-    expect(view.setRowView(null)).toBe(0);
+    setView(view, null);
     expect(view.hasStructuralDirty()).toBe(false); // 指定が無いまま null なら何もしない
   });
 
@@ -504,7 +514,7 @@ describe('DD-070-8 見せる行と並び（view-local・文書は変えない）
     apply(insertRows(null, ['r0', 'r1', 'r2']));
     view.markFullRebuild();
     view.flush();
-    view.setRowView([row('r2'), row('r0')]);
+    setView(view, ['r2', 'r0']);
     view.flush();
     const after = insertRows(row('r0'), ['rNew']);
     apply(after);
@@ -541,13 +551,104 @@ describe('DD-070-8 見せる行と並び（view-local・文書は変えない）
     view.markFullRebuild();
     view.flush();
     expect(view.autoRowHeightRecord()).toEqual({ r0: 58 });
-    view.setRowView([row('r1')]);
+    setView(view, ['r1']);
     view.flush();
     expect(view.autoRowHeightRecord()).toEqual({ r0: 58 }); // 隠れても捨てない
     const recomputeAll = vi.spyOn(view, 'recomputeAllAutoRowHeights');
-    view.setRowView(null);
+    setView(view, null);
     view.flush();
     expect(recomputeAll).not.toHaveBeenCalled(); // 並びだけの変化では全件を測り直さない
     expect(view.rowAxis.size(view.rowIndexOf(row('r0')))).toBe(58);
+  });
+});
+
+describe('DD-070-8 見せる行と並び（Codex の指摘）', () => {
+  function ids(view: DocumentView): string[] {
+    return Array.from({ length: view.rowAxis.count() }, (_v, i) => String(view.rowAxis.getId(i)));
+  }
+  function setView(view: DocumentView, order: string[] | null): void {
+    view.setRowView(order === null ? null : view.createRowViewSpec(order.map((id) => row(id))).spec);
+  }
+  function wrapHolder() {
+    let doc = createDocument(COLS);
+    let revision = 0;
+    const apply = (op: DocumentOperation): void => {
+      revision += 1;
+      doc = applyOperation(doc, op, { revision }).document;
+    };
+    const view = new DocumentView({
+      getDocument: () => doc,
+      rowHeight: 22,
+      colWidth: 60,
+      wrapColumns: ['col-1'],
+      wrapCache: createTextMetricsCache((text) => text.length * 10),
+      cellFont: 'f',
+      lineHeight: 16,
+    });
+    return { view, apply };
+  }
+
+  it('P1: 並びだけが変わっても描き直す（needsRedraw）', () => {
+    const { view, apply } = createDocHolder();
+    apply(insertRows(null, ['a', 'b', 'c']));
+    view.markFullRebuild();
+    view.flush();
+    setView(view, ['a', 'c', 'b']);
+    expect(view.isDirty()).toBe(true);
+    expect(view.flush().needsRedraw).toBe(true);
+  });
+
+  it('P1: 指定した時に文書に無かった行 ID は並びに残さない（後でその行ができても二重に出ない）。重複は最初の 1 つ', () => {
+    const { view, apply } = createDocHolder();
+    apply(insertRows(null, ['a']));
+    view.markFullRebuild();
+    view.flush();
+    setView(view, ['x', 'a', 'a']);
+    view.flush();
+    expect(ids(view)).toEqual(['a']);
+    const add = insertRows(row('a'), ['x']);
+    apply(add);
+    view.noteOperation(add);
+    view.flush();
+    expect(ids(view)).toEqual(['a', 'x']); // 後からできた行として 1 回だけ
+  });
+
+  it('P2: pendingRowOrder は flush の前でも保留中の並びを返す', () => {
+    const { view, apply } = createDocHolder();
+    apply(insertRows(null, ['a', 'b']));
+    view.markFullRebuild();
+    view.flush();
+    setView(view, ['b']);
+    expect(view.pendingRowOrder().map(String)).toEqual(['b']);
+  });
+
+  it('P2: 既定の高さに収まった行も測った扱いで、並べ替えでは測り直さない', () => {
+    const { view, apply } = wrapHolder();
+    apply(insertRows(null, ['r0', 'r1', 'r2']));
+    apply(setCells([{ rowId: row('r0'), columnId: col('col-1'), value: str('ab') }])); // 1 行に収まる
+    view.markFullRebuild();
+    view.flush();
+    const forRows = vi.spyOn(view, 'recomputeAutoRowHeightsForRows');
+    setView(view, ['r2', 'r1', 'r0']);
+    view.flush();
+    expect(forRows).not.toHaveBeenCalled();
+  });
+
+  it('P2: 隠れている間に条件（文書の作り直し）が変わった行は、見せたときに測り直す', () => {
+    const { view, apply } = wrapHolder();
+    apply(insertRows(null, ['r0', 'r1']));
+    apply(setCells([{ rowId: row('r0'), columnId: col('col-1'), value: str('abcdefghijkl') }]));
+    view.markFullRebuild();
+    view.flush();
+    expect(view.autoRowHeightRecord()).toEqual({ r0: 58 });
+    setView(view, ['r1']);
+    view.flush();
+    // 隠れている間に値が短くなり、全件の測り直し（構造の作り直し）が走る。
+    apply(setCells([{ rowId: row('r0'), columnId: col('col-1'), value: str('ab') }]));
+    view.markFullRebuild();
+    view.flush();
+    setView(view, null);
+    view.flush();
+    expect(view.rowAxis.size(view.rowIndexOf(row('r0')))).toBe(22); // 前の 58 のまま見せない
   });
 });

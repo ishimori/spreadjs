@@ -95,7 +95,10 @@ export function createMerges(deps: MergesDeps): MountMerges {
     isMergedCellId,
     resolve() {
       const backend = deps.backend();
-      return backend !== undefined && registry.resolve(backend.view.rowAxis, deps.frozenRowCount());
+      return (
+        backend !== undefined &&
+        registry.resolve(backend.view.rowAxis, deps.frozenRowCount(), (rowId) => backend.view.isRowHiddenByView(rowId))
+      );
     },
     applyMountOption(raw, columnOrder) {
       const mountMerges = validateMergedCells(raw, columnOrder, deps.frozenColCount());

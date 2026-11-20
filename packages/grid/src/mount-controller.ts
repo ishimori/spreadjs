@@ -390,7 +390,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
       select.close();
       date.close();
     },
-    flushPendingStructure,
+    deferUntilStandaloneBoot: (run) => lifecycle.deferUntilStandaloneBoot(run),
   });
   const { currentTransform, syncSpacer, syncLayout } = render;
   // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。

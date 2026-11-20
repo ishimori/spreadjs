@@ -440,16 +440,23 @@ export function createEditSubmit(deps: EditSubmitDeps): EditSubmit {
     if (editor.session.isComposing() || editor.session.getPhase() !== 'Navigation') {
       return;
     }
-    const newRow = rebaseRowIndex(state.oldOrder, newOrder, active.row);
+    let newRow = rebaseRowIndex(state.oldOrder, newOrder, active.row);
+    if (newRow === null && newOrder.length > 0) {
+      // DD-070-8（Codex P2）: 前の並びの行が 1 つも残っていない（共通の行の無い絞り込み）が、見えている行はある → 同じ番号
+      // （末尾を越えたら末尾）へ寄せる（選択が無くなると打鍵先が無い）。
+      newRow = Math.min(active.row, newOrder.length - 1);
+    }
     if (newRow === null) {
-      editor.pointerdownCell(null); // 生存行なし → 選択解除
+      editor.pointerdownCell(null, { focus: false }); // 生存行なし → 選択解除
       return;
     }
-    if (newRow === active.row) {
-      return; // index 不変（挿入が下・削除が下）→ カーソルを触らない
+    if (newRow === active.row && newOrder[newRow] === state.oldOrder[active.row]) {
+      return; // 同じ行が同じ番号（挿入が下・削除が下）→ カーソルを触らない
     }
+    // DD-070-8（Codex P2）: 番号が同じでも行が変わった（選択中の行を隠した・消した）なら、同じセルを指し直して在席（presence）を
+    // 今の行で知らせ直す。Codex P1: 再ベースはフォーカスを移さない（外の検索欄で打っている間の絞り込みで打鍵先を奪わない）。
     diag.emit('info', 'rebase-active-cell', `K3: activeCell 行 ${active.row}→${newRow}（RowId 追従）`);
-    editor.pointerdownCell({ row: newRow, col: active.col });
+    editor.pointerdownCell({ row: newRow, col: active.col }, { focus: false });
   }
 
   return {

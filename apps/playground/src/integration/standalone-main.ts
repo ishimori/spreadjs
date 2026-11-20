@@ -538,6 +538,15 @@ if (searchParams.get('prebootorder') === '1') {
   });
 }
 
+// DD-070-8（Codex P2）回帰確認用（E2E 専用）: boot 前に setData→setRowView の順で同期呼び出しする consumer を再現する
+// （`?prebootrowview=1`）。setRowView を保留した setData より先に反映すると、注入した行が全部「後からできた行」として見える。
+if (searchParams.get('prebootrowview') === '1') {
+  window.__gridInstance?.setData({
+    rows: Array.from({ length: 5 }, (_v, i) => ({ rowId: `r${i}`, cells: { 'col-a': `行${i}` } })),
+  });
+  window.__gridInstance?.setRowView(['r3', 'r1']);
+}
+
 // DD-062 回帰確認用（E2E 専用）: boot（microtask）完了前に setData→setCellStatus の順で同期呼び出しする consumer を
 // 再現する（`?prebootstatus=1`）。setCellStatus を保留せずに置き場へ書くと、後から適用される setData の作り直しで消える。
 if (searchParams.get('prebootstatus') === '1') {

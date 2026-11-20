@@ -94,6 +94,11 @@ export interface MountLifecycle {
   setRows(rows: readonly GridStandaloneRow[]): void;
   setCellStatus(rows: readonly GridCellStatusRow[]): void;
   setCellBackgrounds(rows: readonly GridCellBackgroundRow[]): void;
+  /**
+   * DD-070-8: 単独モードの boot 前なら、setData・setRows と同じ queue に呼ばれた順で積む（積んだら true）。単独モードでない・
+   * boot 済み・destroy 後は false（積まない）。
+   */
+  deferUntilStandaloneBoot(run: () => void): boolean;
   /** 起動する（単独モードは microtask で backend を作る。共同編集モードは tick interval を始めて boot する）。 */
   start(): void;
   /** destroy: tick interval を止める。 */
@@ -125,6 +130,7 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
     | { readonly kind: 'rows'; readonly rows: readonly GridStandaloneRow[] }
     | { readonly kind: 'status'; readonly rows: readonly GridCellStatusRow[] }
     | { readonly kind: 'backgrounds'; readonly rows: readonly GridCellBackgroundRow[] } // DD-069: setCellStatus と同じ理由
+    | { readonly kind: 'run'; readonly run: () => void } // DD-070-8: setRowView（保留した setData の後に「呼んだ時点の行」を決める）
   > = [];
 
   async function fetchConfig(): Promise<ResolvedConfig> {
@@ -372,6 +378,8 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
         applyStandaloneSetRows(call.rows);
       } else if (call.kind === 'status') {
         applyCellStatus(call.rows);
+      } else if (call.kind === 'run') {
+        call.run();
       } else {
         applyCellBackgrounds(call.rows);
       }
@@ -566,6 +574,13 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
         return;
       }
       applyCellStatus(rows);
+    },
+    deferUntilStandaloneBoot(run) {
+      if (!isStandalone || standalone !== undefined || deps.isDestroyed()) {
+        return false;
+      }
+      pendingStandaloneCalls.push({ kind: 'run', run });
+      return true;
     },
     setCellBackgrounds(rows) {
       // DD-069: setCellStatus と同じ（両モード共通。単独モードの boot 前は setData/setRows と同じ queue に積んで順を保つ）。

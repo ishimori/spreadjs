@@ -150,6 +150,11 @@ export class DocumentView {
    * layout イベントには含めない（D7・自動高は環境・フォントで再現される導出値）。
    */
   private readonly rowAutoHeights = new Map<RowId, number>();
+  /**
+   * DD-070-8（Codex P2）: 自動の行高を今の条件（列幅・書体・文書）で測った行（既定の高さに収まった行も含む）。並びだけが変わった
+   * ときは、ここに無い行（前は隠れていた行）だけを測る。全件の測り直し（条件の変化）で作り直す。
+   */
+  private readonly rowAutoMeasured = new Set<RowId>();
   /** wrap（折り返し）列の集合（DD-012-5 D1・mount 時固定）。 */
   private readonly wrapColumnSet: Set<ColumnId>;
   private readonly wrapCache: TextMetricsCache | undefined;
@@ -322,30 +327,41 @@ export class DocumentView {
   }
 
   /**
-   * 見せる行と並びを置き換える（DD-070-8・view-local）。`order` は見せる行を見せる順、null で文書の並びへ戻す。次の flush で
-   * 行の Axis を作り直す（構造の flush＝選択の再ベースも走る）。呼んだ時点の文書の行で渡さなかった行は隠し、後からできた行は
-   * 文書の並びで一つ前の見えている行の後に見せる。戻り値は文書に無い（削除済みを含む）行 ID の数（呼び出し側が warn する）。
+   * 見せる並びの指定を今の文書で組み立てる（DD-070-8）。今の文書の行が「呼んだ時点にあった行」（known）になる。文書に無い
+   * （削除済みを含む）行 ID と重複は並びから除く（Codex P1: 残すと、後でその ID の行ができたとき並びと「後からできた行」の
+   * 両方に出る）。`unknown` は除いた文書に無い行 ID の数（呼び出し側が warn する）。反映は setRowView（変換中は待てるように分ける）。
    */
-  setRowView(order: readonly RowId[] | null): number {
-    if (order === null) {
-      if (this.rowViewSpec === null) {
-        return 0;
-      }
-      this.rowViewSpec = null;
-      this.dirtyRowView = true;
-      return 0;
-    }
-    const base = displayRowOrder(this.getDocument());
-    const known = new Set(base);
+  createRowViewSpec(order: readonly RowId[]): { readonly spec: RowViewSpec; readonly unknown: number } {
+    const known = new Set(displayRowOrder(this.getDocument()));
+    const kept: RowId[] = [];
+    const seen = new Set<RowId>();
     let unknown = 0;
     for (const id of order) {
       if (!known.has(id)) {
         unknown += 1;
+      } else if (!seen.has(id)) {
+        seen.add(id);
+        kept.push(id);
       }
     }
-    this.rowViewSpec = { order: [...order], known };
+    return { spec: { order: kept, known }, unknown };
+  }
+
+  /**
+   * 見せる行と並びを置き換える（DD-070-8・view-local）。`spec` は createRowViewSpec で組み立てたもの、null で文書の並びへ戻す。
+   * 次の flush で行の Axis を作り直す（構造の flush＝選択の再ベースも走る）。
+   */
+  setRowView(spec: RowViewSpec | null): void {
+    if (spec === null && this.rowViewSpec === null) {
+      return;
+    }
+    this.rowViewSpec = spec;
     this.dirtyRowView = true;
-    return unknown;
+  }
+
+  /** 保留中の構造変更・見せる並びを反映した後の行の並び（DD-070-8・visibleRowIds 用。flush や初回の描画を待たない）。 */
+  pendingRowOrder(): readonly RowId[] {
+    return this.viewRowIds(this.getDocument());
   }
 
   /** 見せる並びの指定があるか（DD-070-8）。 */
@@ -480,6 +496,7 @@ export class DocumentView {
   /** rowId の自動高を再算出し、変化があれば rowAutoHeights と Axis を更新する（内部・戻り値=変化したか）。 */
   private updateAutoHeightForRow(rowId: RowId): boolean {
     const next = this.computeAutoHeightForRow(rowId);
+    this.rowAutoMeasured.add(rowId);
     const prev = this.rowAutoHeights.get(rowId);
     if (next === prev) {
       return false;
@@ -530,7 +547,7 @@ export class DocumentView {
     const missing: RowId[] = [];
     for (let i = 0; i < axis.count(); i += 1) {
       const rowId = axis.getId(i);
-      if (!this.rowAutoHeights.has(rowId)) {
+      if (!this.rowAutoMeasured.has(rowId)) {
         missing.push(rowId);
       }
     }
@@ -549,19 +566,22 @@ export class DocumentView {
     const count = axis.count();
     let changed = false;
     // 削除・bootstrap 差し替えで軸から消えた行の自動高を掃除する（stale 導出状態を溜めない・Codex P2）。
-    // DD-070-8: 見せる並びで隠れているだけの行（文書にある行）は掃除しない（見せたときに測り直さずに済む）。
+    // DD-070-8（Codex P2）: 見せる並びで隠れているだけの行も掃除する（列幅・書体・値が変わった後に前の高さで見せないため。
+    // 見せたときに測る）。測った行の覚えも作り直す。
     for (const rowId of [...this.rowAutoHeights.keys()]) {
-      if (axis.getIndex(rowId) < 0 && !this.isRowHiddenByView(rowId)) {
+      if (axis.getIndex(rowId) < 0) {
         this.rowAutoHeights.delete(rowId);
         changed = true;
       }
     }
+    this.rowAutoMeasured.clear();
     for (let i = 0; i < count; i += 1) {
       const rowId = axis.getId(i);
       const slot = slotOf(doc, rowId);
       const hasContent = slot !== undefined && doc.cells.hasRow(slot);
       // 内容が無い行は自動高を持たない（値削除で自動縮小・D5）。内容がある行だけ算出する。
       const next = hasContent ? this.computeAutoHeightForRow(rowId) : undefined;
+      this.rowAutoMeasured.add(rowId);
       const prev = this.rowAutoHeights.get(rowId);
       if (next === prev) {
         continue;
@@ -666,7 +686,7 @@ export class DocumentView {
 
   /** いずれかの dirty が立っているか。 */
   isDirty(): boolean {
-    return this.dirtyCell || this.dirtyStructure || this.dirtyViewport;
+    return this.dirtyCell || this.dirtyStructure || this.dirtyRowView || this.dirtyViewport;
   }
 
   /**
@@ -709,8 +729,9 @@ export class DocumentView {
         this.recomputeAllAutoRowHeights();
       }
     }
+    // Codex P1: 並びだけの変化（dirtyRowView）も描き直す（描かないと画面は前の並びのまま、クリック・編集は新しい並びに効く）。
+    const needsRedraw = this.dirtyCell || this.dirtyStructure || this.dirtyRowView || this.dirtyViewport;
     this.dirtyRowView = false;
-    const needsRedraw = this.dirtyCell || this.dirtyStructure || this.dirtyViewport;
     const columnLayoutChanged = this.columnLayoutChanged;
     this.dirtyCell = false;
     this.dirtyStructure = false;

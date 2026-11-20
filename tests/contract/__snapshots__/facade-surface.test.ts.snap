@@ -846,7 +846,8 @@ export interface GridInstance {
      * - 範囲の操作（選択・コピー・切り取り・範囲の消去・貼り付け・Ctrl+D）は見えている行だけ。隠した行の値は文書に残る（\`getRows\` で読める）
      * - 選択は行 ID を追う（選択中の行を隠したら近くの見えている行へ）。固定行は見せる並びの先頭の n 行。行をまたぐ結合は張れなくなる
      * - 編集中に呼んだら編集中のセルを確定してから変える。IME の変換中なら変換が終わってから
-     * - **同期 throw しない**: 配列でも null でもなければ何も変えずに診断 warn（\`row-view-invalid\`）。文書に無い行 ID は無視（warn）
+     * - **同期 throw しない**: 配列でも null でもない・文字列でない要素を含むなら何も変えずに診断 warn（\`row-view-invalid\`）。
+     *   文書に無い行 ID は除いて反映する（warn）。重複は最初の 1 つ
      */
     setRowView(rowIds: readonly string[] | null): void;
     /** 今見せている行を見せる順に返す（Experimental 0.x・DD-070-8。CSV を「見えているとおり」に作る材料）。boot 前・destroy 後は []。 */

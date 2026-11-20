@@ -46,3 +46,12 @@ describe('DD-070-8 buildViewRowOrder', () => {
     expect(out).toHaveLength(50_001);
   });
 });
+
+describe('DD-070-8 buildViewRowOrder（Codex P2）', () => {
+  it('同じ行の後ろに新しい行が十数万件あっても落ちない（展開構文を使わない）', () => {
+    const base = [createRowId('a'), ...Array.from({ length: 150_000 }, (_v, i) => createRowId(`n${i}`))];
+    const out = buildViewRowOrder(base, { order: [createRowId('a')], known: new Set([createRowId('a')]) });
+    expect(out.length).toBe(150_001);
+    expect(out[0]).toBe('a');
+  });
+});

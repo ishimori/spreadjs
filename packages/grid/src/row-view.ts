@@ -49,12 +49,15 @@ export function buildViewRowOrder(base: readonly RowId[], spec: RowViewSpec | nu
   if (after.size === 0) {
     return visible;
   }
-  const out: RowId[] = [...(after.get(null) ?? [])];
+  const out: RowId[] = (after.get(null) ?? []).slice();
   for (const id of visible) {
     out.push(id);
     const group = after.get(id);
     if (group !== undefined) {
-      out.push(...group);
+      // Codex P2: 展開構文（push(...group)）は引数の数の上限（十数万件）で落ちるので 1 件ずつ足す。
+      for (const added of group) {
+        out.push(added);
+      }
     }
   }
   return out;

@@ -207,3 +207,21 @@ describe('createMergeRegistry（描画の時の解決）', () => {
     expect(registry.hasSpecs()).toBe(false);
   });
 });
+
+describe('DD-070-8 見せる並びで隠れている行の結合（Codex P2）', () => {
+  it('覚えた行が全部隠れているだけなら捨てずに描かず、見せたら張り直す。一部だけ隠れたら従来どおり捨てる', () => {
+    const { registry, diagnostics } = setup();
+    registry.replace(specsOf([
+      { rowId: 'a', columnId: 'no', columnSpan: 2 },
+      { rowId: 'b', columnId: 'no', rowSpan: 2 },
+    ]));
+    registry.resolve(axisOf(['a', 'b', 'c']), 0);
+    expect(registry.index().all()).toHaveLength(2);
+    const hidden = new Set(['a', 'c']);
+    registry.resolve(axisOf(['b']), 0, (id) => hidden.has(String(id))); // a は隠れているだけ・b:c は c だけ隠れた
+    expect(registry.index().all()).toEqual([]);
+    expect(diagnostics.map((d) => d.code)).toEqual(['merged-cell-broken']); // b:c だけ捨てた
+    registry.resolve(axisOf(['a', 'b', 'c']), 0, () => false);
+    expect(registry.index().all()).toEqual([{ rowStart: 0, rowEnd: 1, colStart: 0, colEnd: 2 }]); // a は張り直す
+  });
+});
