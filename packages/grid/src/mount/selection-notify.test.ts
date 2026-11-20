@@ -1,6 +1,7 @@
 // DD-070-2: selection-change の発火条件と selection() の中身（読むだけの部品の単体）。
 import { describe, expect, it } from 'vitest';
 
+import { EMPTY_MERGE_INDEX } from '@nanairo-sheet/selection';
 import type { CellPos, CellRange } from '@nanairo-sheet/selection';
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
 
@@ -17,6 +18,10 @@ interface Harness {
   destroyed: boolean;
   hasBackend: boolean;
   events: GridEvent[];
+  /** 選択の版（selection-controller）と行 Axis の再構築の回数・保留中の構造変更の flush の回数。 */
+  revision: number;
+  rebuilds: number;
+  flushes: number;
 }
 
 function setup(overrides: Partial<Harness> = {}): { h: Harness; notify: ReturnType<typeof createSelectionNotify> } {
@@ -30,20 +35,31 @@ function setup(overrides: Partial<Harness> = {}): { h: Harness; notify: ReturnTy
     destroyed: false,
     hasBackend: true,
     events: [],
+    revision: 0,
+    rebuilds: 0,
+    flushes: 0,
     ...overrides,
   };
   const view = {
+    get structuralRebuildCount() {
+      return h.rebuilds;
+    },
     rowIdAt: (i: number) => h.rows[i] as RowId | undefined,
     columnIdAt: (i: number) => h.columns[i] as ColumnId | undefined,
   };
   const deps: SelectionNotifyDeps = {
     selectionCtrl: {
+      revision: () => h.revision,
       getDragRange: () => h.drag,
       selectedRange: (active) =>
         h.range ?? { rowStart: active.row, rowEnd: active.row + 1, colStart: active.col, colEnd: active.col + 1 },
     },
     backend: () => (h.hasBackend ? ({ view } as never) : undefined),
     editor: () => ({ session: { getActiveCell: () => h.active } }) as never,
+    merges: () => EMPTY_MERGE_INDEX,
+    flushPendingStructure: () => {
+      h.flushes += 1;
+    },
     isFirstDataDrawn: () => h.firstDrawn,
     isDestroyed: () => h.destroyed,
     emit: (event) => h.events.push(event),
@@ -111,11 +127,13 @@ describe('DD-070-2 selection-notify', () => {
     notify.check();
     // 上に行が入って r1 が 2 番目へ（選択の再ベースで active も 2 へ）→ ID は同じ。
     h.rows = ['rNew', 'r0', 'r1', 'r2', 'r3'];
+    h.rebuilds += 1;
     h.active = { row: 2, col: 0 };
     notify.check();
     expect(changes(h.events)).toHaveLength(1);
     // 番号はそのままで指す行が変わった（r1 が消えた）→ 出す。
     h.rows = ['rNew', 'r0', 'r2', 'r3'];
+    h.rebuilds += 1;
     notify.check();
     expect(changes(h.events)).toHaveLength(2);
     expect(h.events[1]).toMatchObject({ activeCell: { rowId: 'r2' } });
@@ -125,6 +143,7 @@ describe('DD-070-2 selection-notify', () => {
     const { h, notify } = setup();
     notify.check();
     h.rows = [];
+    h.rebuilds += 1;
     notify.check();
     expect(h.events[1]).toEqual({ type: 'selection-change', activeCell: null, range: null });
     expect(notify.current()).toEqual({ activeCell: null, range: null });
@@ -137,6 +156,53 @@ describe('DD-070-2 selection-notify', () => {
       activeCell: { rowId: 'r3', columnId: 'c' },
       range: { startRowId: 'r3', startColumnId: 'c', endRowId: 'r3', endColumnId: 'c' },
     });
+  });
+
+  it('Codex P2: 組み立ての元（番号・選択の版・行 Axis の再構築・結合）が同じフレームでは範囲を組み立て直さない。版が変われば組み立て直す', () => {
+    const { h, notify } = setup();
+    let built = 0;
+    const counting = createSelectionNotify({
+      selectionCtrl: {
+        revision: () => h.revision,
+        getDragRange: () => h.drag,
+        selectedRange: (active) => {
+          built += 1;
+          return h.range ?? { rowStart: active.row, rowEnd: active.row + 1, colStart: active.col, colEnd: active.col + 1 };
+        },
+      },
+      backend: () => ({ view: { structuralRebuildCount: h.rebuilds, rowIdAt: (i: number) => h.rows[i], columnIdAt: (i: number) => h.columns[i] } }) as never,
+      editor: () => ({ session: { getActiveCell: () => h.active } }) as never,
+      merges: () => EMPTY_MERGE_INDEX,
+      flushPendingStructure: () => {},
+      isFirstDataDrawn: () => true,
+      isDestroyed: () => false,
+      emit: (event) => h.events.push(event),
+    });
+    counting.check();
+    counting.check();
+    counting.check();
+    expect(built).toBe(1);
+    h.range = { rowStart: 0, rowEnd: 2, colStart: 0, colEnd: 2 };
+    h.revision += 1;
+    counting.check();
+    expect(built).toBe(2);
+    expect(changes(h.events)).toHaveLength(2);
+    expect(h.events.at(-1)).toMatchObject({ range: { endRowId: 'r1', endColumnId: 'b' } });
+    void notify;
+  });
+
+  it('Codex P3: 区切りの文字を含む ID でも、別のセルへ移れば出す（ID を個別に比べる）', () => {
+    const { h, notify } = setup({ rows: ['a\u0000b', 'a'], columns: ['c', 'b\u0000c'] });
+    notify.check();
+    h.active = { row: 1, col: 1 };
+    notify.check();
+    expect(changes(h.events)).toHaveLength(2);
+  });
+
+  it('Codex P2: selection() は保留中の構造変更を反映してから読む（setData の直後に同じ処理の中で読んでも新しい行）', () => {
+    const { h, notify } = setup();
+    notify.current();
+    expect(h.flushes).toBe(1);
   });
 
   it('boot 前（backend 無し）・destroy 後は両方 null で、出さない', () => {

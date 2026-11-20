@@ -73,6 +73,11 @@ export interface SelectionController {
    * Navigation）が破れていたら解除する（AC4: 通常移動・編集開始で単一選択へ戻る）。戻り値=解除したか。
    */
   syncWithEditor(active: CellPos, phase: EditPhase): boolean;
+  /**
+   * DD-070-2: 状態（明示レンジ・ドラッグ）を変えうる操作のたびに増える版（変えていなくても増えてよい）。選択の変更の通知が、
+   * 何も変わっていないフレームで範囲（結合を含めた広げ直し）を組み立て直さないために使う。
+   */
+  revision(): number;
 }
 
 function sameCell(a: CellPos, b: CellPos): boolean {
@@ -89,9 +94,12 @@ export function createSelectionController(options: SelectionControllerOptions = 
   // ドラッグ中のライブ状態（確定レンジとは独立。pointerup で昇格）。
   let dragAnchor: CellPos | null = null;
   let dragFocus: CellPos | null = null;
+  // DD-070-2: 状態を変えうる操作の版（setRange・clearAll・ドラッグの開始〜終わり・再ベースで増やす）。
+  let rev = 0;
 
   /** anchor/focus を設定する。同一セルは「単一選択」へ正規化（明示レンジは常に 2 セル以上）。 */
   function setRange(a: CellPos, f: CellPos): void {
+    rev += 1;
     if (sameCell(a, f)) {
       anchor = null;
       focus = null;
@@ -113,6 +121,7 @@ export function createSelectionController(options: SelectionControllerOptions = 
 
   /** 明示レンジ・ドラッグの全状態を破棄する。戻り値=状態が変わったか。 */
   function clearAll(): boolean {
+    rev += 1;
     const changed = anchor !== null || dragAnchor !== null;
     anchor = null;
     focus = null;
@@ -122,6 +131,7 @@ export function createSelectionController(options: SelectionControllerOptions = 
   }
 
   return {
+    revision: () => rev,
     getRange: currentRange,
     getDragRange: () =>
       dragAnchor !== null && dragFocus !== null ? expand(rangeFromAnchorFocus(dragAnchor, dragFocus)) : null,
@@ -131,6 +141,7 @@ export function createSelectionController(options: SelectionControllerOptions = 
       return currentRange() ?? expand(singleCell(active));
     },
     beginDrag(a) {
+      rev += 1;
       dragAnchor = { row: a.row, col: a.col };
       dragFocus = { row: a.row, col: a.col };
     },
@@ -138,9 +149,11 @@ export function createSelectionController(options: SelectionControllerOptions = 
       if (dragAnchor === null) {
         return;
       }
+      rev += 1;
       dragFocus = { row: f.row, col: f.col };
     },
     endDrag() {
+      rev += 1;
       if (dragAnchor === null || dragFocus === null) {
         return null;
       }
@@ -152,6 +165,7 @@ export function createSelectionController(options: SelectionControllerOptions = 
       return currentRange();
     },
     cancelDrag() {
+      rev += 1;
       dragAnchor = null;
       dragFocus = null;
     },
@@ -169,6 +183,7 @@ export function createSelectionController(options: SelectionControllerOptions = 
     },
     clear: clearAll,
     rebaseRows(resolveRow) {
+      rev += 1;
       let changed = false;
       // ドラッグ中のライブ状態も再ベースする（Fable レビュー P2: ドラッグ中にリモート構造 Op が flush されると
       // dragAnchor/dragFocus の index が旧 Axis のまま残り、pointerup でずれた行範囲が確定する。リサイズドラッグの

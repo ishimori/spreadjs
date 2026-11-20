@@ -334,8 +334,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
     selectionCtrl,
     backend: () => lifecycle.backend(),
     editor: () => editorWiring.get(),
+    merges: () => merges.current(),
     isFirstDataDrawn: () => render.isFirstDataDrawn(),
     isDestroyed: () => destroyed,
+    // 命令 API（commands.runOrDefer）と同じく、構造 dirty なら次の rAF を待たずに同期で flush する（再ベースも済ませる）。
+    flushPendingStructure: () => {
+      const sync = lifecycle.backend();
+      if (sync !== undefined && render.isFirstDataDrawn() && sync.view.hasStructuralDirty()) {
+        render.flushStructural(sync.view);
+      }
+    },
     emit,
   });
   const { currentTransform, syncSpacer, syncLayout } = render;

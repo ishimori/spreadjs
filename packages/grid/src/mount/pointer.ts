@@ -595,8 +595,13 @@ export function registerPointerInteraction(deps: PointerDeps): void {
           : { row: hit.rowIndex, col: hit.colIndex };
         const dblRowId = sync.view.rowIdAt(anchor.row);
         const dblColumnId = sync.view.columnIdAt(anchor.col);
+        // Codex P1: 表が表示域を埋めていないと、表の下・右の余白も最終行・最終列のセルとして当たる（Axis.indexAt の丸め）。
+        // 既定の動きは従来どおりのまま、通知は押した点が本当にそのセルの中にあるときだけ出す（押していない行の詳細を開かせない）。
+        const cell = transform.cellRect(hit.rowIndex, hit.colIndex);
+        const insideCell =
+          localX >= cell.x && localX < cell.x + cell.width && localY >= cell.y && localY < cell.y + cell.height;
         handleCellDoubleClick(sync, editor, hit);
-        if (dblRowId !== undefined && dblColumnId !== undefined) {
+        if (insideCell && dblRowId !== undefined && dblColumnId !== undefined) {
           deps.emit({ type: 'cell-dblclick', rowId: String(dblRowId), columnId: String(dblColumnId) });
         }
       }

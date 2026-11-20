@@ -390,7 +390,16 @@ export function createRender(deps: RenderDeps): MountRender {
       }
       // DD-035 R6: 構造 flush（scroll anchor 補正・再ベース）の**後**に保留命令を適用する（新 Axis で RowId を解決）。
       deps.drainPendingCommands();
-      deps.afterFrame();
+      try {
+        deps.afterFrame();
+      } finally {
+        // DD-070-2（Codex P2）: afterFrame は consumer の購読者（selection-change）を同期で呼ぶ。購読者が例外を投げても
+        // 次のフレームを予約する（例外は握りつぶさず上へ投げる＝ブラウザーの未処理例外として見える）。
+        if (!deps.isDestroyed()) {
+          rafId = requestAnimationFrame(masterLoop);
+        }
+      }
+      return;
     }
     if (!deps.isDestroyed()) {
       rafId = requestAnimationFrame(masterLoop);

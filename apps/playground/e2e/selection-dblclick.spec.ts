@@ -74,6 +74,16 @@ test('AC4: 本体のセルのダブルクリックで cell-dblclick が 1 回届
   try {
     const r1 = await sa.rowIdAt(page, 1);
     const c1 = await sa.colIdAt(page, 1);
+    // Codex P3: 通知を受けた時点で既定の編集の開始が済んでいる（編集中だけ textarea が pointer を受ける）ことを記録する。
+    await page.evaluate(() => {
+      const w = window as Window & { __gridInstance?: { subscribe(l: (e: { type: string }) => void): () => void }; __dblStates?: string[] };
+      w.__dblStates = [];
+      w.__gridInstance!.subscribe((e) => {
+        if (e.type === 'cell-dblclick') {
+          w.__dblStates!.push((document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement).style.pointerEvents);
+        }
+      });
+    });
     await dblclickCell(page, 1, 1);
     await expect
       .poll(async () => (await sa.events(page)).filter((e) => e.type === 'cell-dblclick'))
@@ -82,6 +92,7 @@ test('AC4: 本体のセルのダブルクリックで cell-dblclick が 1 回届
     await expect
       .poll(async () => page.evaluate(() => (document.querySelector('textarea.int-cell-editor') as HTMLTextAreaElement).style.display))
       .toBe('block');
+    expect(await page.evaluate(() => (window as Window & { __dblStates?: string[] }).__dblStates)).toEqual(['auto']);
   } finally {
     await context.close();
   }
@@ -109,6 +120,43 @@ test('AC4: 読むだけの表でも cell-dblclick が届き（edit-blocked の�
       .dblclick({ position: { x: header!.x + header!.width / 2, y: header!.y + header!.height / 2 } });
     await page.waitForTimeout(150);
     expect((await sa.events(page)).filter((e) => e.type === 'cell-dblclick')).toHaveLength(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P1: 表の下の余白のダブルクリックでは、最終行の cell-dblclick を出さない', async ({ browser }) => {
+  const { context, page } = await sa.openStandalone(browser);
+  try {
+    const rows = await sa.rowCount(page);
+    const last = await sa.cellRectAt(page, rows - 1, 1);
+    const box = await page.locator('.nsheet-scroller').boundingBox();
+    expect(last).not.toBeNull();
+    expect(box).not.toBeNull();
+    const y = last!.y + last!.height + 30;
+    expect(y).toBeLessThan(box!.height - 30); // 表の下に余白がある前提（既定の 20 行）
+    await page.locator('.nsheet-scroller').dblclick({ position: { x: last!.x + last!.width / 2, y } });
+    await page.waitForTimeout(150);
+    expect((await sa.events(page)).filter((e) => e.type === 'cell-dblclick')).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P2: setData の直後に同じ処理の中で読む selection() は、新しい行で返す', async ({ browser }) => {
+  const { context, page } = await sa.openStandalone(browser);
+  try {
+    await sa.selectCell(page, 3, 1);
+    const result = await page.evaluate(() => {
+      const g = (window as Window & { __gridInstance?: { setData(d: unknown): void; selection(): { activeCell: unknown } } }).__gridInstance!;
+      g.setData({ rows: [] });
+      const empty = g.selection();
+      g.setData({ rows: [{ rowId: 'n0', cells: {} }, { rowId: 'n1', cells: {} }] });
+      const replaced = g.selection();
+      return { empty, replaced };
+    });
+    expect(result.empty).toEqual({ activeCell: null, range: null });
+    expect((result.replaced.activeCell as { rowId: string } | null)?.rowId).toMatch(/^n[01]$/);
   } finally {
     await context.close();
   }
