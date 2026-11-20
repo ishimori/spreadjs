@@ -30,6 +30,7 @@ import type {
   GridMountOptions,
   GridMountTarget,
   GridPresenceUser,
+  GridSelection,
   GridStandaloneData,
   GridStandaloneRow,
 } from './index';
@@ -49,6 +50,7 @@ import { registerPointerInteraction } from './mount/pointer';
 import { createMountBaseLayer } from './mount/base-layer-options';
 import { createCommands } from './mount/commands';
 import { createRender } from './mount/render';
+import { createSelectionNotify } from './mount/selection-notify';
 import { createEditorWiring } from './mount/editor-wiring';
 import { createKeyboard } from './mount/keyboard';
 import { createMountConfig } from './mount/config';
@@ -325,6 +327,16 @@ export function createGridController(target: GridMountTarget, options: GridMount
     captureRebaseState: () => editSubmit.captureRebaseState(),
     applyRebaseState: (state) => editSubmit.applyRebaseState(state),
     drainPendingCommands: () => commands.drain(),
+    afterFrame: () => selectionNotify.check(),
+  });
+  // DD-070-2: 選択の変更の通知（selection-change）と今の選択（selection()）は mount/selection-notify.ts。
+  const selectionNotify = createSelectionNotify({
+    selectionCtrl,
+    backend: () => lifecycle.backend(),
+    editor: () => editorWiring.get(),
+    isFirstDataDrawn: () => render.isFirstDataDrawn(),
+    isDestroyed: () => destroyed,
+    emit,
   });
   const { currentTransform, syncSpacer, syncLayout } = render;
   // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。
@@ -559,6 +571,9 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     presences(): readonly GridPresenceUser[] {
       return events.currentPresenceUsers(); // DD-049 H5（単独モード・初回 join 前・destroy 後は空）
+    },
+    selection(): GridSelection {
+      return selectionNotify.current(); // DD-070-2
     },
     setReadOnly(next: boolean) {
       // DD-056 H12。JS 経路の非 boolean は mount オプションと同じく `=== true` の厳密判定で編集可能側へ倒し、診断 warn を出す。

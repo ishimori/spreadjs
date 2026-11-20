@@ -47,6 +47,7 @@ import {
   type GridMountOptions,
   type GridPresenceUser,
   type GridRemoteChange,
+  type GridSelection,
   type GridStandaloneData,
   type GridStandaloneRow,
 } from '@nanairo-sheet/grid';
@@ -209,6 +210,8 @@ export interface NanairoSheetViewHandle {
   setActiveCell(rowId: string, columnId: string): void;
   /** 現在の参加者一覧（grid GridInstance.presences 直結・DD-049 H5）。未 mount 時は []（connectionState と同じく warn しない）。 */
   presences(): readonly GridPresenceUser[];
+  /** 今の選択（grid GridInstance.selection 直結・DD-070-2）。未 mount 時は両方 null（warn しない）。 */
+  selection(): GridSelection;
   /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
   pendingCount(): number;
   /**
@@ -583,6 +586,10 @@ function NanairoSheetViewImpl(
       // DD-049 H5: 参加者一覧は読み取り（connectionState と同じく未 mount でも warn せず空一覧）。
       presences(): readonly GridPresenceUser[] {
         return instanceRef.current?.presences() ?? [];
+      },
+      // DD-070-2: 読み取り系（未 mount でも warn しない）。
+      selection(): GridSelection {
+        return instanceRef.current?.selection() ?? { activeCell: null, range: null };
       },
       // DD-056 H12: 読み取り系（未 mount でも warn しない）。未 mount は送るものがない＝0／flushed。
       pendingCount(): number {

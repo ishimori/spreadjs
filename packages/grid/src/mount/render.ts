@@ -54,6 +54,8 @@ export interface RenderDeps {
   applyRebaseState(state: RebaseState | null): void;
   /** 構造 flush の後に保留中の命令を新 Axis で適用する。 */
   drainPendingCommands(): void;
+  /** DD-070-2: 描画のループの 1 回の終わり（保留命令の適用の後）。選択の変更の通知に使う。 */
+  afterFrame(): void;
 }
 
 export interface MountRender {
@@ -388,6 +390,7 @@ export function createRender(deps: RenderDeps): MountRender {
       }
       // DD-035 R6: 構造 flush（scroll anchor 補正・再ベース）の**後**に保留命令を適用する（新 Axis で RowId を解決）。
       deps.drainPendingCommands();
+      deps.afterFrame();
     }
     if (!deps.isDestroyed()) {
       rafId = requestAnimationFrame(masterLoop);

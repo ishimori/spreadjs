@@ -25,6 +25,9 @@ export interface StandaloneEvent {
   rowId?: string | null;
   /** DD-027-2 link-open・DD-052-5 header-click／cell-hover で使う。 */
   columnId?: string | null;
+  /** DD-070-2 selection-change で使う。 */
+  activeCell?: { rowId: string; columnId: string } | null;
+  range?: { startRowId: string; startColumnId: string; endRowId: string; endColumnId: string } | null;
   value?: string;
   /** DD-052-5 cell-hover のセル矩形（null=ホバー終了）。 */
   rect?: { x: number; y: number; width: number; height: number } | null;

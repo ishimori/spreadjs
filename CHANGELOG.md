@@ -38,6 +38,32 @@
 | `0.1.0-alpha.1` | `alpha` | `0.1.0-experimental` | DD-018以降〜DD-044。Reactを含む10 package配布セット・pack同梱物健全化 |
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
+## [Unreleased]
+
+DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足したもの。配布は親 DD-070 でまとめて行う。
+
+### Added
+
+- **grid 選択の変更の通知（イベント `selection-change`・`GridInstance.selection()`・DD-070-2）**:
+  `{ type: 'selection-change', activeCell, range }`（両モード共通）。`activeCell` は選択中のセル（`GridCellRef`）、`range` は枠を
+  描いている範囲（`GridCellRange`＝左上・右下の行 ID・列 ID。1 セルだけのときも 1 × 1、結合の左上なら結合全体、ドラッグ中はドラッグの
+  範囲）。前に知らせた内容と変わったときだけ、描画のループで 1 フレームに 1 回まで出す（初回のデータの描画の後に最初の選択を 1 回）。
+  行の並びが変わって番号だけが変わったときは出さない。今の値は `selection()`（イベントより先に直前の操作の結果を返す。行が無い・
+  boot 前・destroy 後は両方 `null`）。公開型 `GridCellRange`・`GridSelection`。React の ref handle にも `selection()`。
+- **grid セルのダブルクリックの通知（イベント `cell-dblclick`・DD-070-2）**: `{ type: 'cell-dblclick', rowId, columnId }`。本体の
+  セルのダブルクリックで、SDK の既定の動き（編集の開始・候補欄・カレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは
+  止めない）。結合範囲は左上のセル。見出し・列の境界（幅の自動調整）・行番号では出さない。
+
+### Changed
+
+- **`GridEvent` に `selection-change`・`cell-dblclick` を追加**（union の拡張。`GridEvent` で網羅的に分岐している consumer は分岐を足す）。
+
+### Notes
+
+- DD-070-1（計測）: 180 列 × 5,000〜50,000 行で、スクロールは目標の中。**1 セルの入力確定は表のセルの数に比例して遅い**
+  （空でないセル 90 万で 178ms・900 万で 1.6 秒。core の `applyOperation` が操作のたびに文書を丸ごと複製するため）。直す子DDを提案中。
+  メモリは空でないセル約 420 万で 300MB（詳細は `doc/archived/DD/DD-070-1_180列の表の計測.md`）。
+
 ## [0.1.0-alpha.23] - 2026-11-08
 
 ### Added

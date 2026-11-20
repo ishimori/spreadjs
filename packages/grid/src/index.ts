@@ -203,7 +203,38 @@ export type GridEvent =
       readonly type: 'cells-skipped';
       readonly operation: 'paste' | 'cut' | 'clear';
       readonly cells: readonly GridCellRef[];
-    };
+    }
+  /**
+   * 選択が変わった通知（Experimental 0.x・DD-070-2・両モード共通）。`activeCell` は選択中のセル、`range` は枠を描いている範囲
+   * （1 セルだけのときも 1 × 1。結合の左上ならその結合全体。ドラッグ中はドラッグの範囲）。前に知らせた内容と変わったときだけ、
+   * 描画のループで 1 フレームに 1 回まで出す（初回のデータの描画の後に最初の選択を 1 回）。行の並びが変わって番号だけが
+   * 変わったときは出さない（ID で比べる）。描画のループの中で出すので、受け取ってすぐ命令 API を呼んでよい。今の値は `GridInstance.selection()`。
+   */
+  | {
+      readonly type: 'selection-change';
+      readonly activeCell: GridCellRef | null;
+      readonly range: GridCellRange | null;
+    }
+  /**
+   * 本体のセルのダブルクリックの通知（Experimental 0.x・DD-070-2・両モード共通）。SDK の既定の動き（編集の開始・選択式の候補欄・
+   * 日付のカレンダー・読むだけのセルの `edit-blocked`）の後に出す（既定の動きは止めない）。結合範囲は左上のセル。
+   * 見出し・列の境界（幅の自動調整）・行番号では出さない。
+   */
+  | { readonly type: 'cell-dblclick'; readonly rowId: string; readonly columnId: string };
+
+/** セルの範囲（DD-070-2）。表示の並びで左上（start）と右下（end）のセル。 */
+export interface GridCellRange {
+  readonly startRowId: string;
+  readonly startColumnId: string;
+  readonly endRowId: string;
+  readonly endColumnId: string;
+}
+
+/** 今の選択（DD-070-2）。`selection-change` イベントと同じ形。行が無い・boot 前・destroy 後は両方 null。 */
+export interface GridSelection {
+  readonly activeCell: GridCellRef | null;
+  readonly range: GridCellRange | null;
+}
 
 /**
  * セルの状態表示（Experimental 0.x・DD-060）。consumer が確定後に検証した結果をセルに付ける。
@@ -773,6 +804,11 @@ export interface GridInstance {
    * セルを選ばずに参加しただけの利用者も `activeCell: null` で載る（DD-053 H10・「参加」＝join 完了時点）。
    */
   presences(): readonly GridPresenceUser[];
+  /**
+   * 今の選択（Experimental 0.x・DD-070-2・両モード）。`selection-change` イベントと同じ形で、呼んだ時点の選択を返す
+   * （イベントは描画のループで出るため、直前の操作の結果はイベントより先にここへ現れる）。行が無い・boot 前・destroy 後は両方 null。
+   */
+  selection(): GridSelection;
   /**
    * 表示専用モード（`readOnly`）を実行中に切り替える（Experimental 0.x・DD-056 H12・両モード）。**開き直さない**: 共同編集セッション・
    * 未送信の操作・スクロール位置・選択・列幅を保ち、未送信の操作は通常どおりサーバーへ届く（拒否されれば `rejected`）。

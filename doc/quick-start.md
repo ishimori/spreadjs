@@ -616,6 +616,29 @@ grid.subscribe((event) => {
 - 届かない: 入力できるセルの編集・移動キー・コピー・修飾キーつきのショートカット・`setRows`／`setData`・リモートの変更・変換中や編集中の操作。
   選択式列の候補欄を開く操作（Alt+↓・検索つきの列の 1 回のクリック）を止めたときも届かない（印字キー・F2・ダブルクリックは届く）
 
+### 選択の変更とダブルクリックの通知（`selection-change`・`cell-dblclick`・`selection()`・DD-070-2）
+
+一覧の行から詳細を開く・選んだ行の詳細を横に出す、に使う（両モード共通）。
+
+```ts
+grid.subscribe((event) => {
+  if (event.type === 'selection-change') {
+    // activeCell: 選択中のセル（行が無ければ null）。range: 枠を描いている範囲（左上・右下の ID。1 セルなら 1 × 1）
+    if (event.activeCell !== null) showDetailPane(event.activeCell.rowId);
+  }
+  if (event.type === 'cell-dblclick') {
+    openDetail(event.rowId); // 既定の動き（入力できるセルなら編集の開始）の後に届く
+  }
+});
+const { activeCell, range } = grid.selection(); // 今の選択（ボタンから「選んだ行を開く」など）
+```
+
+- `selection-change` は前に知らせた内容と変わったときだけ、描画のループで 1 フレームに 1 回まで届く（ドラッグ中・キーの連打もまとまる）。
+  初回のデータの描画の後に最初の選択が 1 回届く。行の挿入・削除で番号だけが変わったときは届かない（ID で比べる）。
+  届いた時点で命令 API（`setActiveCell` など）を呼んでよい。直前の操作の結果をすぐ読むときは `selection()` を使う
+- `cell-dblclick` は本体のセルだけ（見出し・列の境界・行番号では届かない）。結合範囲は左上のセルとして届く。ダブルクリックで
+  編集を始めたくない列は `readOnlyColumns` にする（読むだけのセルでは `edit-blocked` の後に `cell-dblclick` が届く）
+
 ## 4c. React 組み込み（`<NanairoSheetView>`・DD-025）
 
 React アプリには `@nanairo-sheet/react` の **`<NanairoSheetView>`** コンポーネントで組み込む。Facade は lifecycle と
