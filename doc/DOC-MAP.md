@@ -92,6 +92,7 @@
 | `doc/archived/DD/DD-068/` | 見出し下端の太線のPCブラウザー画像と画素検証 |
 | `doc/archived/DD/DD-069/` | セルごとの背景色（cellBackgrounds）と読むだけのセルへの入力の通知（edit-blocked・cells-skipped）の Codex レビュー（依頼・結果）。alpha.23 の引き渡しは release/0.1.0-alpha.23/README.md |
 | `doc/archived/DD/DD-070-1/` | 180 列 × 5,000〜50,000 行の計測（DD-070-1）の Codex レビュー（依頼・結果）。計測の値は DD 本文の「計測結果」 |
+| `doc/archived/DD/DD-070-9/` | 見せる行と並びの共同編集モード（初回の状態の前の指定・welcome.bootstrapFollows・DD-070-9）の Codex レビュー（依頼・結果） |
 | `doc/archived/DD/DD-070-8/` | 見せる行と並び（setRowView・visibleRowIds・DD-070-8）の Codex レビュー（依頼・結果） |
 | `doc/archived/DD/DD-070-7/` | 見せる列の切り替え（hiddenColumns・setHiddenColumns・DD-070-7）の Codex レビュー（依頼・結果） |
 | `doc/archived/DD/DD-070-6/` | 見出しの印と位置（columnHeaderMarks・columnGroupMarks・header-click の rect と target・column-group-click・DD-070-6）の Codex レビュー（依頼・結果） |
