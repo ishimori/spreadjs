@@ -92,6 +92,7 @@
 | `doc/archived/DD/DD-068/` | 見出し下端の太線のPCブラウザー画像と画素検証 |
 | `doc/archived/DD/DD-069/` | セルごとの背景色（cellBackgrounds）と読むだけのセルへの入力の通知（edit-blocked・cells-skipped）の Codex レビュー（依頼・結果）。alpha.23 の引き渡しは release/0.1.0-alpha.23/README.md |
 | `doc/archived/DD/DD-070-1/` | 180 列 × 5,000〜50,000 行の計測（DD-070-1）の Codex レビュー（依頼・結果）。計測の値は DD 本文の「計測結果」 |
+| `doc/archived/DD/DD-070-3/` | 下方向・右方向へのコピー（Ctrl+D・Ctrl+R・DD-070-3）の Codex レビュー（依頼・結果） |
 | `doc/archived/DD/DD-070-2/` | 選択の変更とダブルクリックの通知（selection-change・selection()・cell-dblclick・DD-070-2）の Codex レビュー（依頼・結果） |
 | `doc/DD/DD-INDEX.md` | DD一覧インデックス（`scripts/dd-index-gen.sh` で自動生成） |
 | `doc/archived/DD/DD-066/` | 結合セルの選択枠の再現・原因分析、Before/After・矩形の数値・Phase 0レビュー・alpha.20検証と引き渡し |
