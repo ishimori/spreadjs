@@ -131,6 +131,7 @@ function setup(overrides: Partial<Env> = {}) {
     performDeleteRows: (rowIds) => calls.push(`deleteRows(${rowIds.join(',')})`),
     performRangeClear: () => calls.push('rangeClear'),
     performFill: (direction) => calls.push(`fill(${direction})`),
+    isHiddenColumnIndex: () => false,
     ensureCellVisible: () => calls.push('ensureCellVisible'),
   });
   return { keyboard, env, calls, blocked, deferred, flushes, codes: () => diagnostics.map((d) => d.code) };

@@ -42,7 +42,8 @@ export interface CellRect {
 
 /** ヒットテスト結果（§12.6）。 */
 export interface GridHit {
-  readonly area: 'cell' | 'row-header' | 'column-header' | 'corner';
+  /** DD-070-7: `none` は見えている列が無い所（全部の列を隠した・固定列の右に見えている列が無い）。 */
+  readonly area: 'cell' | 'row-header' | 'column-header' | 'corner' | 'none';
   readonly rowIndex: number;
   readonly colIndex: number;
   readonly rowId?: RowId;
@@ -243,6 +244,13 @@ export function createViewportTransform(config: ViewportConfig): ViewportTransfo
       }
 
       // 領域判定。
+      if (y < headerHeight && x < headerWidth) {
+        return { area: 'corner', rowIndex: -1, colIndex: -1, localX: x, localY: y };
+      }
+      // DD-070-7（Codex P1）: 当たった列が隠した列（幅 0）なら、見えている列が無い所（セルにも見出しにも境界にもしない）。
+      if (colIndex >= 0 && colIndex < colAxis.count() && colAxis.size(colIndex) === 0) {
+        return { area: 'none', rowIndex: -1, colIndex: -1, localX: x, localY: y };
+      }
       if (y < headerHeight && x < headerWidth) {
         return { area: 'corner', rowIndex: -1, colIndex: -1, localX: x, localY: y };
       }

@@ -297,8 +297,11 @@ export function createGridController(target: GridMountTarget, options: GridMount
   // DD-070-7: 見せる列の切り替え（隠した列は列の Axis に幅 0 で残す・view-local）は mount/hidden-columns.ts。
   const hiddenColumns = createHiddenColumns({
     diag,
+    selectionCtrl,
     backend: () => lifecycle.backend(),
     editor: () => editorWiring.get(),
+    mergeAt: (row, col) => merges.current().at(row, col),
+    onColumnsChanged: () => render.syncSpacer(),
   });
 
   // ---- 描画（区画⑨・mount/render.ts・base-layer-options.ts）----
@@ -411,6 +414,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     performDeleteRows,
     performRangeClear: () => editCommands.performRangeClear(),
     performFill: (direction) => editCommands.performFill(direction),
+    isHiddenColumnIndex: (colIndex) => hiddenColumns.isHiddenIndex(colIndex),
     ensureCellVisible: (cell) => render.ensureCellVisible(cell),
   });
   // editor（常駐 textarea＋IME）の結線（区画①・mount/editor-wiring.ts）。editor の状態の持ち主。
@@ -551,11 +555,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
     // 結線の順番（DOM を作る順も従来どおり）: 描画層 → 編集の命令のポート → 候補欄 → 日付カレンダー → editor。
     render.attach(backend);
     headerMarks.recheck(); // DD-070-6: 列の並び・まとまりが分かったので、それまでに受けた印の未知の列・まとまりを検査する
-    hiddenColumns.attach(backend); // DD-070-7: 結線の前に受けた隠す列を反映する
     editCommands.attach(backend);
     select.attach(backend);
     date.attach(backend);
     editorWiring.attach(backend);
+    // DD-070-7（Codex P1）: 結線の前に受けた隠す列を、editor の結線の後に反映する（先頭の列を隠したとき初期の選択を寄せる）。
+    hiddenColumns.attach(backend);
     syncCellLock(); // DD-035 R4 / DD-036 C3: 初期 activeCell（0,0）のロックを同期
     syncLayout();
     backend.start();

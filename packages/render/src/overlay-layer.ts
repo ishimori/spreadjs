@@ -78,10 +78,12 @@ function rangePiecesAcrossPanes(transform: ViewportTransform, range: CellRange):
     // pane 内なので frozen/scroll が混ざらず cellRect は単調（幅が負にならない）。
     const tl = transform.cellRect(rowStart, colStart);
     const br = transform.cellRect(rowEnd - 1, colEnd - 1);
-    pieces.push({
-      rect: { x: tl.x, y: tl.y, width: br.x + br.width - tl.x, height: br.y + br.height - tl.y },
-      clip: pane.clip,
-    });
+    const rect = { x: tl.x, y: tl.y, width: br.x + br.width - tl.x, height: br.y + br.height - tl.y };
+    // DD-070-7（Codex P2）: 隠した列だけにかかる片（幅 0）は描かない（選択枠・他の参加者の枠と名前タグを隣の列に見せない）。
+    if (rect.width <= 0 || rect.height <= 0) {
+      continue;
+    }
+    pieces.push({ rect, clip: pane.clip });
   }
   return pieces;
 }

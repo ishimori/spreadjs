@@ -83,6 +83,8 @@ export interface KeyboardDeps {
   performRangeClear(): void;
   /** DD-070-3: Ctrl+D（down）・Ctrl+R（right）。 */
   performFill(direction: FillDirection): void;
+  /** DD-070-7: 表示 index の列が隠れているか（Shift＋矢印の範囲の端を見えている列まで動かす）。 */
+  isHiddenColumnIndex(colIndex: number): boolean;
   ensureCellVisible(cell: CellPosition): void;
 }
 
@@ -470,10 +472,18 @@ export function createKeyboard(deps: KeyboardDeps): Keyboard {
           deps.performRangeClear();
           return 'consume';
         case 'extend': {
-          const focus = selectionCtrl.extendByArrow(editor.session.getActiveCell(), decision.direction, {
-            rowCount: backend.view.rowAxis.count(),
-            colCount: backend.view.colAxis.count(),
-          });
+          const bounds = { rowCount: backend.view.rowAxis.count(), colCount: backend.view.colAxis.count() };
+          let focus = selectionCtrl.extendByArrow(editor.session.getActiveCell(), decision.direction, bounds);
+          // DD-070-7（Codex P2）: 横へ広げた端が隠した列（幅 0）なら、見えている列まで続けて動かす（範囲の中には隠した列を含む）。
+          if (decision.direction === 'left' || decision.direction === 'right') {
+            for (let guard = 0; deps.isHiddenColumnIndex(focus.col) && guard < bounds.colCount; guard += 1) {
+              const next = selectionCtrl.extendByArrow(editor.session.getActiveCell(), decision.direction, bounds);
+              if (next.col === focus.col) {
+                break; // 端に着いた
+              }
+              focus = next;
+            }
+          }
           deps.ensureCellVisible(focus); // focus 端を可視域へ（Excel 準拠の scroll-follow）
           backend.view.markViewportDirty();
           return 'consume'; // 消費（状態機械の Move にしない）

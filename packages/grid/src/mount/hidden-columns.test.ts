@@ -7,7 +7,10 @@ import { createDiagnosticSink } from '../diagnostics';
 import type { GridDiagnostic } from '../diagnostics';
 import { createHiddenColumns } from './hidden-columns';
 
-function setup(options: { attached?: boolean; phase?: string; composing?: boolean } = {}) {
+function setup(
+  options: { attached?: boolean; phase?: string; composing?: boolean; merge?: { colStart: number; colEnd: number } } = {},
+) {
+  let commits = 0;
   const columns = ['a', 'b', 'c', 'd', 'e'];
   const hidden = new Set<string>();
   let active = { row: 0, col: 0 };
@@ -27,20 +30,36 @@ function setup(options: { attached?: boolean; phase?: string; composing?: boolea
     colAxis: { count: () => columns.length },
   };
   let attached = options.attached ?? true;
-  const backend = { view, session: { committedDocument: { columnOrder: columns } } };
+  const backend = { view: { ...view, isWrapColumn: () => false, recomputeAllAutoRowHeights: () => {} }, session: { committedDocument: { columnOrder: columns }, isStopped: false } };
   const editor = {
     session: {
       getActiveCell: () => active,
       isComposing: () => options.composing === true,
+      isStopped: false,
       getPhase: () => options.phase ?? 'Navigation',
     },
     pointerdownCell: (cell: { row: number; col: number }) => {
       moves.push(cell.col);
       active = cell;
     },
+    commitEdit: () => {
+      commits += 1;
+      return options.composing === true ? 'composing' : 'committed';
+    },
   };
+  let range: { rowStart: number; rowEnd: number; colStart: number; colEnd: number } | null = null;
+  const extended: string[] = [];
   const hc = createHiddenColumns({
     diag: createDiagnosticSink((d) => diagnostics.push(d)),
+    selectionCtrl: {
+      getRange: () => range,
+      extendTo: (a, f) => extended.push(`${a.col}->${f.col}`),
+    },
+    mergeAt: (_row: number, col: number) =>
+      options.merge !== undefined && col >= options.merge.colStart && col < options.merge.colEnd
+        ? { rowStart: 0, rowEnd: 1, colStart: options.merge.colStart, colEnd: options.merge.colEnd }
+        : undefined,
+    onColumnsChanged: () => {},
     backend: () => (attached ? (backend as never) : undefined),
     editor: () => editor as never,
   });
@@ -48,7 +67,12 @@ function setup(options: { attached?: boolean; phase?: string; composing?: boolea
     hc,
     hidden,
     moves,
+    extended,
+    setRange: (r: typeof range) => {
+      range = r;
+    },
     codes: () => diagnostics.map((d) => d.code),
+    commits: () => commits,
     setActive: (col: number) => {
       active = { row: 0, col };
     },
@@ -106,5 +130,52 @@ describe('DD-070-7 hidden-columns', () => {
     const all = setup();
     all.hc.set(['a', 'b', 'c', 'd', 'e'], 'test');
     expect(all.moves).toEqual([]);
+  });
+});
+
+describe('DD-070-7 hidden-columns（Codex の指摘）', () => {
+  it('P1: 見えている列のある結合の中なら寄せない（結合の左上への寄せと往復しない）', () => {
+    const t = setup({ merge: { colStart: 0, colEnd: 2 } });
+    t.setActive(0);
+    t.hc.set(['a'], 'test'); // 結合 a:b の左上 a を隠す。b が見えているので寄せない
+    expect(t.moves).toEqual([]);
+    expect(t.hc.normalizeActiveCell()).toBe(false);
+  });
+
+  it('P2: 範囲の起点を隠したら、隣の列へ寄せたうえで範囲の他方の端を保つ', () => {
+    const t = setup();
+    t.setActive(1);
+    t.setRange({ rowStart: 0, rowEnd: 1, colStart: 1, colEnd: 4 }); // b:d・起点 b
+    t.hc.set(['b'], 'test');
+    expect(t.moves).toEqual([2]);
+    expect(t.extended).toEqual(['2->3']);
+  });
+
+  it('P1: 編集中のセルの列を隠すときは先に確定する。変換中は確定できないので変換の終わりまで待つ', () => {
+    const editing = setup({ phase: 'EditingReplace' });
+    editing.setActive(1);
+    editing.hc.set(['b'], 'test');
+    expect(editing.commits()).toBe(1);
+    expect([...editing.hidden]).toEqual(['b']);
+    const composing = setup({ phase: 'Composing', composing: true });
+    composing.setActive(1);
+    composing.hc.set(['b'], 'test');
+    expect(composing.hidden.size).toBe(0); // 待っている
+    expect(composing.codes()).toContain('hidden-columns-deferred');
+    // 編集中のセルの列でなければ待たずに隠す。
+    const other = setup({ phase: 'Composing', composing: true });
+    other.setActive(0);
+    other.hc.set(['c'], 'test');
+    expect([...other.hidden]).toEqual(['c']);
+  });
+
+  it('P2: 隠したときは最後に横へ動いた向きへ寄せる（左へ動いた後に隠したら左へ）', () => {
+    const t = setup();
+    t.setActive(2);
+    t.hc.normalizeActiveCell();
+    t.setActive(1); // c → b（左へ）
+    t.hc.normalizeActiveCell();
+    t.hc.set(['b'], 'test');
+    expect(t.moves.at(-1)).toBe(0);
   });
 });

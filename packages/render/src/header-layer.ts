@@ -243,6 +243,9 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
       ctx.textBaseline = 'middle';
       const drawColHeader = (col: number): void => {
         const rect = transform.columnHeaderRect(col);
+        if (rect.width <= 0) {
+          return; // DD-070-7（Codex P2）: 隠した列（幅 0）の見出し・印は描かない
+        }
         // DD-064 K4: まとめた列は下の段の中央、まとめていない列は 2 段ぶんの中央（1 段なら従来どおり見出しの中央）。
         const grouped = groupBandHeight > 0 && groupOfColumn.has(col);
         const labelY = grouped ? groupBandHeight + (headerHeight - groupBandHeight) / 2 : headerHeight / 2;
@@ -287,6 +290,9 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
           const last = transform.columnHeaderRect(group.colEnd - 1);
           const x = first.x;
           const width = last.x + last.width - first.x;
+          if (width <= 0) {
+            return; // DD-070-7: 全部の列を隠したまとまりは上の段を描かない
+          }
           // DD-070-6: 印のあるまとまりは名前の左に ▾／▸ を描き、名前は残りの幅の中央（印が無ければ従来どおり）。
           const groupMark = columnGroupMarkFn?.(groupIndex);
           const layout = columnGroupMarkLayout({ x, y: 0, width, height: groupBandHeight }, groupMark, CELL_PADDING);

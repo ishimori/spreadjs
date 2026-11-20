@@ -302,6 +302,11 @@ export class DocumentView {
     return true;
   }
 
+  /** 折り返し列か（DD-070-7: 隠す・見せるで自動の行高を測り直すかの判定に使う）。 */
+  isWrapColumn(columnId: ColumnId): boolean {
+    return this.wrapColumnSet.has(columnId);
+  }
+
   /** 隠した列か（DD-070-7）。 */
   isColumnHidden(columnId: ColumnId): boolean {
     return this.hiddenColumnSet.has(columnId);
@@ -386,6 +391,9 @@ export class DocumentView {
     for (const columnId of this.wrapColumnSet) {
       if (this.autoHeightSkip?.(rowId, columnId) === true) {
         continue; // DD-064: 結合範囲のセルは行の高さを伸ばさない
+      }
+      if (this.hiddenColumnSet.has(columnId)) {
+        continue; // DD-070-7: 隠した列（幅 0）は行の高さに数えない（見せたら測り直す）
       }
       const record = getCell(doc, rowId, columnId);
       if (record === undefined) {

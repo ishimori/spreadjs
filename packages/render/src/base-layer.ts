@@ -604,7 +604,12 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
       if (mergeIndex !== undefined && isMergedAt(row, col)) {
         return;
       }
-      drawCellValue(frame, row, col, value, transform.cellRect(row, col), {
+      // DD-070-7（Codex P1）: 隠した列（幅 0）の文字は描かない（右の空セルへはみ出させない）。
+      const cellRect = transform.cellRect(row, col);
+      if (cellRect.width === 0) {
+        return;
+      }
+      drawCellValue(frame, row, col, value, cellRect, {
         maxCol,
         isEmpty: isEmptyAt(row),
         clipTop,
@@ -627,6 +632,9 @@ export function createBaseLayer(deps: BaseLayerDeps): BaseLayer {
         const originCol = nearestLeftNonEmpty(pane.cols.start, frozenColCount, MAX_LEFT_INFLOW_SCAN, isEmpty, deps.columnBorder === undefined ? undefined : (index) => deps.columnBorder?.(index) !== undefined);
         if (originCol === null || isMergedAt(row, originCol)) {
           continue; // DD-064: 結合範囲は流入元にしない（範囲の文字は範囲の中だけ）
+        }
+        if (transform.cellRect(row, originCol).width === 0) {
+          continue; // DD-070-7: 隠した列は流入元にしない
         }
         const value = store.get(row, originCol);
         // 数値・wrap・リンク列はオーバーフローしない（左寄せ文字列のみ流入・リンクは自セル内クリップ＝DD-027-2）。
