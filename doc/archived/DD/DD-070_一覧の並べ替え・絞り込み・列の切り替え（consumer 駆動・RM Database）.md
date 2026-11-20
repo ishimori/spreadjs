@@ -2,7 +2,7 @@
 
 | 作成日 | 更新日 | ステータス | 補足 |
 |--------|--------|-----------|------|
-| 2026-11-20 | 2026-11-20 | 進行中 | 親DD（管理用）。実装は子DD DD-070-1〜9 を順に行う |
+| 2026-11-20 | 2026-11-20 | 完了 | 子DD DD-070-1〜9 を完了し alpha.24 で配布（cba7660・closureDirty=false）。DD-070-10（入力確定の速さ）は提案のままユーザー判断待ち |
 
 > アプローチ: 標準（親DD・管理用。子DDごとにアプローチを決める）
 > リスク: なし（認可・DBスキーマ・外部I/F・機密情報に触れない。共同編集の通信・サーバーは変えない）
@@ -70,17 +70,35 @@ Excel の管理表（RM Database・180 列）を置き換える consumer の一�
 ## タスク一覧
 
 ### Phase 1: 子DDを順に進める
-- [ ] DD-070-1〜9 を起票・実装・検証・Codex レビュー・完了の順に進める（子DDごとにコミット）
-- [ ] 🔬 子DDの完了ごとに親の表のチェックを更新する
+- [x] DD-070-1〜9 を起票・実装・検証・Codex レビュー・完了の順に進める（子DDごとにコミット）
+- [x] 🔬 子DDの完了ごとに親の表のチェックを更新する
 
 ### Phase 2: 配布
-- [ ] alpha 版を pack し、manifest と内容を検査する。consumer-app・consumer-harness が成功する
-- [ ] 🔬 `scripts/release/build-release.sh --skip-verify`（全体検証済みのソースで）→ `closureDirty=false`
+- [x] alpha 版を pack し、manifest と内容を検査する。consumer-app・consumer-harness が成功する
+- [x] 🔬 `scripts/release/build-release.sh --skip-verify`（全体検証済みのソースで）→ `closureDirty=false`
 
 ### 完了前チェック
-- [ ] 受け入れ基準を1項目ずつ照合
-- [ ] 😈 セルフレビュー1巡（子DDの間の食い違い）
-- [ ] 🔬 全回帰1回
+- [x] 受け入れ基準を1項目ずつ照合
+- [x] 😈 セルフレビュー1巡（子DDの間の食い違い）
+- [x] 🔬 全回帰1回
+
+## 検証（2026-11-20）
+
+| AC | 結果 | 根拠 |
+|---|---|---|
+| 1 | 達成 | 子DD DD-070-1〜9 はすべて完了（各子DDの検証表・`doc/archived/DD/`）。Codex の指摘は合計 76 件（DD-070-1: 8・2: 6・3: 5・4: 4・5: 8・6: 9・7: 13・8: 13・9: 10）をすべて妥当と判断して直した |
+| 2 | 達成 | alpha.24 を cba7660 から pack（gitDirty=false・closureDirty=false・10 tarball・153 files）。verify-manifest（SHA-256）・pack 内容検査・consumer-app（tarball だけで型解決・E2E 10 件）・consumer-harness が成功。引き渡しは `release/0.1.0-alpha.24/README.md` |
+| 3 | 達成 | CHANGELOG（[0.1.0-alpha.24]）・quick-start（子DDごとの節）・features.json（selection-events・header-marks・column-visibility・row-view・list-ops を提供中に）。`npm test` の features smoke・doc-check が成功 |
+
+- 全回帰（版を上げた後・cba7660 と同じソース）: typecheck・consumer-strict・lint（boundary・size）・単体 1,836 件・build が成功。E2E は子DDごとに関係する spec を流した（直近: row-view・row-view-collab・authorize-operation・row-rebase・row-operations・reconnect・clipboard 計 53 件）
+- 子DDの間の食い違いの見直し: DD-070-5 の `getRows` の「初回の状態の前は []」は、DD-070-9 の welcome.bootstrapFollows で revision 0 の非空の初期文書でも正しくなった。DD-070-7（列は幅 0 で残す）と DD-070-8（行は並びから外す）の違いは各 DD の決定事項に理由を書いた
+
+## 既知の未保証境界
+
+- 入力の確定が表の大きさに比例して遅い（180 列 × 5,000 行で約 180 ms・50,000 行で 0.9〜1.6 秒）。直す子DD DD-070-10 は提案のままユーザー判断待ち
+- 実 Microsoft IME での確認（DD-070-2〜9 の Manual Gate）は未実施。consumer（RM Database）への取り込みと画面での確認も未実施
+- 行の挿入・削除の Undo・ドラッグのフィルハンドル・組み込みの絞り込みの候補欄・xlsx の書き出しは見送り（決定事項どおり）
+- 1 つのクライアントから 1,000 件超の操作を ACK を待たずに一度に送ると接続が停止しうる（DD-070-9 で見つけた・未調査）
 
 ## ログ
 
@@ -96,3 +114,5 @@ Excel の管理表（RM Database・180 列）を置き換える consumer の一�
 - DD-070-7 完了（見せる列の切り替え。Codex 13 件を修正）
 - DD-070-8 完了（見せる行と並び。Codex 13 件を修正。5 万行で setRowView 約 50 ms）
 - DD-070-9 完了（共同編集モードでも決まりどおり。初回の状態の前の指定と welcome の判定〔bootstrapFollows〕を直した。工数は増えず、両モードで提供）
+- 10 package を 0.1.0-alpha.24 に上げた（cba7660。package-lock は版だけ。`npm install --package-lock-only` は npm の版の違いで無関係な行を消すので使わず、版の文字列だけを置き換えた）。build-release（--skip-verify・全体検証済みのソース）→ verify-manifest・consumer-app・consumer-harness が成功。配布物は `release/0.1.0-alpha.24/`（10 tarball・manifest・引き渡しの README）
+- 完了。アーカイブ（DD 本体を移す・DD-INDEX）
