@@ -73,7 +73,8 @@ function lowerBound(cols: readonly number[], target: number): number {
  * - `clone` は CellRecord/CellScalar まで別オブジェクトへ深く複製する（完全に切り離した複製）。
  * - `fork` はチャンクと行を共有する複製（DD-070-10）。どちらかが書くときに、書くチャンクと行だけを写す
  *   （copy-on-write）。CellRecord/CellScalar は共有するため、get で得たレコードをその場で書き換えないこと
- *   （書き換えは set で差し替える）。費用は O(チャンク数)＝表の大きさに比例しない（256 行で 1 チャンク）。
+ *   （書き換えは set で差し替える）。費用は O(割り当て済みのチャンク数)＝slot の数 / 256（5 万行で約 200）で、空でない
+ *   セルの数・列の数には比例しない（チャンクの索引の Map を写す。Codex P2: 索引も経路だけ写す作りにはしない）。
  */
 export interface CellStore {
   get(slot: number, colIndex: number): CellRecord | undefined;

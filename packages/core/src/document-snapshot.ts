@@ -8,6 +8,7 @@
 
 import { createCellStore } from './cell-store';
 import {
+  cloneCellScalar,
   computeMaxSlot,
   createDocument,
   forEachCellInRow,
@@ -58,9 +59,10 @@ export function serializeDocument(doc: SheetDocument): DocumentSnapshot {
   for (const rowId of doc.rowMeta.keys()) {
     const columns: SerializedRowCells['columns'] = [];
     forEachCellInRow(doc, rowId, (columnId, record) => {
+      // 値は写す（文書のレコードは適用の前後の文書で共有する・DD-070-10。スナップショットを書き換えても文書を変えない）。
       columns.push({
         columnId,
-        value: record.value,
+        value: cloneCellScalar(record.value),
         lastChangedRevision: record.lastChangedRevision,
       });
     });
@@ -118,7 +120,7 @@ export function deserializeDocument(data: DocumentSnapshot): SheetDocument {
         );
       }
       cells.set(slot, colIndex, {
-        value: cell.value,
+        value: cloneCellScalar(cell.value), // 受け取ったスナップショットと値を共有しない（DD-070-10）
         lastChangedRevision: cell.lastChangedRevision,
       });
     }

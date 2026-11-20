@@ -145,6 +145,9 @@ test('AC1: A の並べ替えは B の並び・Undo を変えない（view-local�
     await ih.plainTypeAndCommit(a.page, value);
     await expect.poll(() => ih.committedCell(b.page, f3, col)).toBe(value);
     expect(await ih.undoDepth(b.page)).toBe(bUndo);
+    // Undo は自分の操作が未確定の間は効かない（undo-stack）。B に届いた時点で A が自分の ACK を処理済みとは限らないので待つ
+    // （DD-070-10 で確定が速くなり、この競合が表に出た）。
+    await expect.poll(async () => (await ih.snapshot(a.page)).pendingCount).toBe(0);
     await a.page.keyboard.press('Control+z');
     await expect.poll(() => ih.committedCell(b.page, f3, col)).toBe('');
     expect(await visible(a.page)).toEqual([f3, f1, f0]); // 並びは残る

@@ -17,6 +17,8 @@ import {
   documentHash,
   setCell,
   validateOperation,
+  writableRowMeta,
+  writableRowOrder,
 } from '@nanairo-sheet/core';
 import type {
   BootstrapMessage,
@@ -971,8 +973,7 @@ export class ClientSession implements TransportListener {
 
 /**
  * InverseSeed を逆適用して doc を 1 Operation 分だけ rollback する（§7.7 手順1・Phase 3 消費者契約）。
- * - insertedRowIds を除去（rowOrder/rowMeta/cells）。
- * - deletedRows を un-tombstone in place（index で splice しない・DA D10）。
+ * - insertedRowIds を除去（rowOrder/rowMeta/cells）。deletedRows を un-tombstone in place（index で splice しない・DA D10）。
  * - cells を前値へ復元（後ろから＝forward の逆順・DA D15）。前値=blank は不在へ（行/空セルは厳密復元）。
  *   前値=非空は値のみ復元（InverseSeed は before-revision を持たない＝非厳密・D22）。
  */
@@ -981,16 +982,15 @@ export function applyInverseSeed(doc: SheetDocument, seed: InverseSeed): SheetDo
   for (const rowId of seed.insertedRowIds) {
     const index = next.rowOrder.indexOf(rowId);
     if (index !== -1) {
-      next.rowOrder.splice(index, 1);
+      writableRowOrder(next).splice(index, 1);
     }
     deleteRowCells(next, rowId); // slot 解決に rowMeta を使うため rowMeta.delete より前に消す
-    next.rowMeta.delete(rowId);
+    writableRowMeta(next).delete(rowId);
   }
   for (const deleted of seed.deletedRows) {
     const meta = next.rowMeta.get(deleted.rowId);
     if (meta !== undefined) {
-      meta.tombstone = deleted.meta.tombstone; // 削除前（false）へ un-tombstone
-      meta.lastChangedRevision = deleted.meta.lastChangedRevision;
+      writableRowMeta(next).set(deleted.rowId, { ...meta, tombstone: deleted.meta.tombstone, lastChangedRevision: deleted.meta.lastChangedRevision }); // 削除前へ un-tombstone（RowMeta は差し替える・DD-070-10）
     }
   }
   for (const change of [...seed.cells].reverse()) {

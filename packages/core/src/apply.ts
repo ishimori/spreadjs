@@ -213,9 +213,9 @@ function applyInsertRows(
   // slot は max+1 から連番で、末尾で maxSlot を一括更新する（単調非減少・rollback でも減らさない）。
   let slot = next.maxSlot + 1;
   let insertAt = anchorIndex + 1; // アンカー直後（先頭=-1 のときは 0）
-  // 共有中の行の並び・行の情報は書く前に写す（forkDocument。空 rows なら写さない）。
-  const rowOrder = op.rows.length > 0 ? writableRowOrder(next) : next.rowOrder;
-  const rowMeta = op.rows.length > 0 ? writableRowMeta(next) : next.rowMeta;
+  // 共有しうる行の並び・行の情報は書く前に写す（forkDocument・DD-070-10。空 rows なら写さない）。
+  const rowOrder = op.rows.length > 0 ? writableRowOrder(next) : [];
+  const rowMeta = op.rows.length > 0 ? writableRowMeta(next) : new Map<RowId, RowMeta>();
 
   for (const rowSpec of op.rows) {
     rowOrder.splice(insertAt, 0, rowSpec.rowId);

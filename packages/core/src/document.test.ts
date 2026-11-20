@@ -11,6 +11,7 @@ import {
   isTombstoned,
   resolveAnchorIndex,
   setCell,
+  writableRowOrder,
 } from './document';
 import type { RowMeta, SheetDocument } from './document';
 import { createCellStore } from './cell-store';
@@ -103,15 +104,12 @@ describe('document.ts — 最小文書モデル（phase1-design §2）', () => {
     expect(cloneRec).not.toBe(origRec); // CellRecord も別参照（store.clone が深く複製）
     expect(cloneRec.value).not.toBe(origRec.value); // CellScalar も別参照
 
-    // clone を隅々まで破壊的に変更する
+    // clone を隅々まで破壊的に変更する（型は読み取り専用〔DD-070-10〕だが、深い複製はその場の書き換えからも原本を守る）
     clone.revision = 999;
-    clone.rowOrder.push(row('row-99'));
+    writableRowOrder(clone).push(row('row-99'));
     clone.columnOrder.push(col('col-z'));
-    clone.rowMeta.get(row('row-1'))!.tombstone = true;
-    clone.rowMeta.get(row('row-1'))!.lastChangedRevision = 999;
-    clone.rowMeta.get(row('row-1'))!.slot = 999;
-    cloneRec.lastChangedRevision = 999;
-    cloneRec.value = str('MUTATED');
+    Object.assign(clone.rowMeta.get(row('row-1'))!, { tombstone: true, lastChangedRevision: 999, slot: 999 });
+    Object.assign(cloneRec, { lastChangedRevision: 999, value: str('MUTATED') });
     setCell(clone, row('row-1'), col('col-b'), { value: str('new'), lastChangedRevision: 999 });
     // row-2（tombstone・セルなし）へセルを追加してみる（原本 row-2 は空のまま）
     setCell(clone, row('row-2'), col('col-a'), { value: str('z2'), lastChangedRevision: 999 });

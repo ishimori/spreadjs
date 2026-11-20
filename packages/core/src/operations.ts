@@ -19,10 +19,10 @@ import type {
 //   value は必ず正準化済み（4桁年-2桁月-2桁日・実在する暦日）。生成は parseCellInput が保証する。
 //   hash は `field(kind)`（'date' vs 'string'）で string と区別されるため、同じ文字列でも別値になる（正準性維持）。
 export type CellScalar =
-  | { kind: 'blank' }
-  | { kind: 'string'; value: string }
-  | { kind: 'number'; value: number }
-  | { kind: 'date'; value: string /* LocalDate: YYYY-MM-DD（正準化済み） */ };
+  | { readonly kind: 'blank' }
+  | { readonly kind: 'string'; readonly value: string }
+  | { readonly kind: 'number'; readonly value: number }
+  | { readonly kind: 'date'; readonly value: string /* LocalDate: YYYY-MM-DD（正準化済み） */ };
 
 /** SetCells の1件の変更。`beforeRevision` は Phase 2 サーバーの stale 検査用（apply 層は参照しない）。 */
 export interface SetCellsChange {

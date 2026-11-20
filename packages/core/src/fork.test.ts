@@ -5,7 +5,7 @@
 // サーバーの状態が壊れる。ここでは「枝分かれした文書の木」へ無作為に書き、どの文書も深い複製の経路で作った
 // 参照と一致し続けることを確かめる。
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createColumnId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
@@ -15,7 +15,7 @@ import { createCellStore } from './cell-store';
 import type { CellStore } from './cell-store';
 import { cloneDocument, createDocument, forkDocument, getCell, setCell, writableRowMeta, writableRowOrder } from './document';
 import type { CellRecord, SheetDocument } from './document';
-import { canonicalSerialize } from './hash';
+import { deserializeDocument, serializeDocument } from './document-snapshot';
 import type { CellScalar, DocumentOperation } from './operations';
 
 /** 決定論の擬似乱数（mulberry32）。 */
@@ -35,7 +35,9 @@ const rec = (value: string, revision: number): CellRecord => ({ value: { kind: '
 
 const SLOTS = 40;
 const COLS = 6;
+const CHUNK_ROWS = 4;
 
+/** 論理の中身と件数（blank のレコードも含む）。approxMemoryBytes は空のチャンクの残り方で深い複製と違いうるので別に見る。 */
 function storeContents(store: CellStore): string {
   const out: string[] = [];
   for (let slot = 0; slot < SLOTS; slot += 1) {
@@ -43,7 +45,26 @@ function storeContents(store: CellStore): string {
       out.push(`${slot}:${colIndex}=${JSON.stringify(record)}`);
     });
   }
-  return `${store.nonEmptyCount()}|${store.approxMemoryBytes()}|${out.join(',')}`;
+  return `${store.nonEmptyCount()}|${out.join(',')}`;
+}
+
+/**
+ * 文字数の計上が中身と合っている: approxMemoryBytes から件数と文字数の分を引いた残りが、チャンクの分（1 チャンク
+ * chunkRows × 8 バイト）の 0 以上の倍数で、チャンクの数の上限以下（係数は cell-store.ts の BYTES_PER_*）。
+ */
+function expectCharAccounting(store: CellStore, chunkRows: number): void {
+  let chars = 0;
+  for (let slot = 0; slot < SLOTS; slot += 1) {
+    store.forEachInRow(slot, (_colIndex, record) => {
+      if (record.value.kind === 'string' || record.value.kind === 'date') {
+        chars += record.value.value.length;
+      }
+    });
+  }
+  const residual = store.approxMemoryBytes() - store.nonEmptyCount() * (8 + 8 + 32) - chars * 2;
+  expect(residual).toBeGreaterThanOrEqual(0);
+  expect(residual % (chunkRows * 8)).toBe(0);
+  expect(residual).toBeLessThanOrEqual(Math.ceil(SLOTS / chunkRows) * chunkRows * 8);
 }
 
 describe('DD-070-10: CellStore.fork', () => {
@@ -90,7 +111,7 @@ describe('DD-070-10: CellStore.fork', () => {
     it(`無作為な fork の木（seed=${seed}）: どのストアも深い複製の参照と一致し続ける`, () => {
       const rand = prng(seed);
       const stores: Array<{ store: CellStore; ref: CellStore }> = [
-        { store: createCellStore({ chunkRows: 4 }), ref: createCellStore({ chunkRows: 4 }) },
+        { store: createCellStore({ chunkRows: CHUNK_ROWS }), ref: createCellStore({ chunkRows: CHUNK_ROWS }) },
       ];
       for (let step = 0; step < 2_000; step += 1) {
         const entry = pick(rand, stores);
@@ -110,10 +131,14 @@ describe('DD-070-10: CellStore.fork', () => {
           entry.store.deleteRow(slot);
           entry.ref.deleteRow(slot);
         }
+        // 毎回すべてのストアを照合する（漏れが後の上書きで消える前に見つける）。
+        for (const { store, ref } of stores) {
+          expect(storeContents(store)).toBe(storeContents(ref));
+        }
       }
       expect(stores.length).toBeGreaterThan(5);
-      for (const { store, ref } of stores) {
-        expect(storeContents(store)).toBe(storeContents(ref));
+      for (const { store } of stores) {
+        expectCharAccounting(store, CHUNK_ROWS);
       }
     });
   }
@@ -123,10 +148,13 @@ describe('DD-070-10: CellStore.fork', () => {
 
 const columns: ColumnId[] = ['c0', 'c1', 'c2', 'c3'].map((c) => createColumnId(c));
 
-/** 比べるための文書の中身（正準形・行の並び・slot・削除の印・maxSlot）。 */
+/**
+ * 比べるための文書の中身。保存の形（serializeDocument: blank のレコード・削除した行のセル・行の情報まで全部）と、
+ * slot・maxSlot（正準形の hash には入らない）。
+ */
 function docContents(doc: SheetDocument): string {
-  const meta = [...doc.rowMeta.entries()].map(([id, m]) => `${String(id)}:${m.slot}:${m.tombstone}:${m.lastChangedRevision}`);
-  return JSON.stringify([canonicalSerialize(doc), doc.rowOrder, meta.sort(), doc.maxSlot, doc.revision, doc.columnOrder]);
+  const slots = [...doc.rowMeta.values()].map((m) => `${String(m.id)}:${m.slot}`);
+  return JSON.stringify([serializeDocument(doc), slots, doc.maxSlot]);
 }
 
 /** 深い複製の経路（以前の applyOperation と同じ: 丸ごと複製して in-place で適用）。 */
@@ -214,13 +242,71 @@ describe('DD-070-10: forkDocument と applyOperation の入力の不変', () => 
           entry.doc = applyOperation(entry.doc, op, { revision: step }).document;
           entry.ref = applyByDeepClone(entry.ref, op, step);
         }
+        // 毎回すべての文書を照合する（漏れが後の上書きで消える前に見つける）。
+        for (const { doc, ref } of docs) {
+          expect(docContents(doc)).toBe(docContents(ref));
+        }
       }
       expect(docs.length).toBeGreaterThan(10);
-      for (const { doc, ref } of docs) {
-        expect(docContents(doc)).toBe(docContents(ref));
-      }
     });
   }
+});
+
+describe('DD-070-10: 共有の境界（Codex の指摘）', () => {
+  it('スナップショットの値を書き換えても文書は変わらない（serializeDocument・deserializeDocument が値を写す）', () => {
+    let doc = createDocument(columns);
+    doc = applyOperation(doc, { type: 'insertRows', afterRowId: null, rows: [{ rowId: createRowId('a') }] }, { revision: 1 }).document;
+    doc = applyOperation(doc, { type: 'setCells', conflictPolicy: 'reject-overlap', changes: [{ rowId: createRowId('a'), columnId: columns[0]!, value: { kind: 'string', value: 'x' } }] }, { revision: 2 }).document;
+    const snapshot = serializeDocument(doc);
+    const next = applyOperation(doc, { type: 'setCells', conflictPolicy: 'reject-overlap', changes: [{ rowId: createRowId('a'), columnId: columns[1]!, value: { kind: 'string', value: 'y' } }] }, { revision: 3 }).document;
+    // 型は読み取り専用だが、スナップショットは外へ渡す JSON の形なので、書き換えられても文書が変わらないことを見る。
+    Object.assign(snapshot.cells[0]!.columns[0]!.value, { value: 'MUTATED' });
+    expect(getCell(doc, createRowId('a'), columns[0]!)?.value).toEqual({ kind: 'string', value: 'x' });
+    expect(getCell(next, createRowId('a'), columns[0]!)?.value).toEqual({ kind: 'string', value: 'x' });
+
+    const restored = deserializeDocument(serializeDocument(next));
+    const wire = serializeDocument(next);
+    const fromWire = deserializeDocument(wire);
+    Object.assign(wire.cells[0]!.columns[0]!.value, { value: 'MUTATED' });
+    expect(getCell(fromWire, createRowId('a'), columns[0]!)?.value).toEqual({ kind: 'string', value: 'x' });
+    expect(docContents(restored)).toBe(docContents(fromWire));
+  });
+
+  it('core のモジュールが二重に読み込まれても、片方の適用の結果をもう片方が in-place で replay して元の文書を壊さない', async () => {
+    vi.resetModules();
+    const other = await import('./apply');
+    const otherDocument = await import('./document');
+    const insert = (id: string, after: string | null): DocumentOperation => ({ type: 'insertRows', afterRowId: after === null ? null : createRowId(after), rows: [{ rowId: createRowId(id) }] });
+    const setX: DocumentOperation = { type: 'setCells', conflictPolicy: 'reject-overlap', changes: [{ rowId: createRowId('a'), columnId: columns[0]!, value: { kind: 'string', value: 'x' } }] };
+    expect(other.applyOperation).not.toBe(applyOperation); // 別のモジュールの写しになっている
+
+    // こちらで作った文書を向こうが fork（適用）し、こちらが元の文書を in-place で replay する（記録がモジュールごとだと、
+    // こちらの記録は「書いてよい」のままなので、向こうの結果の行の並びまで変わる）
+    const mine = applyOperation(createDocument(columns), insert('a', null), { revision: 1 }).document;
+    replayAcceptedOperations(mine, [{ operation: insert('m', 'a'), revision: 2 }]); // 自分の入れ物にしておく
+    const theirs = other.applyOperation(mine, setX, { revision: 3 }).document;
+    const theirsBefore = docContents(theirs);
+    replayAcceptedOperations(mine, [{ operation: insert('n', 'a'), revision: 4 }]);
+    expect(docContents(theirs)).toBe(theirsBefore);
+
+    // こちらで作って適用 → もう片方で replay
+    const base = applyOperation(createDocument(columns), insert('a', null), { revision: 1 }).document;
+    const before = docContents(base);
+    const forked = applyOperation(base, setX, { revision: 2 }).document;
+    other.replayAcceptedOperations(forked, [{ operation: insert('b', 'a'), revision: 3 }]);
+    expect(docContents(base)).toBe(before);
+
+    // もう片方で作って適用 → こちらで replay
+    const otherBase = other.applyOperation(otherDocument.createDocument(columns), insert('a', null), { revision: 1 }).document;
+    const otherBefore = docContents(otherBase);
+    const otherForked = other.applyOperation(otherBase, setX, { revision: 2 }).document;
+    replayAcceptedOperations(otherForked, [{ operation: insert('b', 'a'), revision: 3 }]);
+    expect(docContents(otherBase)).toBe(otherBefore);
+    // 元の文書を in-place で replay しても、fork の結果は変わらない
+    const forkedBefore = docContents(otherForked);
+    replayAcceptedOperations(otherBase, [{ operation: insert('c', null), revision: 4 }]);
+    expect(docContents(otherForked)).toBe(forkedBefore);
+  });
 });
 
 describe('DD-070-10: 1 回の適用の費用が表の大きさに比例しない（緩い時間ガード）', () => {
