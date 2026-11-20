@@ -42,6 +42,11 @@ export interface GridBackendSession {
   sendHeartbeat(): void;
   /** オンライン（単独モードは false）。 */
   readonly isOnline: boolean;
+  /**
+   * サーバーの初回の状態を受け取ったか（DD-070-5・共同編集だけ持つ。一度 true になったら戻らない）。false の間の view は
+   * サーバーの既存の行を欠くので、getRows は空を返す。単独モードは持たない（常に読める）。
+   */
+  readonly hasInitialState?: boolean;
   /** 編集停止（divergence 等・単独モードは false）。 */
   readonly isStopped: boolean;
   /** 未送信 pending 件数（単独モードは 0）。 */

@@ -53,7 +53,7 @@ import { createMountBaseLayer } from './mount/base-layer-options';
 import { createCommands } from './mount/commands';
 import { createRender } from './mount/render';
 import { createSelectionNotify } from './mount/selection-notify';
-import { readRows } from './mount/read-rows';
+import { readRowsFromBackend } from './mount/read-rows';
 import { createEditorWiring } from './mount/editor-wiring';
 import { createKeyboard } from './mount/keyboard';
 import { createMountConfig } from './mount/config';
@@ -591,8 +591,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     },
     getRows(readOptions?: GridReadRowsOptions): readonly GridRowData[] {
       // DD-070-5: 自分の未確定の変更を含む view の文書から、文書の並びで読む（boot 前・destroy 後は空）。
-      const sync = lifecycle.backend();
-      return destroyed || sync === undefined ? [] : readRows(sync.session.viewDocument, readOptions);
+      return destroyed ? [] : readRowsFromBackend(lifecycle.backend(), readOptions);
     },
     setReadOnly(next: boolean) {
       // DD-056 H12。JS 経路の非 boolean は mount オプションと同じく `=== true` の厳密判定で編集可能側へ倒し、診断 warn を出す。

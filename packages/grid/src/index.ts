@@ -834,7 +834,9 @@ export interface GridInstance {
    * （`cells` は ColumnId → 表示文字列・空のセルは無し＝`setData` の行と同じ形で、そのまま渡せば同じ表になる。数値は桁区切りなし・
    * 日付は `YYYY-MM-DD`）。値は自分の未確定の変更を含む今の値（編集中のセルの下書きは含めない）。共同編集モードでは他の参加者の
    * 確定も含む。`options.columnIds`・`rowIds` で絞れる（大きい表では並べ替えのキーの列だけを読むと軽い）。画面だけの並べ替え・
-   * 絞り込み（DD-070-8）の影響は受けない。同期で返す（`setData` の直後に読めば新しい行）。boot 前・destroy 後は `[]`。
+   * 絞り込み（DD-070-8）の影響は受けない。同期で返す（`setData` の直後に読めば新しい行）。boot 前・destroy 後と、共同編集で
+   * サーバーの初回の状態を受け取る前は `[]`。返すのは行 ID とセルの値だけで、行データの `readOnlyColumns`・`cellStatus`・
+   * `cellBackgrounds` は含まない（`setData` に戻すときは consumer が合成する。単独モードの `setData` はそれらを作り直す）。
    */
   getRows(options?: GridReadRowsOptions): readonly GridRowData[];
   /**

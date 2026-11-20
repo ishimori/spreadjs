@@ -424,3 +424,23 @@ describe('DocumentView 自動行高（DD-012-5 D5）', () => {
     expect(view.rowAxis.size(view.rowIndexOf(row('r0')))).toBe(20); // createDocHolder は rowHeight=20
   });
 });
+
+describe('DD-070-5 numberToPlainString（指数表記の無い十進・値は変わらない）', () => {
+  it('指数表記になる数値を十進にし、Number に戻すと同じ値。指数表記にならない数値は String と同じ', async () => {
+    const { numberToPlainString } = await import('./document-view');
+    const cases: Array<[number, string]> = [
+      [1e-7, '0.0000001'],
+      [-1.25e-7, '-0.000000125'],
+      [1.2345678901234568e-10, '0.00000000012345678901234568'],
+      [1e21, '1000000000000000000000'],
+      [-2.5e22, '-25000000000000000000000'],
+      [1234.5, '1234.5'],
+      [-0.5, '-0.5'],
+      [0, '0'],
+    ];
+    for (const [n, text] of cases) {
+      expect(numberToPlainString(n)).toBe(text);
+      expect(Number(numberToPlainString(n))).toBe(n);
+    }
+  });
+});

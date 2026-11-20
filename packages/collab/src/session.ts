@@ -200,6 +200,9 @@ export class ClientSession implements TransportListener {
   private lastPollAt = 0;
   private awaitingSync = false;
   private awaitingBootstrap = false; // fresh join（committed.revision=0）で snapshot bootstrap を待つ（P1-6/P1-7）
+  // DD-070-5（Codex P2）: サーバーの初回の状態を受け取ったか（welcome で bootstrap 不要と分かった・bootstrap を受理した）。
+  // 一度立てたら下ろさない（再接続中も、それまでに受け取った状態は読める）。立つ前の view はサーバーの既存の行を欠く。
+  private initialStateReceived = false;
   private reconcileInfo: ReconcileInfo | undefined = undefined; // 再接続 reconcile（committed が権威化してから適用＝Codex P1-2）
   private welcomeSeen = false; // この接続で welcome を受信済み（reorder で bootstrap 先着時に buffer するか判定・Codex P1-c）
   private bootstrapAcceptedOnConnection = false; // この接続で bootstrap を受理済み（bootstrap@0 の受理判定・DD-026-1 Codex P1）
@@ -417,6 +420,7 @@ export class ClientSession implements TransportListener {
       return;
     }
     this.awaitingBootstrap = false;
+    this.initialStateReceived = true; // bootstrap 不要（空の文書・差分の tail で足りる再接続）
     // 既知サーバー revision（currentRevision）に committed が未達なら差分を要求する
     // （初期/再接続の operations 配信が欠落しても welcome が到達すれば回復できる）。
     if (this.needsCatchup()) {
@@ -500,6 +504,7 @@ export class ClientSession implements TransportListener {
       return; // 既に同等以上（reconnect は tail 経路・二重 bootstrap を無視）
     }
     this.bootstrapAcceptedOnConnection = true;
+    this.initialStateReceived = true;
     this.committed = deserializeDocument(message.document); // committed.revision = message.document.revision (= R)
     this.expectedRevision = this.committed.revision + 1;
     this._bootstrapRevision = message.revision;
@@ -616,10 +621,9 @@ export class ClientSession implements TransportListener {
       return; // 既に除去済み（reject は二重適用を起こさない）
     }
     this.pending.splice(index, 1);
-    this.pushConflict(
-      this.makeConflictEntry(entry, 'rejected', message.details?.violations, message.code, message.details),
-    );
-    this.rebuildView(); // reject 済み op は再送しない（pending から除去済み・指示 2）
+    // DD-070-5（Codex P2）: view を作り直してから拒否を知らせる（購読者がその場で view を読んでも拒否した値が残らない）。
+    // 作り直しで見つかる依存の競合（dependency）より先に拒否そのものを知らせる（leading＝従来の順）。
+    this.rebuildView(this.makeConflictEntry(entry, 'rejected', message.details?.violations, message.code, message.details)); // reject 済み op は再送しない（pending から除去済み・指示 2）
   }
 
   private handlePresenceSnapshot(message: PresenceSnapshotMessage): void {
@@ -650,7 +654,7 @@ export class ClientSession implements TransportListener {
    * validateOperation（core 共有・指示 1）で違反する pending は Conflict Queue へ。
    * 先行 pending が失効した行に触れる後続 pending は依存失効（連鎖・S-H3）。
    */
-  private rebuildView(): void {
+  private rebuildView(leading?: ConflictQueueEntry): void {
     let doc = this.committed;
     let provisional = this.committed.revision;
     const survived: PendingEntry[] = [];
@@ -696,6 +700,10 @@ export class ClientSession implements TransportListener {
     }
     this.pending = survived;
     this.view = doc;
+    // DD-070-5: 呼び出し側の拒否（handleRejected）を、作り直した view の後・依存の競合より先に知らせる。
+    if (leading !== undefined) {
+      this.pushConflict(leading);
+    }
     // this.pending を survived へ更新した後に conflict を push する（rejected イベントが再構築後の正しい pending 件数を報告する）。
     for (const conflict of conflicts) {
       this.pushConflict(conflict);
@@ -938,6 +946,11 @@ export class ClientSession implements TransportListener {
 
   get isOnline(): boolean {
     return this.online;
+  }
+
+  /** サーバーの初回の状態を受け取ったか（DD-070-5。一度 true になったら戻らない）。 */
+  get hasInitialState(): boolean {
+    return this.initialStateReceived;
   }
 
   /** 他接続の Presence（Phase 4 デモの名前・色表示用。自分は含まない）。 */

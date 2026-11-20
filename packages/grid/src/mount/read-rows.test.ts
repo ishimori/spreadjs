@@ -5,7 +5,7 @@ import { applyOperation, createDocument } from '@nanairo-sheet/core';
 import type { CellScalar, SheetDocument } from '@nanairo-sheet/core';
 import { createColumnId, createRowId } from '@nanairo-sheet/types';
 
-import { readRows } from './read-rows';
+import { readRows, readRowsFromBackend } from './read-rows';
 
 function docWith(rows: Array<{ id: string; cells: Record<string, CellScalar> }>): SheetDocument {
   let doc = createDocument(['a', 'b', 'c'].map((c) => createColumnId(c)));
@@ -59,5 +59,43 @@ describe('DD-070-5 readRows', () => {
       { rowId: 'r3', cells: {} },
     ]);
     expect(readRows(doc, { rowIds: 3 as never })).toEqual([]);
+  });
+});
+
+describe('DD-070-5 readRows（Codex の指摘）', () => {
+  it('P2: __proto__・toString のような列 ID も自身の項目として読める（プロトタイプの無い辞書）', () => {
+    let d = createDocument(['__proto__', 'toString'].map((c) => createColumnId(c)));
+    d = applyOperation(d, { type: 'insertRows', afterRowId: null, rows: [{ rowId: createRowId('r1') }] }, { revision: 1 }).document;
+    d = applyOperation(
+      d,
+      {
+        type: 'setCells',
+        conflictPolicy: 'reject-overlap',
+        changes: [{ rowId: createRowId('r1'), columnId: createColumnId('__proto__'), beforeRevision: 0, value: { kind: 'string', value: 'x' } }],
+      },
+      { revision: 2 },
+    ).document;
+    const [row] = readRows(d);
+    expect(Object.entries(row!.cells)).toEqual([['__proto__', 'x']]);
+    expect(row!.cells['toString']).toBeUndefined();
+  });
+
+  it('P3: 文字列でない ID は無視する（null が列 "null" に一致しない・例外にしない）', () => {
+    let d = createDocument(['null'].map((c) => createColumnId(c)));
+    d = applyOperation(d, { type: 'insertRows', afterRowId: null, rows: [{ rowId: createRowId('r1') }] }, { revision: 1 }).document;
+    expect(readRows(d, { columnIds: [null, { toString: null }] as never })).toEqual([{ rowId: 'r1', cells: {} }]);
+    expect(readRows(d, { rowIds: [null] as never })).toEqual([]);
+  });
+
+  it('readRowsFromBackend: 自分の未確定の変更を含む view を読む。共同編集で初回の状態を受け取る前は空', () => {
+    const view = docWith([{ id: 'r1', cells: { a: { kind: 'string', value: 'pending' } } }]);
+    const committed = docWith([{ id: 'r1', cells: { a: { kind: 'string', value: 'committed' } } }]);
+    const backend = (hasInitialState?: boolean) => ({
+      session: { viewDocument: view, committedDocument: committed, ...(hasInitialState === undefined ? {} : { hasInitialState }) },
+    }) as never;
+    expect(readRowsFromBackend(backend(), undefined)).toEqual([{ rowId: 'r1', cells: { a: 'pending' } }]);
+    expect(readRowsFromBackend(backend(true), undefined)[0]!.cells['a']).toBe('pending');
+    expect(readRowsFromBackend(backend(false), undefined)).toEqual([]);
+    expect(readRowsFromBackend(undefined, undefined)).toEqual([]);
   });
 });

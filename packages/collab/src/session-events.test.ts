@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { getCell } from '@nanairo-sheet/core';
 import { createDocumentId } from '@nanairo-sheet/types';
 
 import { createCounterIdGenerator } from './deps';
@@ -123,5 +124,48 @@ describe('DD-015 イベント通知契約 — connection / pending / rejected', 
     session.start();
     transport.receive({ type: 'welcome', sessionId: 'c1', currentRevision: 0, colorKey: 'k', capabilities: { protocolVersion: 1 } });
     expect(session.isOnline).toBe(true); // throw しない
+  });
+});
+
+describe('DD-070-5: 拒否の通知の時点と初回の状態', () => {
+  it('rejected を受けた購読者がその場で読む view には、拒否した値が残らない（view を作り直してから知らせる）', () => {
+    const seen: string[] = [];
+    const ref: { session?: ClientSession } = {};
+    const h = createSession({
+      observer: (event) => {
+        if (event.type === 'rejected' && ref.session !== undefined) {
+          const record = getCell(ref.session.viewDocument, row('row-1'), col('col-a'));
+          seen.push(record === undefined ? '' : String((record.value as { value?: unknown }).value ?? ''));
+        }
+      },
+    });
+    ref.session = h.session;
+    h.session.start();
+    h.transport.receive({ type: 'welcome', sessionId: 'c1', currentRevision: 0, colorKey: 'k', capabilities: { protocolVersion: 1 } });
+    h.transport.receive(operationsMessage([
+      serverEnvelope({ revision: 1, operationId: 'seed-1', operation: insertRows(null, ['row-1']) }),
+      serverEnvelope({ revision: 2, operationId: 'seed-2', operation: setCells([{ rowId: row('row-1'), columnId: col('col-a'), value: str('base') }]) }),
+    ]));
+    const opId = h.session.submitLocalOperation(setCells([{ rowId: row('row-1'), columnId: col('col-a'), beforeRevision: 2, value: str('mine') }]));
+    h.transport.receive({ type: 'operationRejected', operationId: opId, code: 'stale-cell-revision', details: {} });
+    expect(seen).toEqual(['base']);
+  });
+
+  it('hasInitialState: welcome の前は false。空の文書（bootstrap 不要）なら welcome で true、一度立ったら再接続中も true', () => {
+    const h = createSession();
+    expect(h.session.hasInitialState).toBe(false);
+    h.session.start();
+    expect(h.session.hasInitialState).toBe(false);
+    h.transport.receive({ type: 'welcome', sessionId: 'c1', currentRevision: 0, colorKey: 'k', capabilities: { protocolVersion: 1 } });
+    expect(h.session.hasInitialState).toBe(true);
+    h.transport.drop();
+    expect(h.session.hasInitialState).toBe(true);
+  });
+
+  it('hasInitialState: 既存の文書へ初めて入るときは bootstrap を受け取るまで false', () => {
+    const h = createSession();
+    h.session.start();
+    h.transport.receive({ type: 'welcome', sessionId: 'c1', currentRevision: 3, colorKey: 'k', capabilities: { protocolVersion: 1 } });
+    expect(h.session.hasInitialState).toBe(false);
   });
 });

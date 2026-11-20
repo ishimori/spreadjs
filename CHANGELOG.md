@@ -73,6 +73,11 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 
 ### Changed
 
+- **数値の表示文字列から指数表記をなくした（DD-070-5）**: `0.0000001`・`1e21` のような値は、これまで `1e-7`・`1e+21` と表示し
+  `cell-commit`・コピー・`remote-change` にもその形で出していたため、`setData` に戻すと文字列になった（入力の型変換は指数表記を
+  数値として受けない）。指数表記の無い十進（`0.0000001`・`1000000000000000000000`）にした。値は変わらない。
+- **共同編集モードの `rejected` は、拒否した操作を除いて画面の値を作り直した後に出す（DD-070-5）**: 購読者がその場で `getRows()`
+  などを読んでも拒否した値が残らない。依存の競合より先に拒否そのものを知らせる順は従来どおり。
 - **`GridEvent` に `selection-change`・`cell-dblclick` を追加**（union の拡張。`GridEvent` で網羅的に分岐している consumer は分岐を足す）。
 - **`GridColumnType` に `GridNumberColumnType` を追加（DD-070-4）**（union の拡張）。
 - **`'fill'` を union に追加（DD-070-3）**: `GridEditBlockedInput`・`cells-skipped` の `operation`・`cell-invalid` の `source`。

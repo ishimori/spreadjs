@@ -649,7 +649,10 @@ const keys = grid.getRows({ columnIds: ['price'] }); // 並べ替えのキーの
 const csv = toCsv(rows); // CSV は consumer が組み立てる（列見出し・書式は consumer が知っている）
 ```
 
-- 返す形は `setData` の行と同じ（`setData({ rows: grid.getRows() })` で同じ表）。数値は桁区切りなしの正準形・日付は `YYYY-MM-DD`
+- 返す形は `setData` の行と同じで、行 ID とセルの値は `setData({ rows: grid.getRows() })` で元に戻る。数値は桁区切り・指数表記の無い
+  十進・日付は `YYYY-MM-DD`。**行データの `readOnlyColumns`・`cellStatus`・`cellBackgrounds` は含まない**（`setData` に戻すときは
+  consumer がそれらを足す。足さないと単独モードの `setData` はそれらを消す）
+- 共同編集モードでサーバーの初回の状態を受け取る前は `[]`（一部の行だけを返さない）
 - 値は自分の未確定の変更を含む今の値。編集中のセルの下書きは含めない。同期で返すので `setData` の直後に読めば新しい行
 - 180 列 × 数万行を全部読むと重い（全部のセルの文字列を作る）。必要な列だけを `columnIds` で読む
 

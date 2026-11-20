@@ -67,7 +67,35 @@ export interface FlushResult {
   dirty: Record<DirtyKind, boolean>;
 }
 
-/** CellScalar を描画文字列へ変換する（blank=''・number は文字列化して数値右寄せ判定に載せる）。 */
+/**
+ * 数値を指数表記の無い十進の文字列へ（DD-070-5・Codex P2）。`String(n)` は 1e-7・1e+21 のような指数表記を返すが、入力の型変換
+ * （parseCellInput）は指数表記を数値として受けないため、getRows・cell-commit の値を setData に戻すと文字列に変わってしまう。
+ * `String(n)` の桁（最短で元の値に戻る桁）の小数点を動かすだけなので、値は変わらない（Number(結果) === n）。
+ */
+export function numberToPlainString(n: number): string {
+  const text = String(n);
+  const e = text.indexOf('e');
+  if (e < 0) {
+    return text;
+  }
+  const negative = text.startsWith('-');
+  const mantissa = text.slice(negative ? 1 : 0, e);
+  const exponent = Number(text.slice(e + 1));
+  const dot = mantissa.indexOf('.');
+  const digits = dot < 0 ? mantissa : mantissa.slice(0, dot) + mantissa.slice(dot + 1);
+  const pointAt = (dot < 0 ? mantissa.length : dot) + exponent; // 新しい小数点の位置（digits の先頭から）
+  let body: string;
+  if (pointAt <= 0) {
+    body = `0.${'0'.repeat(-pointAt)}${digits}`;
+  } else if (pointAt >= digits.length) {
+    body = digits + '0'.repeat(pointAt - digits.length);
+  } else {
+    body = `${digits.slice(0, pointAt)}.${digits.slice(pointAt)}`;
+  }
+  return negative ? `-${body}` : body;
+}
+
+/** CellScalar を描画文字列へ変換する（blank=''・number は指数表記の無い十進で文字列化して数値右寄せ判定に載せる）。 */
 export function cellScalarToDisplay(value: CellScalar): string {
   switch (value.kind) {
     case 'blank':
@@ -75,7 +103,7 @@ export function cellScalarToDisplay(value: CellScalar): string {
     case 'string':
       return value.value;
     case 'number':
-      return String(value.value);
+      return numberToPlainString(value.value);
     case 'date':
       // LocalDate は正準文字列（YYYY-MM-DD）をそのまま表示する（表示整形は R-18 で別途）。
       return value.value;
