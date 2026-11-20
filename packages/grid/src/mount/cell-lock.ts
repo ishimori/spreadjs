@@ -167,7 +167,9 @@ export function createCellLock(deps: CellLockDeps): CellLock {
       return;
     }
     readOnlyRowsChecked = true;
-    const unknown = [...readOnlyRowSet].filter((rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0);
+    const unknown = [...readOnlyRowSet].filter(
+      (rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0 && !backend.view.isRowHiddenByView(createRowId(rowId)),
+    );
     if (unknown.length > 0) {
       diag.emit(
         'warn',

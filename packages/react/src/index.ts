@@ -225,6 +225,10 @@ export interface NanairoSheetViewHandle {
   presences(): readonly GridPresenceUser[];
   /** 今の選択（grid GridInstance.selection 直結・DD-070-2）。未 mount 時は両方 null（warn しない）。 */
   selection(): GridSelection;
+  /** 見せる行と並び（grid GridInstance.setRowView 直結・DD-070-8）。mount 前は無視＋warn。 */
+  setRowView(rowIds: readonly string[] | null): void;
+  /** 今見せている行（grid GridInstance.visibleRowIds 直結・DD-070-8）。未 mount 時は []（warn しない）。 */
+  visibleRowIds(): readonly string[];
   /** 表のデータを読む（grid GridInstance.getRows 直結・DD-070-5）。未 mount 時は []（warn しない）。 */
   getRows(options?: GridReadRowsOptions): readonly GridRowData[];
   /** 自分の未確定の操作の数（grid GridInstance.pendingCount 直結・DD-056 H12）。未 mount 時は 0（warn しない）。 */
@@ -617,6 +621,17 @@ function NanairoSheetViewImpl(
       // DD-070-2: 読み取り系（未 mount でも warn しない）。
       selection(): GridSelection {
         return instanceRef.current?.selection() ?? { activeCell: null, range: null };
+      },
+      setRowView(rowIds: readonly string[] | null): void {
+        const instance = instanceRef.current;
+        if (instance === null) {
+          warnFacade(propsRef.current, 'handle-before-mount', 'setRowView を mount 前に呼びました（無視）。');
+          return;
+        }
+        instance.setRowView(rowIds); // DD-070-8
+      },
+      visibleRowIds(): readonly string[] {
+        return instanceRef.current?.visibleRowIds() ?? [];
       },
       // DD-070-5: 読み取り系（未 mount でも warn しない）。
       getRows(options?: GridReadRowsOptions): readonly GridRowData[] {

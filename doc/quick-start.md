@@ -699,6 +699,32 @@ grid.subscribe((event) => {
 - `setHiddenColumns([])` で全部見せる（元の幅に戻る）。保存する列幅（`layout` の `columnWidths`）に 0 は入らない。React は prop の値
   （参照）が変わったら setter を呼ぶ（memo 化して渡す）
 
+### 見せる行と並び（`setRowView`・`visibleRowIds`・DD-070-8）
+
+表を作り直さずに並べ替える・絞り込む（view-local）。比べ方・条件は consumer が持ち、`getRows` で読んだ値から行 ID の並びを作って渡す。
+
+```ts
+// 並べ替え: 全部の行を並べ替えて渡す。
+const keys = grid.getRows({ columnIds: ['price'] });
+const byPrice = [...keys].sort((a, b) => Number(a.cells.price ?? 0) - Number(b.cells.price ?? 0)).map((r) => r.rowId);
+grid.setRowView(byPrice);
+grid.setColumnHeaderMarks({ price: { sort: 'asc' } });
+// 絞り込み: 残す行だけ渡す（並べ替えと重ねるなら、並べ替えた並びから残す行を選ぶ）。
+grid.setRowView(byPrice.filter((id) => keep.has(id)));
+// 解除: 文書の並びへ戻す（全部見せる）。
+grid.setRowView(null);
+// CSV を「見えているとおり」に作る。
+const visible = grid.visibleRowIds();
+const rows = grid.getRows({ rowIds: visible }); // getRows は文書の並びで返すので visible の順に並べ直す
+```
+
+- 一度きりの並び（Excel と同じ）: 値を変えても並び直さない・条件に合わなくなっても隠さない。並び直すときは consumer がもう一度呼ぶ
+- 呼んだ後にできた行（行の挿入・`setRows` の新しい行）は、文書の並びで一つ前の見えている行のすぐ後に出る。`setData` で同じ行 ID を
+  入れ直したら並びは残る。新しい行 ID で入れ直したら全部見える（文書の並び）
+- 範囲の操作（コピー・切り取り・範囲の消去・貼り付け・Ctrl+D）は見えている行だけ。隠した行の値は文書に残る（`getRows` で読める）
+- 固定行は見せる並びの先頭の n 行。行をまたぐ結合は並びが変わると張れなくなるので、並べ替え・絞り込みと一緒に使わない
+- `scrollToRow`・`setActiveCell` で隠した行を指したら何もしない（診断 info `row-hidden`）
+
 ### 表のデータを読む（`getRows`・DD-070-5）
 
 画面に出ている表の今のデータを読む（両モード共通）。共同編集モードでは他の参加者の確定も含む。

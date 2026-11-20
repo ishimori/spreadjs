@@ -832,6 +832,19 @@ export interface GridInstance {
    * （`hidden-columns-invalid`）、配列でなければ何も変えない。保存する列幅（`layout` の `columnWidths`）には 0 を入れない。
    */
   setHiddenColumns(columnIds: readonly string[]): void;
+  /**
+   * 見せる行と並びを置き換える（Experimental 0.x・DD-070-8・view-local・開き直さない）。`rowIds` は見せる行を見せる順（並べ替えは
+   * 全部の行を並べ替えて渡す・絞り込みは残す行だけ渡す）、`null` で文書の並びに戻す（全部見せる）。並べ替え・絞り込みの計算は
+   * consumer が行う（`getRows` で値を読む）。一度きりの並び（Excel と同じ）: 値を変えても並び直さない。
+   * - 呼んだ時点にあった行で渡さなかった行は隠す。呼んだ後にできた行は、文書の並びで一つ前の見えている行のすぐ後に見せる
+   * - 範囲の操作（選択・コピー・切り取り・範囲の消去・貼り付け・Ctrl+D）は見えている行だけ。隠した行の値は文書に残る（`getRows` で読める）
+   * - 選択は行 ID を追う（選択中の行を隠したら近くの見えている行へ）。固定行は見せる並びの先頭の n 行。行をまたぐ結合は張れなくなる
+   * - 編集中に呼んだら編集中のセルを確定してから変える。IME の変換中なら変換が終わってから
+   * - **同期 throw しない**: 配列でも null でもなければ何も変えずに診断 warn（`row-view-invalid`）。文書に無い行 ID は無視（warn）
+   */
+  setRowView(rowIds: readonly string[] | null): void;
+  /** 今見せている行を見せる順に返す（Experimental 0.x・DD-070-8。CSV を「見えているとおり」に作る材料）。boot 前・destroy 後は []。 */
+  visibleRowIds(): readonly string[];
   /** 列のまとまりの開閉の印を丸ごと置き換える（Experimental 0.x・DD-070-6・両モード・view-local）。`{}` で全部消す。 */
   setColumnGroupMarks(marks: Readonly<Record<string, GridColumnGroupMark>>): void;
   /**

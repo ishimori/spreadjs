@@ -164,7 +164,9 @@ export function createMountConfig(deps: MountConfigDeps): MountConfig {
         return;
       }
       rowBackgroundsChecked = true;
-      const unknown = [...rowBackgroundRowSet].filter((rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0);
+      const unknown = [...rowBackgroundRowSet].filter(
+        (rowId) => backend.view.rowIndexOf(createRowId(rowId)) < 0 && !backend.view.isRowHiddenByView(createRowId(rowId)),
+      );
       if (unknown.length > 0) {
         diag.emit(
           'warn',
@@ -178,7 +180,9 @@ export function createMountConfig(deps: MountConfigDeps): MountConfig {
       const borders = compiledBorders;
       if (!rowBordersChecked && borders !== undefined && sync !== undefined) {
         rowBordersChecked = true;
-        const unknown = borders.rowIds.filter((id) => sync.view.rowIndexOf(createRowId(id)) === -1);
+        const unknown = borders.rowIds.filter(
+          (id) => sync.view.rowIndexOf(createRowId(id)) === -1 && !sync.view.isRowHiddenByView(createRowId(id)),
+        );
         if (unknown.length > 0) diag.emit('warn', 'row-border-unknown', `rowBorders: 未知の行 ${unknown.join(', ')} → 到着後に適用`);
       }
     },

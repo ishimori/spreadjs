@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { applyOperation, createDocument } from '@nanairo-sheet/core';
 import type { DocumentOperation, SheetDocument } from '@nanairo-sheet/core';
@@ -470,5 +470,84 @@ describe('DD-070-7 隠した列（幅 0・番号は変えない）', () => {
     expect(view.colAxis.size(0)).toBe(0);
     view.setHiddenColumns([]);
     expect(view.colAxis.size(0)).toBe(90);
+  });
+});
+
+describe('DD-070-8 見せる行と並び（view-local・文書は変えない）', () => {
+  function ids(view: DocumentView): string[] {
+    return Array.from({ length: view.rowAxis.count() }, (_v, i) => String(view.rowAxis.getId(i)));
+  }
+
+  it('渡した順に並び、渡さなかった行は隠す。null で文書の並びへ戻す。文書に無い行 ID の数を返す', () => {
+    const { view, apply, doc } = createDocHolder();
+    apply(insertRows(null, ['r0', 'r1', 'r2', 'r3']));
+    view.markFullRebuild();
+    view.flush();
+    expect(view.setRowView([row('r3'), row('r1'), row('nope')])).toBe(1);
+    expect(view.hasStructuralDirty()).toBe(true);
+    expect(view.flush().structuralRebuilt).toBe(true);
+    expect(ids(view)).toEqual(['r3', 'r1']);
+    expect(view.isRowHiddenByView(row('r0'))).toBe(true);
+    expect(view.isRowHiddenByView(row('r1'))).toBe(false); // 見えている
+    expect(view.isRowHiddenByView(row('nope'))).toBe(false); // 文書に無い
+    expect(doc().rowOrder.map(String)).toEqual(['r0', 'r1', 'r2', 'r3']); // 文書は同じ
+    expect(view.setRowView(null)).toBe(0);
+    view.flush();
+    expect(ids(view)).toEqual(['r0', 'r1', 'r2', 'r3']);
+    expect(view.isRowHiddenByView(row('r0'))).toBe(false); // 指定が無ければ隠れていない
+    expect(view.setRowView(null)).toBe(0);
+    expect(view.hasStructuralDirty()).toBe(false); // 指定が無いまま null なら何もしない
+  });
+
+  it('後からできた行は文書の並びで一つ前の見えている行の後に出る。消した行は抜け、隠れている扱いにもならない', () => {
+    const { view, apply } = createDocHolder();
+    apply(insertRows(null, ['r0', 'r1', 'r2']));
+    view.markFullRebuild();
+    view.flush();
+    view.setRowView([row('r2'), row('r0')]);
+    view.flush();
+    const after = insertRows(row('r0'), ['rNew']);
+    apply(after);
+    view.noteOperation(after);
+    view.flush();
+    expect(ids(view)).toEqual(['r2', 'r0', 'rNew']);
+    const del = { type: 'deleteRows' as const, rowIds: [row('r1'), row('r2')] };
+    apply(del);
+    view.noteOperation(del);
+    view.flush();
+    expect(ids(view)).toEqual(['r0', 'rNew']);
+    expect(view.isRowHiddenByView(row('r1'))).toBe(false); // 消した行は「隠れている」ではない（未知）
+  });
+
+  it('並びだけが変わったときは自動の行高を測り直さず、隠れている行の自動の高さも捨てない', () => {
+    let doc = createDocument(COLS);
+    let revision = 0;
+    const apply = (op: DocumentOperation): void => {
+      revision += 1;
+      doc = applyOperation(doc, op, { revision }).document;
+    };
+    const wrapCache = createTextMetricsCache((text) => text.length * 10);
+    const view = new DocumentView({
+      getDocument: () => doc,
+      rowHeight: 22,
+      colWidth: 60,
+      wrapColumns: ['col-1'],
+      wrapCache,
+      cellFont: 'f',
+      lineHeight: 16,
+    });
+    apply(insertRows(null, ['r0', 'r1']));
+    apply(setCells([{ rowId: row('r0'), columnId: col('col-1'), value: str('abcdefghijkl') }]));
+    view.markFullRebuild();
+    view.flush();
+    expect(view.autoRowHeightRecord()).toEqual({ r0: 58 });
+    view.setRowView([row('r1')]);
+    view.flush();
+    expect(view.autoRowHeightRecord()).toEqual({ r0: 58 }); // 隠れても捨てない
+    const recomputeAll = vi.spyOn(view, 'recomputeAllAutoRowHeights');
+    view.setRowView(null);
+    view.flush();
+    expect(recomputeAll).not.toHaveBeenCalled(); // 並びだけの変化では全件を測り直さない
+    expect(view.rowAxis.size(view.rowIndexOf(row('r0')))).toBe(58);
   });
 });

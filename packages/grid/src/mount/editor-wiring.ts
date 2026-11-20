@@ -26,6 +26,7 @@ import type { EditCommands } from './edit-commands';
 import type { GridEvents } from './events';
 import type { Keyboard } from './keyboard';
 import type { HiddenColumns } from './hidden-columns';
+import type { RowViewSwitch } from './row-view-switch';
 import type { MountMerges } from './merges';
 import type { ReadOnlySwitch } from './readonly-switch';
 import type { SelectWiring } from './select-wiring';
@@ -49,6 +50,8 @@ export interface EditorWiringDeps {
   readonly merges: Pick<MountMerges, 'normalizeActiveCell' | 'current'>;
   /** DD-070-7: 選択中のセルが隠した列に入ったら、動いてきた向きの次の見えている列へ寄せる。 */
   readonly hiddenColumns: Pick<HiddenColumns, 'normalizeActiveCell' | 'scheduleCheck'>;
+  /** DD-070-8: 変換の終わりを待っている見せる並びの指定。 */
+  readonly rowViewSwitch: Pick<RowViewSwitch, 'scheduleCheck'>;
   emit(event: GridEvent): void;
   registry(): ColumnTypeRegistry | undefined;
   appearance(): CompiledAppearance;
@@ -198,6 +201,7 @@ export function createEditorWiring(deps: EditorWiringDeps): EditorWiring {
           // DD-056 H12: 変換の終わり待ちの切り替え・flush の待ち合わせを、編集の変化を受けて macrotask で判定し直す（無ければ無コスト）。
           readonlySwitch.scheduleEditStateCheck();
           deps.hiddenColumns.scheduleCheck(); // DD-070-7: 変換の終わりを待っている隠す列の指定（無ければ無コスト）
+          deps.rowViewSwitch.scheduleCheck(); // DD-070-8: 変換の終わりを待っている見せる並びの指定（無ければ無コスト）
         },
         // keydown の前段裁定（優先順位は mount/keyboard.ts の KEY_HANDLER_ORDER）。
         interceptKeydown: (input) => deps.keyboard.intercept(input),

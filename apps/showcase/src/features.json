@@ -220,6 +220,14 @@
       "meta": "hiddenColumns / setHiddenColumns ／ unit＋実ブラウザーE2E 検証済み"
     },
     {
+      "id": "row-view",
+      "title": "見せる行と並び（並べ替え・絞り込みの反映）",
+      "status": "available",
+      "summary": "表を作り直さずに行を並べ替える・絞り込む（スクロール位置・選択・元に戻すを保つ）。利用側が計算した行の並びを渡すだけで、5 万行でも数十ミリ秒で切り替わります。Excel と同じく一度きりの並びで、並べ替え・絞り込み中も一覧のまま編集でき、範囲の操作（コピー・貼り付け・消去・下方向へのコピー）は見えている行だけに効きます。",
+      "source": "DD-070-8",
+      "meta": "setRowView / visibleRowIds ／ unit＋実ブラウザーE2E 検証済み（単独モード）"
+    },
+    {
       "id": "list-ops",
       "title": "一覧の並べ替え・絞り込み・列の切り替え",
       "status": "planned",

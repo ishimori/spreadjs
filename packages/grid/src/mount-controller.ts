@@ -18,6 +18,7 @@ import { debugRegistry } from './internal';
 import { createCellBackgroundStore } from './cell-background';
 import { createHeaderMarkStore } from './header-marks';
 import { createHiddenColumns } from './mount/hidden-columns';
+import { createRowViewSwitch } from './mount/row-view-switch';
 import { createEditBlocked } from './mount/edit-blocked';
 import { createCellStatusStore } from './cell-status';
 import type {
@@ -369,13 +370,27 @@ export function createGridController(target: GridMountTarget, options: GridMount
     isFirstDataDrawn: () => render.isFirstDataDrawn(),
     isDestroyed: () => destroyed,
     // 命令 API（commands.runOrDefer）と同じく、構造 dirty なら次の rAF を待たずに同期で flush する（再ベースも済ませる）。
-    flushPendingStructure: () => {
-      const sync = lifecycle.backend();
-      if (sync !== undefined && render.isFirstDataDrawn() && sync.view.hasStructuralDirty()) {
-        render.flushStructural(sync.view);
-      }
-    },
+    flushPendingStructure: () => flushPendingStructure(),
     emit,
+  });
+  /** 構造 dirty（setData・行の挿入削除・見せる並び）なら次の rAF を待たずに同期で flush する（再ベースも済ませる）。 */
+  function flushPendingStructure(): void {
+    const sync = lifecycle.backend();
+    if (sync !== undefined && render.isFirstDataDrawn() && sync.view.hasStructuralDirty()) {
+      render.flushStructural(sync.view);
+    }
+  }
+  // DD-070-8: 見せる行と並び（setRowView・visibleRowIds）は mount/row-view-switch.ts。
+  const rowViewSwitch = createRowViewSwitch({
+    diag,
+    isDestroyed: () => destroyed,
+    backend: () => lifecycle.backend(),
+    editor: () => editorWiring.get(),
+    closePopups: () => {
+      select.close();
+      date.close();
+    },
+    flushPendingStructure,
   });
   const { currentTransform, syncSpacer, syncLayout } = render;
   // 命令 API（scrollToRow・scrollToColumn・setActiveCell）と保留キュー（mount/commands.ts）。
@@ -422,6 +437,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     host: stage,
     diag,
     hiddenColumns,
+    rowViewSwitch,
     isStandalone,
     headerHeight,
     wrapColumnStrings,
@@ -561,6 +577,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     editorWiring.attach(backend);
     // DD-070-7（Codex P1）: 結線の前に受けた隠す列を、editor の結線の後に反映する（先頭の列を隠したとき初期の選択を寄せる）。
     hiddenColumns.attach(backend);
+    rowViewSwitch.attach(backend); // DD-070-8: 結線の前に受けた見せる並びを反映する
     syncCellLock(); // DD-035 R4 / DD-036 C3: 初期 activeCell（0,0）のロックを同期
     syncLayout();
     backend.start();
@@ -621,6 +638,12 @@ export function createGridController(target: GridMountTarget, options: GridMount
       }
       headerMarks.setColumnMarks(marks, 'setColumnHeaderMarks');
       lifecycle.backend()?.view.markViewportDirty();
+    },
+    setRowView(rowIds: readonly string[] | null) {
+      rowViewSwitch.set(rowIds); // DD-070-8（不正な値は warn・同期 throw しない）
+    },
+    visibleRowIds(): readonly string[] {
+      return rowViewSwitch.visibleRowIds(); // DD-070-8
     },
     setHiddenColumns(columnIds: readonly string[]) {
       // DD-070-7: 丸ごと置き換え（不正な値・未知の列は捨てて warn・同期 throw しない）。結線前なら覚えて結線の時に反映する。

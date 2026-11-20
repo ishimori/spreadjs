@@ -33,6 +33,8 @@ import {
 import type { ChunkStore, RangeVisitor } from '@nanairo-sheet/render';
 
 import { autoRowHeight } from './auto-row-height';
+import { buildViewRowOrder } from './row-view';
+import type { RowViewSpec } from './row-view';
 import { clampColumnWidth, clampRowHeight } from './resize-interaction';
 
 /** dirty の種別（#5 更新コスト分離のための分類）。 */
@@ -137,6 +139,13 @@ export class DocumentView {
   /** DD-070-7: 列の幅（隠す・見せる）が変わり、scroll の幅（spacer）を合わせ直す必要があるか。flush で下ろす。 */
   private columnLayoutChanged = false;
   /**
+   * DD-070-8: 見せる行と並び（consumer の並べ替え・絞り込み・view-local）。null なら文書の並びで全部見せる。行の Axis はこれと
+   * 文書の並びから組み立てる（row-view.ts）。文書・Operation は変えない。
+   */
+  private rowViewSpec: RowViewSpec | null = null;
+  /** DD-070-8: 見せる並びだけが変わった（文書は同じ）。flush で行の Axis を作り直す（自動の行高は測り直さない）。 */
+  private dirtyRowView = false;
+  /**
    * 自動行高の別レイヤ（DD-012-5 D5）。手動 override（rowHeightOverrides）とは別に保持し、手動があれば手動を優先する。
    * layout イベントには含めない（D7・自動高は環境・フォントで再現される導出値）。
    */
@@ -196,7 +205,7 @@ export class DocumentView {
       overrides: this.combinedColumnOverrides(),
     });
     this.currentRowAxis = createAxis({
-      ids: displayRowOrder(this.getDocument()),
+      ids: this.viewRowIds(this.getDocument()),
       defaultSize: this.rowHeight,
       // 手動 override と自動高を合成して渡す（手動優先・D5）。
       overrides: this.combinedRowOverrides(),
@@ -305,6 +314,52 @@ export class DocumentView {
   /** 折り返し列か（DD-070-7: 隠す・見せるで自動の行高を測り直すかの判定に使う）。 */
   isWrapColumn(columnId: ColumnId): boolean {
     return this.wrapColumnSet.has(columnId);
+  }
+
+  /** DD-070-8: 行の Axis に載せる並び（見せる並びの指定が無ければ文書の並び）。 */
+  private viewRowIds(doc: SheetDocument): readonly RowId[] {
+    return buildViewRowOrder(displayRowOrder(doc), this.rowViewSpec);
+  }
+
+  /**
+   * 見せる行と並びを置き換える（DD-070-8・view-local）。`order` は見せる行を見せる順、null で文書の並びへ戻す。次の flush で
+   * 行の Axis を作り直す（構造の flush＝選択の再ベースも走る）。呼んだ時点の文書の行で渡さなかった行は隠し、後からできた行は
+   * 文書の並びで一つ前の見えている行の後に見せる。戻り値は文書に無い（削除済みを含む）行 ID の数（呼び出し側が warn する）。
+   */
+  setRowView(order: readonly RowId[] | null): number {
+    if (order === null) {
+      if (this.rowViewSpec === null) {
+        return 0;
+      }
+      this.rowViewSpec = null;
+      this.dirtyRowView = true;
+      return 0;
+    }
+    const base = displayRowOrder(this.getDocument());
+    const known = new Set(base);
+    let unknown = 0;
+    for (const id of order) {
+      if (!known.has(id)) {
+        unknown += 1;
+      }
+    }
+    this.rowViewSpec = { order: [...order], known };
+    this.dirtyRowView = true;
+    return unknown;
+  }
+
+  /** 見せる並びの指定があるか（DD-070-8）。 */
+  hasRowView(): boolean {
+    return this.rowViewSpec !== null;
+  }
+
+  /** 文書にある（削除されていない）のに、見せる並びの外で隠れている行か（DD-070-8。未知の行と分けて扱う）。 */
+  isRowHiddenByView(rowId: RowId): boolean {
+    if (this.rowViewSpec === null || this.currentRowAxis.hasId(rowId)) {
+      return false;
+    }
+    const meta = this.getDocument().rowMeta.get(rowId);
+    return meta !== undefined && !meta.tombstone;
   }
 
   /** 隠した列か（DD-070-7）。 */
@@ -466,6 +521,24 @@ export class DocumentView {
    * 全行の自動行高を一括計算する（D5 トリガー①bootstrap／③列幅変更／DPR・font 変更）。
    * 空行は文書スロット有無で早期スキップし O(非空行) に抑える。所要を lastAutoHeightBatchMs へ記録（D6 予算判定）。
    */
+  /** DD-070-8: 行の Axis にあって自動の行高をまだ持たない行だけ測る（並びだけが変わったとき）。 */
+  private measureMissingAutoRowHeights(): void {
+    if (!this.wrapEnabled) {
+      return;
+    }
+    const axis = this.currentRowAxis;
+    const missing: RowId[] = [];
+    for (let i = 0; i < axis.count(); i += 1) {
+      const rowId = axis.getId(i);
+      if (!this.rowAutoHeights.has(rowId)) {
+        missing.push(rowId);
+      }
+    }
+    if (missing.length > 0) {
+      this.recomputeAutoRowHeightsForRows(missing);
+    }
+  }
+
   recomputeAllAutoRowHeights(): void {
     if (!this.wrapEnabled) {
       return;
@@ -476,8 +549,9 @@ export class DocumentView {
     const count = axis.count();
     let changed = false;
     // 削除・bootstrap 差し替えで軸から消えた行の自動高を掃除する（stale 導出状態を溜めない・Codex P2）。
+    // DD-070-8: 見せる並びで隠れているだけの行（文書にある行）は掃除しない（見せたときに測り直さずに済む）。
     for (const rowId of [...this.rowAutoHeights.keys()]) {
-      if (axis.getIndex(rowId) < 0) {
+      if (axis.getIndex(rowId) < 0 && !this.isRowHiddenByView(rowId)) {
         this.rowAutoHeights.delete(rowId);
         changed = true;
       }
@@ -585,9 +659,9 @@ export class DocumentView {
     }
   }
 
-  /** 構造 dirty が立っているか（scroll anchor 補正を bracket する main が flush 前に覗く）。 */
+  /** 構造 dirty が立っているか（scroll anchor 補正を bracket する main が flush 前に覗く）。DD-070-8: 見せる並びの変化も含む。 */
   hasStructuralDirty(): boolean {
-    return this.dirtyStructure;
+    return this.dirtyStructure || this.dirtyRowView;
   }
 
   /** いずれかの dirty が立っているか。 */
@@ -606,12 +680,13 @@ export class DocumentView {
       viewport: this.dirtyViewport,
     };
     let structuralRebuilt = false;
-    if (this.dirtyStructure) {
+    const viewOnly = this.dirtyRowView && !this.dirtyStructure;
+    if (this.dirtyStructure || this.dirtyRowView) {
       const doc = this.getDocument();
       // override を渡して再構築する。渡さないとリサイズ済みの列幅・行高が構造Op で失われる（DD-012-4 AC4）。
-      // 手動 override と自動高を合成する（手動優先・DD-012-5 D5）。
+      // 手動 override と自動高を合成する（手動優先・DD-012-5 D5）。DD-070-8: 見せる並びで組み立てる。
       this.currentRowAxis = createAxis({
-        ids: displayRowOrder(doc),
+        ids: this.viewRowIds(doc),
         defaultSize: this.rowHeight,
         overrides: this.combinedRowOverrides(),
       });
@@ -625,9 +700,16 @@ export class DocumentView {
       }
       this.structuralRebuilds += 1;
       structuralRebuilt = true;
-      // ① bootstrap 直後／再接続の全再構築で自動行高を一括計算する（D5 トリガー①・D6 予算計測）。
-      this.recomputeAllAutoRowHeights();
+      if (viewOnly) {
+        // DD-070-8: 並びだけが変わった（文書は同じ）。自動の行高は行 ID で持つので測り直さない。まだ測っていない行（前は隠れて
+        // いた行）だけ測る。
+        this.measureMissingAutoRowHeights();
+      } else {
+        // ① bootstrap 直後／再接続の全再構築で自動行高を一括計算する（D5 トリガー①・D6 予算計測）。
+        this.recomputeAllAutoRowHeights();
+      }
     }
+    this.dirtyRowView = false;
     const needsRedraw = this.dirtyCell || this.dirtyStructure || this.dirtyViewport;
     const columnLayoutChanged = this.columnLayoutChanged;
     this.dirtyCell = false;

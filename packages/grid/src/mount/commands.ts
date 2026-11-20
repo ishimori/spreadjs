@@ -117,6 +117,10 @@ export function createCommands(deps: CommandsDeps): MountCommands {
       return;
     }
     const row = backend.view.rowIndexOf(createRowId(rowId));
+    if (row < 0 && backend.view.isRowHiddenByView(createRowId(rowId))) {
+      diag.emit('info', 'row-hidden', `scrollToRow: 見せる並び（setRowView）で隠れている行 rowId=${rowId} → 何もしない`);
+      return;
+    }
     if (row < 0) {
       diag.emit('warn', 'scroll-row-unknown', `scrollToRow: 未知の行 rowId=${rowId}（tombstone/未注入）→ 無視`);
       return;
@@ -160,6 +164,10 @@ export function createCommands(deps: CommandsDeps): MountCommands {
     }
     const row = backend.view.rowIndexOf(createRowId(rowId));
     const col = backend.view.colIndexOf(createColumnId(columnId));
+    if (row < 0 && col >= 0 && backend.view.isRowHiddenByView(createRowId(rowId))) {
+      diag.emit('info', 'row-hidden', `setActiveCell: 見せる並び（setRowView）で隠れている行 rowId=${rowId} → 何もしない`);
+      return;
+    }
     if (row < 0 || col < 0) {
       diag.emit(
         'warn',
