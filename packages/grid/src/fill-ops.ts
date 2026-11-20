@@ -2,11 +2,13 @@
 // キーの判定（DOM 非依存の純粋関数）。書き込みは呼び出し側が貼り付けと同じ経路（読むだけのセルを飛ばす・validateCell・
 // Undo・OCC）へ流す。
 //
-// 写す値は「セルの表示文字列を貼り付けと同じ型変換に通したもの」＝コピーして貼り付けたのと同じ結果（cell-commit の値と
-// setData が round-trip するのと同じ規約）。写す先の値が同じセルは書かない。
+// 写す値は「コピーと同じ規則で読んだ表示文字列（結合範囲の左上以外は空）を、写す先の列の設定で貼り付けと同じ型変換に
+// 通したもの」＝コピーして貼り付けたのと同じ結果。写す先の今の値（自分の未確定の変更を含む view）と型・値が同じセルは書かない
+// （Codex P1・P2）。
 
 import { SETCELLS_MAX_CELLS, parseCellInput } from '@nanairo-sheet/core';
-import type { SetCellsChange, SetCellsOperation } from '@nanairo-sheet/core';
+import type { CellScalar, SetCellsChange, SetCellsOperation } from '@nanairo-sheet/core';
+import type { ColumnId, RowId } from '@nanairo-sheet/types';
 import type { EditPhase } from '@nanairo-sheet/ime';
 import type { CellRange } from '@nanairo-sheet/selection';
 
@@ -63,11 +65,24 @@ export type FillOutcome =
   /** 写す先が無い・値が変わるセルが無い → 変更なし。 */
   | { readonly kind: 'noop' };
 
-/** 選択範囲の Ctrl+D／Ctrl+R を原子的 SetCells へ（生成のみ。submit は呼び出し側）。 */
+/** 2 つの値が同じか（型と値）。 */
+function sameScalar(a: CellScalar, b: CellScalar): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  return a.kind === 'blank' || (b.kind !== 'blank' && a.value === b.value);
+}
+
+/**
+ * 選択範囲の Ctrl+D／Ctrl+R を原子的 SetCells へ（生成のみ。submit は呼び出し側）。
+ * @param port 写す元を読むポート。**コピーと同じ規則**（結合範囲の左上以外は空）の displayText を渡す（Codex P1）。
+ * @param targetValue 写す先の今の値（自分の未確定の変更を含む view）。型と値が同じセルは書かない（Codex P2）。
+ */
 export function buildFill(
   port: RangeDocumentPort,
   range: CellRange,
   direction: FillDirection,
+  targetValue: (rowId: RowId, columnId: ColumnId) => CellScalar,
   /** 文字列として保つ列か（型変換をスキップ・貼り付けと同じ）。 */
   isStringColumn?: (columnId: string) => boolean,
 ): FillOutcome {
@@ -98,16 +113,14 @@ export function buildFill(
       if (sourceRowId === undefined || sourceColumnId === undefined) {
         continue;
       }
-      const text = port.displayText(sourceRowId, sourceColumnId);
-      if (port.displayText(rowId, columnId) === text) {
-        continue; // 同じ値は書かない（無駄な Undo・cell-commit を作らない）
-      }
-      changes.push({
-        rowId,
-        columnId,
-        beforeRevision: captureEditStartRevision(committed, rowId, columnId),
-        value: parseCellInput(text, { forceString: isStringColumn?.(String(columnId)) === true }),
+      // 写す先の列の設定で型変換する（stringColumns の "007" を数値の列へ写せば 7、その逆は "7"＝貼り付けと同じ）。
+      const value = parseCellInput(port.displayText(sourceRowId, sourceColumnId), {
+        forceString: isStringColumn?.(String(columnId)) === true,
       });
+      if (sameScalar(targetValue(rowId, columnId), value)) {
+        continue; // 型も値も同じなら書かない（無駄な Undo・cell-commit を作らない）
+      }
+      changes.push({ rowId, columnId, beforeRevision: captureEditStartRevision(committed, rowId, columnId), value });
     }
   }
   if (changes.length === 0) {

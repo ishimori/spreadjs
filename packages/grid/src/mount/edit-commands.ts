@@ -1,7 +1,7 @@
 // 編集の命令（範囲クリア・clipboard の copy/cut/paste・Undo/Redo の補償・実行前拒否の通知）。DD-065 区画⑦の後半。
 // 生成は mount 時、backend への結線は attach で行う。結線前の操作は何もしない（従来は attachBackendRendering の中だけにあった）。
 
-import { parseClipboardText, validateOperation } from '@nanairo-sheet/core';
+import { getCell, parseClipboardText, validateOperation } from '@nanairo-sheet/core';
 import type { SetCellsOperation } from '@nanairo-sheet/core';
 import type { MergeIndex } from '@nanairo-sheet/selection';
 
@@ -309,8 +309,20 @@ export function createEditCommands(deps: EditCommandsDeps): EditCommands {
     if (editor === undefined) {
       return;
     }
+    if (copyPort === undefined) {
+      return;
+    }
+    deps.closePopups(); // 開いている候補欄・カレンダーの下で値を変えない（表示が古くなる）
     const range = selectionCtrl.selectedRange(editor.session.getActiveCell());
-    const outcome = buildFill(docPort, range, direction, (columnId) => deps.stringColumnStrings.has(columnId));
+    // Codex P1: 写す元はコピーと同じ規則（結合範囲の左上以外は空）で読む。P2: 同じ値かは写す先の view の型つきの値と比べる。
+    const sync = backend;
+    const outcome = buildFill(
+      copyPort,
+      range,
+      direction,
+      (rowId, columnId) => getCell(sync.session.viewDocument, rowId, columnId)?.value ?? { kind: 'blank' },
+      (columnId) => deps.stringColumnStrings.has(columnId),
+    );
     switch (outcome.kind) {
       case 'noop':
         return;

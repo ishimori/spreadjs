@@ -65,13 +65,23 @@ function parseColumnTypes(raw: string | null): Record<string, GridColumnType> | 
     }
     const columnId = spec.slice(0, colonAt);
     let optionsPart = spec.slice(colonAt + 1);
+    // DD-070-3: 列末尾 `!search` で検索つきの候補欄（searchable）。
+    const searchable = optionsPart.endsWith('!search');
+    if (searchable) {
+      optionsPart = optionsPart.slice(0, -'!search'.length);
+    }
     const allowFreeText = optionsPart.endsWith('!free');
     if (allowFreeText) {
       optionsPart = optionsPart.slice(0, -'!free'.length);
     }
     const options = optionsPart.split('|').filter((o) => o !== '');
     if (columnId !== '' && options.length > 0) {
-      columnTypes[columnId] = allowFreeText ? { type: 'select', options, allowFreeText: true } : { type: 'select', options };
+      columnTypes[columnId] = {
+        type: 'select',
+        options,
+        ...(allowFreeText ? { allowFreeText: true } : {}),
+        ...(searchable ? { searchable: true } : {}),
+      };
     }
   }
   return Object.keys(columnTypes).length > 0 ? columnTypes : undefined;

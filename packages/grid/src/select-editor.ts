@@ -380,6 +380,12 @@ export function createSelectDropdown(config: SelectDropdownConfig): SelectDropdo
   search.addEventListener('keydown', (event) => {
     event.stopPropagation();
     if (composing || compositionSettling || event.isComposing || event.keyCode === 229) return;
+    // DD-070-3（Codex P2）: グリッドの Ctrl+D・Ctrl+R は検索欄に焦点がある間も、ブラウザーの既定（ブックマーク・再読み込み）だけを
+    // 止める（写さない・検索文字は変えない。常駐 textarea の段 fill には keydown が届かないため、ここで止める）。
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && (event.key === 'd' || event.key === 'D' || event.key === 'r' || event.key === 'R')) {
+      event.preventDefault();
+      return;
+    }
     switch (event.key) {
       case 'ArrowDown': event.preventDefault(); controller.highlightNext(); paintHighlight(); break;
       case 'ArrowUp': event.preventDefault(); controller.highlightPrev(); paintHighlight(); break;

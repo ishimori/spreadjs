@@ -1,7 +1,8 @@
 // DD-070-3: Ctrl+D・Ctrl+R の写す元と先の決定・SetCells の生成・キーの判定（純粋関数）。
 import { describe, expect, it } from 'vitest';
 
-import { SETCELLS_MAX_CELLS, createDocument } from '@nanairo-sheet/core';
+import { SETCELLS_MAX_CELLS, createDocument, parseCellInput } from '@nanairo-sheet/core';
+import type { CellScalar } from '@nanairo-sheet/core';
 import { createColumnId, createRowId } from '@nanairo-sheet/types';
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
 
@@ -21,6 +22,13 @@ function portOf(grid: string[][]): RangeDocumentPort {
 }
 
 const range = (rowStart: number, rowEnd: number, colStart: number, colEnd: number) => ({ rowStart, rowEnd, colStart, colEnd });
+
+/** 写す先の今の値（表の文字列を既定の型変換で解釈したもの。上書きは "r1:c2" → 値）。 */
+function valuesOf(grid: string[][], overrides: Record<string, CellScalar> = {}) {
+  return (rowId: RowId, columnId: ColumnId): CellScalar =>
+    overrides[`${String(rowId)}:${String(columnId)}`] ??
+    parseCellInput(grid[Number(String(rowId).slice(1))]?.[Number(String(columnId).slice(1))] ?? '');
+}
 
 describe('DD-070-3 fillRanges', () => {
   it('down: 2 行以上は一番上の行を残りの行へ。1 行は上の行から範囲へ。先頭の行の 1 行は写す元が無い', () => {
@@ -48,7 +56,7 @@ describe('DD-070-3 buildFill', () => {
   ];
 
   it('down（範囲）: 列ごとに一番上の値を写し、同じ値のセルは書かない。空を写すと空にする', () => {
-    const outcome = buildFill(portOf(grid), range(0, 3, 0, 3), 'down');
+    const outcome = buildFill(portOf(grid), range(0, 3, 0, 3), 'down', valuesOf(grid));
     expect(outcome.kind).toBe('submit');
     if (outcome.kind !== 'submit') return;
     const changes = outcome.operation.changes.map((c) => [String(c.rowId), String(c.columnId), c.value]);
@@ -64,23 +72,45 @@ describe('DD-070-3 buildFill', () => {
   });
 
   it('down（1 セル）: 上のセルの値を写す', () => {
-    const outcome = buildFill(portOf(grid), range(1, 2, 1, 2), 'down');
+    const outcome = buildFill(portOf(grid), range(1, 2, 1, 2), 'down', valuesOf(grid));
     expect(outcome).toMatchObject({ kind: 'submit', operation: { changes: [{ value: { kind: 'number', value: 1 } }] } });
   });
 
   it('right（1 セル）: 左のセルの値を写す。文字列として保つ列は型変換しない', () => {
-    const outcome = buildFill(portOf(grid), range(0, 1, 2, 3), 'right', (columnId) => columnId === 'c2');
+    const outcome = buildFill(portOf(grid), range(0, 1, 2, 3), 'right', valuesOf(grid), (columnId) => columnId === 'c2');
     expect(outcome).toMatchObject({ kind: 'submit', operation: { changes: [{ columnId: 'c2', value: { kind: 'string', value: '1' } }] } });
   });
 
   it('変わるセルが無い・写す元が無いなら noop', () => {
-    expect(buildFill(portOf([['1'], ['1']]), range(0, 2, 0, 1), 'down')).toEqual({ kind: 'noop' });
-    expect(buildFill(portOf(grid), range(0, 1, 0, 1), 'down')).toEqual({ kind: 'noop' });
+    expect(buildFill(portOf([['1'], ['1']]), range(0, 2, 0, 1), 'down', valuesOf([['1'], ['1']]))).toEqual({ kind: 'noop' });
+    expect(buildFill(portOf(grid), range(0, 1, 0, 1), 'down', valuesOf(grid))).toEqual({ kind: 'noop' });
   });
 
   it('写す先のセル数が上限を超えたら走査せずに拒否する', () => {
     const huge = range(0, SETCELLS_MAX_CELLS + 2, 0, 1);
-    expect(buildFill(portOf(grid), huge, 'down')).toEqual({ kind: 'too-large', cellCount: SETCELLS_MAX_CELLS + 1, limit: SETCELLS_MAX_CELLS });
+    expect(buildFill(portOf(grid), huge, 'down', valuesOf(grid))).toEqual({ kind: 'too-large', cellCount: SETCELLS_MAX_CELLS + 1, limit: SETCELLS_MAX_CELLS });
+  });
+});
+
+describe('DD-070-3 buildFill（Codex の指摘）', () => {
+  it('P2: 同じ値かは型つきの値で比べる。stringColumns の "007" を数値の 7 の列へ写すのは同じ値なので書かない', () => {
+    const grid = [['007', '7']];
+    const outcome = buildFill(portOf(grid), range(0, 1, 0, 2), 'right', valuesOf(grid, { 'r0:c1': { kind: 'number', value: 7 } }));
+    expect(outcome).toEqual({ kind: 'noop' });
+  });
+
+  it('P2: 表示が同じでも型が違えば書く（文字列の "7" が残る列へ数値の 7 を写す）', () => {
+    const grid = [['7', '7']];
+    const outcome = buildFill(portOf(grid), range(0, 1, 0, 2), 'right', valuesOf(grid, { 'r0:c1': { kind: 'string', value: '7' } }));
+    expect(outcome).toMatchObject({ kind: 'submit', operation: { changes: [{ columnId: 'c1', value: { kind: 'number', value: 7 } }] } });
+  });
+
+  it('P1: 写す元はポートの displayText（コピーの規則＝結合の左上以外は空）で読む', () => {
+    // 表には B1（r0:c1）に値があるが、コピーの規則のポートでは空（結合の左上以外）として読ませる。
+    const grid = [['A', 'hidden'], ['', 'x']];
+    const copyRule = { ...portOf(grid), displayText: (rowId: RowId, columnId: ColumnId) => (String(rowId) === 'r0' && String(columnId) === 'c1' ? '' : portOf(grid).displayText(rowId, columnId)) };
+    const outcome = buildFill(copyRule, range(0, 2, 0, 2), 'down', valuesOf(grid));
+    expect(outcome).toMatchObject({ kind: 'submit', operation: { changes: [{ columnId: 'c0', value: { kind: 'string', value: 'A' } }, { columnId: 'c1', value: { kind: 'blank' } }] } });
   });
 });
 

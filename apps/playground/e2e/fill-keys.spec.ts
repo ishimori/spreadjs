@@ -10,6 +10,10 @@ async function open(page: Page, query = ''): Promise<void> {
   await sa.waitReady(page);
 }
 
+async function selectionRange(page: Page): Promise<unknown> {
+  return page.evaluate(() => (window as Window & { __integrationTestApi?: { selectionRange(): unknown } }).__integrationTestApi!.selectionRange());
+}
+
 async function commits(page: Page): Promise<sa.StandaloneEvent[]> {
   return (await sa.events(page)).filter((e) => e.type === 'cell-commit');
 }
@@ -29,8 +33,9 @@ test('AC1・AC2: 範囲の Ctrl+D は一番上の値を下の行へ写し（1 �
     const c = await commits(page);
     expect(c).toHaveLength(1);
     expect(c[0]!.changes!.map((x) => `${x.rowId}:${x.value}`)).toEqual(['r2:行1', 'r3:行1']);
-    // 選択は動かない（範囲のまま）。
+    // 選択は動かない（範囲のまま・矩形も同じ）。
     expect(await sa.activeCell(page)).toEqual({ row: 1, col: 0 });
+    expect(await selectionRange(page)).toEqual({ rowStart: 1, rowEnd: 4, colStart: 0, colEnd: 1 });
 
     await page.keyboard.press('Control+z');
     await expect.poll(() => sa.displayCell(page, 'r3', 'col-a')).toBe('行3');
@@ -90,13 +95,18 @@ test('AC2: validateCell が 1 件でも拒否したら全体を書かずに cell
     await open(page, 'validate=col-c:ng');
     await sa.composeCommitAtCell(page, 1, 1, 'NG');
     await expect.poll(() => sa.displayCell(page, 'r1', 'col-b')).toBe('NG');
+    const before = (await commits(page)).length;
+    // col-b〜col-d を選ぶ: col-c は拒否、col-d は検証を通る。1 件でも拒否なら col-d も書かない（部分適用しない）。
     await sa.selectCell(page, 1, 1);
+    await page.keyboard.press('Shift+ArrowRight');
     await page.keyboard.press('Shift+ArrowRight');
     await page.keyboard.press('Control+r');
     await expect
       .poll(async () => (await sa.events(page)).filter((e) => e.type === 'cell-invalid').map((e) => (e as unknown as { source: string }).source))
       .toEqual(['fill']);
     expect(await sa.displayCell(page, 'r1', 'col-c')).toBe('');
+    expect(await sa.displayCell(page, 'r1', 'col-d')).toBe('');
+    expect((await commits(page)).length).toBe(before);
   } finally {
     await context.close();
   }
@@ -127,6 +137,60 @@ test('AC3: 編集中の Ctrl+D・Ctrl+R は文書を変えず、ブラウザー�
     expect(await page.evaluate(() => (window as Window & { __prevented?: string[] }).__prevented)).toEqual(['d:true', 'r:true']);
     expect(await sa.draft(page)).toBe('行3');
     expect((await commits(page)).length).toBe(before);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P2: 検索つきの候補欄の検索欄で押した Ctrl+D・Ctrl+R も既定を止め、写さず検索文字も変えない', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await open(page, `select=${encodeURIComponent('col-c:受注|失注!search')}`);
+    const before = (await commits(page)).length;
+    await sa.selectCell(page, 2, 2); // 検索つきの列は 1 回のクリックで開き、検索欄に焦点が移る
+    const search = page.locator('input.ns-select-search');
+    await expect(search).toBeFocused();
+    await search.type('受');
+    await page.keyboard.press('Control+d');
+    await page.keyboard.press('Control+r');
+    await page.waitForTimeout(150);
+    expect(await search.inputValue()).toBe('受');
+    expect((await commits(page)).length).toBe(before);
+    // 検索欄の keydown は伝播を止めるので外から既定の止まり方を見られない。検索欄へ直接送って defaultPrevented を確かめる
+    // （headless の Chromium は Ctrl+R で再読み込みしないため、実キーでは確かめられない）。
+    const stopped = await search.evaluate((el) =>
+      ['d', 'r'].map((key) => {
+        const ev = new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true });
+        el.dispatchEvent(ev);
+        return ev.defaultPrevented;
+      }),
+    );
+    expect(stopped).toEqual([true, true]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P1: 結合範囲の左上以外の値（画面に出ていない値）は写さない（コピーと同じく空として写す）', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await open(page, 'frozenrows=0&frozencols=0'); // 固定行・固定列の境界をまたぐ結合は張れない
+    await sa.composeCommitAtCell(page, 1, 1, 'hidden'); // r1・col-b（あとで結合の左上以外になる）
+    await sa.composeCommitAtCell(page, 2, 1, 'z'); // r2・col-b（写す先）
+    await expect.poll(() => sa.displayCell(page, 'r2', 'col-b')).toBe('z');
+    await page.evaluate(() => {
+      const g = (window as Window & { __gridInstance?: { setMergedCells(m: unknown): void } }).__gridInstance!;
+      g.setMergedCells([{ rowId: 'r1', columnId: 'col-a', columnSpan: 2 }]);
+    });
+    await page.waitForTimeout(100);
+    // r2 の col-a〜col-b を選んで Ctrl+D（上の行 r1 から写す）。col-b は結合の左上以外なので空を写す。
+    await sa.selectCell(page, 2, 0);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Control+d');
+    await expect.poll(() => sa.displayCell(page, 'r2', 'col-a')).toBe('行1');
+    expect(await sa.displayCell(page, 'r2', 'col-b')).toBe('');
   } finally {
     await context.close();
   }
