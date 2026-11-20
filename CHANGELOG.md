@@ -6,13 +6,14 @@
 
 - **成熟度**: Stage 1 は **Experimental `0.x`**。Facade（`grid` / `server-hono`）だけが consumer 公開面。長期後方互換は**非保証**。
 - **破壊的変更**: `0.x` では破壊的変更を許すが、**必ず本 CHANGELOG に記録**する（サイレント破壊の禁止）。「破壊的変更」節に列挙する。
-- **バージョン検出**: package 版（現行 `0.1.0-alpha.24`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
+- **バージョン検出**: package 版（現行 `0.1.0-alpha.25`）と API 版（`GRID_API_VERSION` / `SERVER_HONO_API_VERSION` = `0.1.0-experimental`）の
   両方で検出可能にする。**API 版は公開シグネチャの契約版**、**package 版は配布物の版**で、対応を本 CHANGELOG に記録する。
 - **配布**: pack tarball closure 方式（決定事項A・ADR-0015）。`scripts/release/build-release.sh` が 10 tarball＋manifest（版数・sha256・
   生成コミット・channel）を生成する。channel は `alpha`（registry 非経由のため dist-tag 相当を manifest 表記で代替）。
 
 | package 版 | channel | API 版（grid / server-hono） | 備考 |
 |---|---|---|---|
+| `0.1.0-alpha.25` | `alpha` | `0.1.0-experimental` | DD-070-10。入力の確定・貼り付け・Undo・行の操作が表の大きさに比例しなくなった（180 列 × 50,000 行で 1 セルの確定 約 1.6 秒 → 約 3 ms）。公開 API・プロトコルは変わらない |
 | `0.1.0-alpha.24` | `alpha` | `0.1.0-experimental` | DD-070（RM Database の一覧・登録画面）。選択の通知・Ctrl+D／Ctrl+R・数値の列・`getRows`・見出しの印・見せる列の切り替え・見せる行と並び（並べ替え・絞り込みの反映）。プロトコルの welcome に任意の `bootstrapFollows` |
 | `0.1.0-alpha.23` | `alpha` | `0.1.0-experimental` | DD-069（広島 計画策定 K8・K11）。セルごとの背景色（`cellBackgrounds`・`setCellBackgrounds`）と読むだけのセルへの入力の通知（`edit-blocked`・`cells-skipped`） |
 | `0.1.0-alpha.22` | `alpha` | `0.1.0-experimental` | DD-068。見出しの下端を見出しの文字色の 3px の実線で区切る |
@@ -40,6 +41,10 @@
 | `0.1.0-alpha.0` | `alpha` | `0.1.0-experimental` | 初回 Alpha 配布（DD-017） |
 
 ## [Unreleased]
+
+## [0.1.0-alpha.25] - 2026-11-20
+
+DD-070-10（入力確定を表の大きさに比例させない・RM Database の計測から）。
 
 ### Changed
 
