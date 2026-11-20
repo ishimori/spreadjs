@@ -101,3 +101,48 @@ test('AC3: 2 段の見出しの上の段のクリックで column-group-click（
     await context.close();
   }
 });
+
+test('Codex P1・P2: mount の初期値の印で描かれ（例外にならない）、打ち間違いの列・まとまりは結線の時に捨てて warn する', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(String(error)));
+  try {
+    const marks = encodeURIComponent(JSON.stringify({ 'col-b': { filter: 'active' }, typo: { sort: 'asc' } }));
+    const groupMarks = encodeURIComponent(JSON.stringify({ nope: { collapsed: true } }));
+    await page.goto(`/standalone.html?headermarks=${marks}&groupmarks=${groupMarks}`);
+    await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
+    await sa.waitReady(page);
+    expect(errors).toEqual([]);
+    const header = (await sa.columnHeaderRectAt(page, 1))!;
+    const probe = { x: header.x + header.width - 5 - 14 + 2, y: header.y + header.height / 2 };
+    await expect.poll(() => pixelAt(page, probe.x, probe.y)).toBe('26,115,232');
+    const warnings = await page.evaluate(
+      () => (window as Window & { __standalone?: { diagnostics?: Array<{ code: string; message: string }> } }).__standalone?.diagnostics ?? null,
+    );
+    if (warnings !== null) {
+      expect(warnings.filter((d) => d.code === 'column-header-mark-invalid').length).toBeGreaterThanOrEqual(2);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test('Codex P2: 最終列より右の余白のクリックは header-click・column-group-click を出さない', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    const groups = encodeURIComponent(JSON.stringify([{ caption: 'Last', columnIds: ['col-c', 'col-d'] }]));
+    await open(page, `colgroups=${groups}`);
+    const last = (await sa.columnHeaderRectAt(page, 3))!;
+    const box = (await page.locator('.nsheet-scroller').boundingBox())!;
+    const x = last.x + last.width + 40;
+    expect(x).toBeLessThan(box.width - 20); // 既定の 4 列は表示域を埋めない
+    await clickAt(page, x, last.y + 4); // 上の段の右の余白
+    await clickAt(page, x, last.y + last.height - 4); // 下の段の右の余白
+    await page.waitForTimeout(100);
+    expect((await sa.events(page)).filter((e) => e.type === 'header-click' || e.type === 'column-group-click')).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});

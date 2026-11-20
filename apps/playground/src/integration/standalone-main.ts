@@ -11,6 +11,8 @@ import { validateCellOption } from './validate-options';
 import type {
   GridCellStatusColors,
   GridColumnGroup,
+  GridColumnGroupMark,
+  GridColumnHeaderMark,
   GridMergedCell,
   GridColumnDisplayFormat,
   GridColumnFormatRule,
@@ -337,6 +339,9 @@ const columnTypesWithDate = parseDateColumns(searchParams.get('date'), columnTyp
 // E2E から確かめられるようにする（statuscolors と同じハーネス境界）。
 const mergedCells = parseJsonParam(searchParams.get('merged')) as GridMergedCell[] | undefined;
 const columnGroups = parseJsonParam(searchParams.get('colgroups')) as GridColumnGroup[] | undefined;
+// DD-070-6: 見出しの印の初期値（例 `?headermarks={"col-b":{"filter":"active"}}`・`?groupmarks={"sup":{"collapsed":true}}`）。
+const columnHeaderMarks = parseJsonParam(searchParams.get('headermarks')) as Record<string, GridColumnHeaderMark> | undefined;
+const columnGroupMarks = parseJsonParam(searchParams.get('groupmarks')) as Record<string, GridColumnGroupMark> | undefined;
 
 // 利用側の保存モック（localStorage）。cell-commit を rowId|columnId→value で蓄積し、次回 initialData に混ぜる。
 const SAVE_KEY = 'nsheet:standalone:cells';
@@ -457,6 +462,8 @@ const handle: StandaloneHandle = {
         ...(cellStatusColors !== undefined ? { cellStatusColors } : {}),
         ...(mergedCells !== undefined ? { mergedCells } : {}),
         ...(columnGroups !== undefined ? { columnGroups } : {}),
+        ...(columnHeaderMarks !== undefined ? { columnHeaderMarks } : {}),
+        ...(columnGroupMarks !== undefined ? { columnGroupMarks } : {}),
         ...borderOptions(searchParams),
         ...validateCellOption(searchParams),
         ...(searchParams.has('wrap') ? { wrapColumns: searchParams.get('wrap')!.split(',').filter(Boolean) } : {}),

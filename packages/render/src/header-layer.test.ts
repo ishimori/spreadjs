@@ -8,7 +8,7 @@ import { createColumnId, createRowId, type ColumnId, type RowId } from '@nanairo
 import { createAxis } from './axis';
 import { createBaseLayer, type ColumnGroupBand } from './base-layer';
 import { createChunkStore } from './chunk-store';
-import { columnGroupMarkLayout, columnHeaderMarkLayout, type ColumnGroupMark, type ColumnHeaderMark } from './header-layer';
+import { columnGroupMarkLayout, columnHeaderMarkLayout, columnHeaderMarkWidth, type ColumnGroupMark, type ColumnHeaderMark } from './header-layer';
 import { createViewportTransform } from './viewport';
 
 type Call =
@@ -78,11 +78,12 @@ function draw(options: {
   groups?: ColumnGroupBand;
   groupMarks?: Record<number, ColumnGroupMark>;
   headerHeight?: number;
+  colWidth?: number;
 }): Call[] {
   const { ctx, calls } = createCtxStub();
   const headerHeight = options.headerHeight ?? HEADER_H;
   const rowAxis = createAxis<RowId>({ ids: [createRowId('r0')], defaultSize: 22 });
-  const colAxis = createAxis<ColumnId>({ ids: Array.from({ length: 4 }, (_v, i) => createColumnId(`c${i}`)), defaultSize: COL_W });
+  const colAxis = createAxis<ColumnId>({ ids: Array.from({ length: 4 }, (_v, i) => createColumnId(`c${i}`)), defaultSize: options.colWidth ?? COL_W });
   const captions = options.captions;
   const marks = options.marks;
   const groupMarks = options.groupMarks;
@@ -194,5 +195,41 @@ describe('DD-070-6 見出しの印の描画', () => {
     const sds = texts(calls).find((t) => t.text === 'SDS')!;
     expect(supplier.x).toBeGreaterThan(HEADER_W + COL_W); // 印の分だけ右へ
     expect(sds.x).toBe(HEADER_W + COL_W * 3); // 印の無いまとまりは従来どおり中央
+  });
+});
+
+describe('DD-070-6 見出しの印（Codex の指摘）', () => {
+  it('P2: 狭い列では余白の内側に収まらない印を省く（ボタンを優先し、次に三角。隣の見出しへ描かない）', () => {
+    const narrow = columnHeaderMarkLayout({ x: 0, y: 0, width: 20, height: 24 }, { sort: 'asc', filter: 'available' }, 5);
+    expect(narrow.filter).toBeUndefined(); // 14px のボタンは 20-10=10px に入らない
+    expect(narrow.sort).toEqual({ x: 7, y: 9.5, width: 8, height: 5 }); // 三角だけは入る
+    const tiny = columnHeaderMarkLayout({ x: 0, y: 0, width: 12, height: 24 }, { sort: 'asc', filter: 'available' }, 5);
+    expect(tiny.filter).toBeUndefined();
+    expect(tiny.sort).toBeUndefined();
+    const fits = columnHeaderMarkLayout({ x: 0, y: 0, width: 40, height: 24 }, { sort: 'asc', filter: 'available' }, 5);
+    expect(fits.filter).toBeDefined();
+    expect(fits.sort).toBeDefined(); // 5..35 にボタン 14＋間 3＋三角 8 が入る
+    expect(fits.sort!.x).toBeGreaterThanOrEqual(5);
+  });
+
+  it('P2: 印の幅（列幅の自動調整が見出しの名前に足す）', () => {
+    expect(columnHeaderMarkWidth(undefined)).toBe(0);
+    expect(columnHeaderMarkWidth({ sort: 'asc' })).toBe(8 + 3);
+    expect(columnHeaderMarkWidth({ sort: 'asc', filter: 'active' })).toBe(14 + 3 + 8 + 3);
+  });
+
+  it('P3: 押せるボタンの枠は当たり判定の矩形の内側に描く', () => {
+    const calls = draw({ marks: { 0: { filter: 'available' } } });
+    const frame = calls.find((c): c is Extract<Call, { kind: 'strokeRect' }> => c.kind === 'strokeRect')!;
+    const layout = columnHeaderMarkLayout({ x: HEADER_W, y: 0, width: COL_W, height: HEADER_H }, { filter: 'available' }, 5);
+    expect(frame.x).toBeGreaterThanOrEqual(layout.filter!.x);
+    expect(frame.y).toBeGreaterThanOrEqual(layout.filter!.y);
+    expect(frame.x + frame.w).toBeLessThanOrEqual(layout.filter!.x + layout.filter!.width);
+    expect(frame.y + frame.h).toBeLessThanOrEqual(layout.filter!.y + layout.filter!.height);
+  });
+
+  it('P2: 印のある見出しで省略記号も入らない幅なら名前を描かない（印と重ねない）', () => {
+    const calls = draw({ captions: { 0: 'とても長い見出し' }, marks: { 0: { filter: 'available', sort: 'asc' } }, colWidth: 36 });
+    expect(texts(calls).some((t) => t.text.includes('…') && t.x < HEADER_W + 36)).toBe(false);
   });
 });

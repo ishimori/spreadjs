@@ -16,6 +16,7 @@ export * from './base-layer';
 export {
   columnGroupMarkLayout,
   columnHeaderMarkLayout,
+  columnHeaderMarkWidth,
   createHeaderLayer,
   type ColumnGroupMark,
   type ColumnHeaderMark,

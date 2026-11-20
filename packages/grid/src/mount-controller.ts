@@ -150,17 +150,17 @@ export function createGridController(target: GridMountTarget, options: GridMount
   });
   const { current: currentMerges } = merges;
   // DD-070-6: 見出しの印（並べ替えの三角・絞り込みのボタン・まとまりの開閉）の置き場。view-local・ID で持ち描画のたびに解決する。
-  // 未知の列の検査は、列の並びが分かっていれば行う（共同編集の boot 前は /config の前なので検査しない）。
-  const headerMarks = createHeaderMarkStore(diag, () => {
-    const sync = lifecycle.backend();
-    return sync === undefined ? undefined : new Set(sync.session.committedDocument.columnOrder.map((id) => String(id)));
-  });
-  if (options.columnHeaderMarks !== undefined) {
-    headerMarks.setColumnMarks(options.columnHeaderMarks, 'columnHeaderMarks');
-  }
-  if (options.columnGroupMarks !== undefined) {
-    headerMarks.setGroupMarks(options.columnGroupMarks, 'columnGroupMarks');
-  }
+  // 未知の列・まとまりの検査は、列の並びが分かってから（backend の結線の時の recheck）。mount の初期値は lifecycle の生成後に入れる
+  // （Codex P1: ここで入れると、検査の関数が宣言前の lifecycle を参照して ReferenceError になる）。
+  let headerMarksReady = false;
+  const headerMarks = createHeaderMarkStore(
+    diag,
+    () => {
+      const sync = headerMarksReady ? lifecycle.backend() : undefined;
+      return sync === undefined ? undefined : new Set(sync.session.committedDocument.columnOrder.map((id) => String(id)));
+    },
+    () => (headerMarksReady && lifecycle.backend() !== undefined ? new Set(config.columnGroups().map((group) => group.id)) : undefined),
+  );
 
   // DD-033-1・DD-056 H12: 読み取り専用の切り替え（setReadOnly・flush・変換の終わり待ち）は mount/readonly-switch.ts。
   // 生成時に mount オプションの readOnly を検査して診断を出す（readonly-invalid・readonly-mode）。
@@ -541,6 +541,7 @@ export function createGridController(target: GridMountTarget, options: GridMount
     }
     // 結線の順番（DOM を作る順も従来どおり）: 描画層 → 編集の命令のポート → 候補欄 → 日付カレンダー → editor。
     render.attach(backend);
+    headerMarks.recheck(); // DD-070-6: 列の並び・まとまりが分かったので、それまでに受けた印の未知の列・まとまりを検査する
     editCommands.attach(backend);
     select.attach(backend);
     date.attach(backend);
@@ -548,6 +549,15 @@ export function createGridController(target: GridMountTarget, options: GridMount
     syncCellLock(); // DD-035 R4 / DD-036 C3: 初期 activeCell（0,0）のロックを同期
     syncLayout();
     backend.start();
+  }
+
+  // DD-070-6: mount の初期値の見出しの印（lifecycle・config の生成の後。列の並びが分かる前なので未知の検査は結線の時）。
+  headerMarksReady = true;
+  if (options.columnHeaderMarks !== undefined) {
+    headerMarks.setColumnMarks(options.columnHeaderMarks, 'columnHeaderMarks');
+  }
+  if (options.columnGroupMarks !== undefined) {
+    headerMarks.setGroupMarks(options.columnGroupMarks, 'columnGroupMarks');
   }
 
   // ---- 公開ハンドル ----

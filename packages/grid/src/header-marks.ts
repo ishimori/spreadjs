@@ -27,6 +27,11 @@ export interface HeaderMarkStore {
   groupMark(groupId: string): GridColumnGroupMark | undefined;
   /** 置き換えのたびに増える版（描き直しの要否の判定に使う）。 */
   revision(): number;
+  /**
+   * 列の並び・まとまりが分かった時（boot で設定を組み立てた後）に呼ぶ。分かる前に受けた指定の未知の列・未知のまとまりを、
+   * その項目だけ捨てて warn する（Codex P2: boot 前の setter・mount の初期値の打ち間違いに気付けるように）。
+   */
+  recheck(): void;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -54,12 +59,17 @@ function parseColumnMark(value: unknown): GridColumnHeaderMark | null | undefine
 
 export function createHeaderMarkStore(
   diag: DiagnosticSink,
-  /** 今わかっている列（ColumnId）。boot 前で列の並びが分からなければ undefined（未知の列の検査をしない）。 */
+  /** 今わかっている列（ColumnId）。boot 前で列の並びが分からなければ undefined（未知の列の検査を recheck まで延ばす）。 */
   knownColumns: () => ReadonlySet<string> | undefined,
+  /** 今わかっているまとまりの id（boot 前は undefined）。 */
+  knownGroups: () => ReadonlySet<string> | undefined = () => undefined,
 ): HeaderMarkStore {
   let columnMarks = new Map<string, GridColumnHeaderMark>();
   let groupMarks = new Map<string, GridColumnGroupMark>();
   let rev = 0;
+  /** 列の並び・まとまりが分かる前に受けた指定の出どころ（recheck で未知を検査する。検査済みなら undefined）。 */
+  let uncheckedColumns: string | undefined;
+  let uncheckedGroups: string | undefined;
 
   const warn = (source: string, detail: string): void => {
     diag.emit('warn', 'column-header-mark-invalid', `${source}: ${detail}（その項目だけ捨てる）`);
@@ -86,6 +96,7 @@ export function createHeaderMarkStore(
             next.set(columnId, mark);
           }
         }
+        uncheckedColumns = known === undefined ? source : undefined;
       }
       columnMarks = next;
       rev += 1;
@@ -95,16 +106,47 @@ export function createHeaderMarkStore(
       if (!isPlainRecord(raw)) {
         warn(source, 'まとまりの id → 印のオブジェクトが必要');
       } else {
+        const known = knownGroups();
         for (const [groupId, value] of Object.entries(raw)) {
           if (!isPlainRecord(value) || typeof value['collapsed'] !== 'boolean') {
             warn(source, `まとまり "${groupId}" の印は { collapsed: boolean } が必要`);
             continue;
           }
+          // Codex P2: 登録されていないまとまりの id（columnGroups の id・省略時は caption）は捨てて知らせる。
+          if (known !== undefined && !known.has(groupId)) {
+            warn(source, `未知のまとまり "${groupId}"`);
+            continue;
+          }
           next.set(groupId, { collapsed: value['collapsed'] });
         }
+        uncheckedGroups = known === undefined ? source : undefined;
       }
       groupMarks = next;
       rev += 1;
+    },
+    recheck() {
+      const columns = knownColumns();
+      if (uncheckedColumns !== undefined && columns !== undefined) {
+        for (const columnId of [...columnMarks.keys()]) {
+          if (!columns.has(columnId)) {
+            warn(uncheckedColumns, `未知の列 "${columnId}"`);
+            columnMarks.delete(columnId);
+          }
+        }
+        uncheckedColumns = undefined;
+        rev += 1;
+      }
+      const groups = knownGroups();
+      if (uncheckedGroups !== undefined && groups !== undefined) {
+        for (const groupId of [...groupMarks.keys()]) {
+          if (!groups.has(groupId)) {
+            warn(uncheckedGroups, `未知のまとまり "${groupId}"`);
+            groupMarks.delete(groupId);
+          }
+        }
+        uncheckedGroups = undefined;
+        rev += 1;
+      }
     },
     columnMark: (columnId) => columnMarks.get(columnId),
     groupMark: (groupId) => groupMarks.get(groupId),

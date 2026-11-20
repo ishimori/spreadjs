@@ -1433,10 +1433,17 @@ export interface HeaderMarkStore {
     groupMark(groupId: string): GridColumnGroupMark | undefined;
     /** 置き換えのたびに増える版（描き直しの要否の判定に使う）。 */
     revision(): number;
+    /**
+     * 列の並び・まとまりが分かった時（boot で設定を組み立てた後）に呼ぶ。分かる前に受けた指定の未知の列・未知のまとまりを、
+     * その項目だけ捨てて warn する（Codex P2: boot 前の setter・mount の初期値の打ち間違いに気付けるように）。
+     */
+    recheck(): void;
 }
 export declare function createHeaderMarkStore(diag: DiagnosticSink,
-/** 今わかっている列（ColumnId）。boot 前で列の並びが分からなければ undefined（未知の列の検査をしない）。 */
-knownColumns: () => ReadonlySet<string> | undefined): HeaderMarkStore;
+/** 今わかっている列（ColumnId）。boot 前で列の並びが分からなければ undefined（未知の列の検査を recheck まで延ばす）。 */
+knownColumns: () => ReadonlySet<string> | undefined,
+/** 今わかっているまとまりの id（boot 前は undefined）。 */
+knownGroups?: () => ReadonlySet<string> | undefined): HeaderMarkStore;
 
 // ==== packages/grid/src/merged-cell-spec.ts ====
 /** 結合する範囲（DD-064・Experimental 0.x）。左上のセルと、そこから下・右へ何行・何列を 1 つにするかで指定する。 */

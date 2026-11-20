@@ -46,3 +46,27 @@ describe('DD-070-6 header-marks', () => {
     expect(store.revision()).toBeGreaterThan(before);
   });
 });
+
+describe('DD-070-6 header-marks（Codex の指摘）', () => {
+  it('P2: 列の並びが分かる前に受けた指定は、recheck で未知の列・まとまりを捨てて warn する（分かった後の指定はその場で検査）', () => {
+    const diagnostics: GridDiagnostic[] = [];
+    const known: { columns?: ReadonlySet<string>; groups?: ReadonlySet<string> } = {};
+    const store = createHeaderMarkStore(createDiagnosticSink((d) => diagnostics.push(d)), () => known.columns, () => known.groups);
+    store.setColumnMarks({ a: { sort: 'asc' }, typo: { sort: 'desc' } }, 'columnHeaderMarks');
+    store.setGroupMarks({ sup: { collapsed: true }, typo: { collapsed: false } }, 'columnGroupMarks');
+    expect(store.columnMark('typo')).toEqual({ sort: 'desc' }); // まだ分からないので保つ
+    known.columns = new Set(['a']);
+    known.groups = new Set(['sup']);
+    store.recheck();
+    expect(store.columnMark('a')).toEqual({ sort: 'asc' });
+    expect(store.columnMark('typo')).toBeUndefined();
+    expect(store.groupMark('sup')).toEqual({ collapsed: true });
+    expect(store.groupMark('typo')).toBeUndefined();
+    expect(diagnostics.map((d) => d.code)).toEqual(['column-header-mark-invalid', 'column-header-mark-invalid']);
+    store.recheck(); // 二度目は何もしない
+    expect(diagnostics).toHaveLength(2);
+    store.setGroupMarks({ other: { collapsed: true } }, 'setColumnGroupMarks');
+    expect(store.groupMark('other')).toBeUndefined();
+    expect(diagnostics).toHaveLength(3);
+  });
+});

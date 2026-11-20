@@ -654,7 +654,10 @@ grid.subscribe((event) => {
     }
     sort = { columnId: event.columnId, dir: sort?.columnId === event.columnId && sort.dir === 'asc' ? 'desc' : 'asc' };
     applySort(sort); // 並べ替えは consumer（DD-070-8 で作り直さずに並びを変えられるようになる）
-    grid.setColumnHeaderMarks({ [sort.columnId]: { sort: sort.dir }, price: { filter: 'active' }, name: { filter: 'available' } });
+    // 列ごとに 1 つの印へ合わせてから渡す（同じ列の sort と filter を別のキーにすると後の方で上書きされる）
+    const marks: Record<string, GridColumnHeaderMark> = { price: { filter: 'active' }, name: { filter: 'available' } };
+    marks[sort.columnId] = { ...marks[sort.columnId], sort: sort.dir };
+    grid.setColumnHeaderMarks(marks);
   }
   if (event.type === 'column-group-click') {
     toggleGroup(event.groupId); // 見せる列の切り替えは DD-070-7

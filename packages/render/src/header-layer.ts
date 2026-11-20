@@ -49,32 +49,51 @@ export interface ColumnHeaderMarkLayout {
 }
 
 /**
- * 列の見出しの印の配置。`rect` は列の名前を描く段（2 段の見出しでまとめた列は下の段）の矩形、`padding` は左右の余白。
- * 右から絞り込みのボタン、その左に並べ替えの三角。名前は印を除いた幅の中央。印が無ければ従来どおり矩形の中央・全幅。
+ * 列の見出しの印の配置。`rect` は列の名前を描く段（2 段の見出しでまとめた列は下の段）の矩形、`padding` は左右の余白
+ * （列幅の境界のつまみより内側になる幅を渡す）。右から絞り込みのボタン、その左に並べ替えの三角。名前は印を除いた幅の中央。
+ * 印が無ければ従来どおり矩形の中央・全幅。左右の余白の内側に収まらない印は省く（Codex P2: 狭い列で隣の見出しに描かない・
+ * 境界のつまみと重ねない。ボタンを優先し、次に三角）。
  */
 export function columnHeaderMarkLayout(rect: CellRect, mark: ColumnHeaderMark | undefined, padding: number): ColumnHeaderMarkLayout {
+  const left = rect.x + padding;
   let right = rect.x + rect.width - padding;
   let filter: CellRect | undefined;
   let sort: CellRect | undefined;
   if (mark?.filter !== undefined) {
     const size = Math.max(0, Math.min(FILTER_BUTTON_SIZE, rect.height - 4));
-    filter = { x: right - size, y: rect.y + (rect.height - size) / 2, width: size, height: size };
-    right = filter.x - MARK_GAP;
+    if (size > 0 && right - size >= left) {
+      filter = { x: right - size, y: rect.y + (rect.height - size) / 2, width: size, height: size };
+      right = filter.x - MARK_GAP;
+    }
   }
-  if (mark?.sort !== undefined) {
+  if (mark?.sort !== undefined && right - SORT_MARK_WIDTH >= left) {
     sort = { x: right - SORT_MARK_WIDTH, y: rect.y + (rect.height - SORT_MARK_HEIGHT) / 2, width: SORT_MARK_WIDTH, height: SORT_MARK_HEIGHT };
     right = sort.x - MARK_GAP;
   }
   if (filter === undefined && sort === undefined) {
     return { labelCenterX: rect.x + rect.width / 2, labelMaxWidth: Math.max(0, rect.width - padding * 2) };
   }
-  const left = rect.x + padding;
   return {
     labelCenterX: (left + right) / 2,
     labelMaxWidth: Math.max(0, right - left),
     ...(sort !== undefined ? { sort } : {}),
     ...(filter !== undefined ? { filter } : {}),
   };
+}
+
+/**
+ * 列の見出しの印が占める幅（間隔を含む・DD-070-6）。列幅の自動調整が見出しの名前の幅に足す（Codex P2: 自動調整の直後に名前が
+ * 省略されないように）。印が無ければ 0。
+ */
+export function columnHeaderMarkWidth(mark: ColumnHeaderMark | undefined): number {
+  let width = 0;
+  if (mark?.filter !== undefined) {
+    width += FILTER_BUTTON_SIZE + MARK_GAP;
+  }
+  if (mark?.sort !== undefined) {
+    width += SORT_MARK_WIDTH + MARK_GAP;
+  }
+  return width;
 }
 
 /** まとまりの印の配置（DD-070-6）。`rect` は上の段のまとまりの矩形。開閉の印は名前の左。印が無ければ従来どおり。 */
@@ -149,6 +168,15 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
     }
   }
 
+  /**
+   * 印のある見出しの名前を幅に収める（DD-070-6・Codex P2）。fitText は省略記号さえ入らない幅でも「…」を返すので、収めた文字が
+   * 幅を超えるなら描かない（印と重ねない）。印の無い見出しは従来どおり fitText だけ（描画を変えない）。
+   */
+  const fitOrEmpty = (label: string, maxWidth: number): string => {
+    const text = textCache.fitText(label, headerFont, maxWidth);
+    return text === '' || textCache.measureWidth(text, headerFont) > maxWidth ? '' : text;
+  };
+
   /** 三角を塗る（DD-070-6）。`dir` は頂点の向き。 */
   const fillTriangle = (box: CellRect, dir: 'up' | 'down' | 'right'): void => {
     ctx.beginPath();
@@ -183,9 +211,11 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
         ctx.fillRect(button.x, button.y, button.width, button.height);
         ctx.fillStyle = FILTER_ACTIVE_GLYPH;
       } else {
+        // 枠は当たり判定の矩形の内側に描く（線の幅の半分だけ内へ。Codex P3: 右・下の辺が矩形の外に出て押しても caption になる）。
+        const lineWidth = deviceLineWidth(dpr);
         ctx.strokeStyle = colors.headerText;
-        ctx.lineWidth = deviceLineWidth(dpr);
-        ctx.strokeRect(snapToDevice(button.x, dpr), snapToDevice(button.y, dpr), button.width, button.height);
+        ctx.lineWidth = lineWidth;
+        ctx.strokeRect(button.x + lineWidth / 2, button.y + lineWidth / 2, button.width - lineWidth, button.height - lineWidth);
         ctx.fillStyle = colors.headerText;
       }
       fillTriangle(glyph, 'down');
@@ -222,9 +252,11 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
           const top = grouped ? groupBandHeight : 0;
           const layout = columnHeaderMarkLayout({ x: rect.x, y: top, width: rect.width, height: headerHeight - top }, mark, CELL_PADDING);
           const label = columnHeaderLabelFn === undefined ? columnLabel(col) : columnHeaderLabelFn(col);
-          const text = textCache.fitText(label, headerFont, layout.labelMaxWidth);
+          const text = fitOrEmpty(label, layout.labelMaxWidth);
           ctx.font = headerFont;
-          ctx.fillText(text, layout.labelCenterX, labelY);
+          if (text !== '') {
+            ctx.fillText(text, layout.labelCenterX, labelY);
+          }
           drawColumnMarks(layout, mark, dpr);
           return;
         }
@@ -258,10 +290,12 @@ export function createHeaderLayer(deps: HeaderLayerDeps): { draw(frame: FrameVie
           // DD-070-6: 印のあるまとまりは名前の左に ▾／▸ を描き、名前は残りの幅の中央（印が無ければ従来どおり）。
           const groupMark = columnGroupMarkFn?.(groupIndex);
           const layout = columnGroupMarkLayout({ x, y: 0, width, height: groupBandHeight }, groupMark, CELL_PADDING);
-          const text = textCache.fitText(group.caption, headerFont, layout.labelMaxWidth);
+          const text = groupMark === undefined ? textCache.fitText(group.caption, headerFont, layout.labelMaxWidth) : fitOrEmpty(group.caption, layout.labelMaxWidth);
           ctx.font = headerFont;
           ctx.fillStyle = colors.headerText;
-          ctx.fillText(text, layout.labelCenterX, groupBandHeight / 2);
+          if (text !== '') {
+            ctx.fillText(text, layout.labelCenterX, groupBandHeight / 2);
+          }
           if (layout.toggle !== undefined && groupMark !== undefined) {
             fillTriangle(layout.toggle, groupMark.collapsed ? 'right' : 'down');
           }

@@ -2,7 +2,7 @@
 // リスナーは mount 時に scroller へ登録する（登録順は従来どおり: pointermove → pointerleave → pointerup → pointercancel →
 // lostpointercapture → pointerdown → dblclick → scroll。登録順はハンドラの実行順を決める）。destroy の abort で解除される。
 
-import { BADGE_TEXT_PADDING, CELL_TEXT_PADDING, columnHeaderMarkLayout, columnLabel } from '@nanairo-sheet/render';
+import { BADGE_TEXT_PADDING, CELL_TEXT_PADDING, columnHeaderMarkLayout, columnHeaderMarkWidth, columnLabel } from '@nanairo-sheet/render';
 import type { TextMetricsCache, ViewportTransform } from '@nanairo-sheet/render';
 import { mergeAnchorOf } from '@nanairo-sheet/selection';
 import type { ColumnId, RowId } from '@nanairo-sheet/types';
@@ -250,10 +250,10 @@ export function registerPointerInteraction(deps: PointerDeps): void {
     const width = autoFitColumnWidth({
       maxContentWidth: scan.maxContentWidth,
       // DD-033-2: ヘッダー幅はキャプション（指定時）で測る（未指定は列記号 A/B/…）。base-layer と同じ headerFont・描画と一致。
-      headerLabelWidth: deps.cellTextCache.measureWidth(
-        display?.captionFor(String(columnId)) ?? columnLabel(colIndex),
-        appearance.headerFont,
-      ),
+      // DD-070-6（Codex P2）: 見出しの印（三角・絞り込みのボタン）がある列は、その幅も足す（自動調整の直後に名前が省略されない）。
+      headerLabelWidth:
+        deps.cellTextCache.measureWidth(display?.captionFor(String(columnId)) ?? columnLabel(colIndex), appearance.headerFont) +
+        columnHeaderMarkWidth(deps.headerMarks.columnMark(String(columnId))),
       padding: CELL_TEXT_PADDING * 2,
     });
     backend.view.setColumnWidth(columnId, width);
@@ -486,9 +486,14 @@ export function registerPointerInteraction(deps: PointerDeps): void {
     if (hit.area === 'column-header') {
       // DD-070-6: 2段の見出しの上の段（まとまりの名前）のクリックは column-group-click（列の見出しの header-click ではない）。
       const group = isGroupBandHit(hit.colIndex, y) ? columnGroupAt(hit.colIndex) : undefined;
-      if (group !== undefined) {
-        const first = transform.columnHeaderRect(group.colStart);
-        const last = transform.columnHeaderRect(group.colEnd - 1);
+      const first = group === undefined ? undefined : transform.columnHeaderRect(group.colStart);
+      const last = group === undefined ? undefined : transform.columnHeaderRect(group.colEnd - 1);
+      if (group !== undefined && first !== undefined && last !== undefined) {
+        // Codex P2: 表が表示域を埋めていないと、最終列より右の余白も最終列として当たる。まとまりの矩形の中だけ知らせる。
+        if (x < first.x || x >= last.x + last.width) {
+          editor.pointerdownCell(null);
+          return;
+        }
         deps.emit({
           type: 'column-group-click',
           groupId: group.id,
@@ -500,8 +505,9 @@ export function registerPointerInteraction(deps: PointerDeps): void {
         // RC5（DD-052-5）: 列見出しのクリック通知（並べ替えは行わない・行番号ヘッダー/コーナーは対象外）。
         // DD-070-6: 見出しのセルの矩形（2 段の見出しでまとめた列は下の段）と、絞り込みのボタンの上か（描画と同じ配置の関数）。
         const columnId = sync.view.columnIdAt(hit.colIndex);
-        if (columnId !== undefined) {
-          const header = transform.columnHeaderRect(hit.colIndex);
+        const header = transform.columnHeaderRect(hit.colIndex);
+        // 同じく、最終列より右の余白では列の見出しのクリックを知らせない（DD-070-2 の cell-dblclick と同じ）。
+        if (columnId !== undefined && x >= header.x && x < header.x + header.width) {
           const top = deps.groupBandHeight > 0 && columnGroupAt(hit.colIndex) !== undefined ? deps.groupBandHeight : 0;
           const rect = { x: header.x, y: top, width: header.width, height: deps.headerHeight - top };
           const button = columnHeaderMarkLayout(rect, deps.headerMarks.columnMark(String(columnId)), CELL_TEXT_PADDING).filter;
