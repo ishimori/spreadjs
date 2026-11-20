@@ -113,7 +113,8 @@ function isServerMessage(value: unknown): value is ServerMessage {
         typeof value.currentRevision === 'number' &&
         // DD-015 再接続 reconcile（任意・省略可）。存在時は {ackedClientSequence:number, acceptedOperationIds:array}。
         (value.reconcile === undefined || isReconcileInfo(value.reconcile)) &&
-        (value.diverged === undefined || typeof value.diverged === 'boolean') // DD-015 revision 連続性 fail-fast（任意）
+        (value.diverged === undefined || typeof value.diverged === 'boolean') && // DD-015 revision 連続性 fail-fast（任意）
+        (value.bootstrapFollows === undefined || typeof value.bootstrapFollows === 'boolean') // DD-070-9（任意）
       );
     case 'operations':
       return (

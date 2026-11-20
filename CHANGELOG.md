@@ -99,6 +99,11 @@ DD-070（RM Database の一覧・登録画面・consumer 駆動）の子DDで足
 
 ### Changed
 
+- **プロトコル: welcome に任意の項目 `bootstrapFollows` を追加（DD-070-9）**: server がこの welcome の後に bootstrap を送るとき
+  true。revision 0 でも初期文書（`initialDocument`・`seedRows`）が空でなければ bootstrap を送るが、client は revision だけで判定して
+  いたため、welcome と bootstrap の間に「初回の状態を受け取った」と扱っていた（`getRows` が空の文書で `[]` 以外を返す前提が崩れる・
+  `setRowView` が空の文書で組み立てられる）。client はこの項目を見て bootstrap を待つ。省略は従来の判定（旧 server と互換・
+  server と client は同じ版にそろえて配る）。
 - **行の並びが変わったときの選択の追従（再ベース）はフォーカスを移さない（DD-070-8）**: これまでは選択中の行の番号が変わると
   グリッドの入力欄へフォーカスを移していたため、外の入力欄で打っている間に他の参加者が行を挿す・消す・`setRowView` を呼ぶと、
   次の文字がグリッドへ入ることがあった。選択中の行が消えて同じ番号の別の行になったときも、在席（presence）を新しい行で知らせ直す。

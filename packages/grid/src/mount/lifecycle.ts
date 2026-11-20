@@ -46,6 +46,8 @@ interface ResolvedConfig {
 }
 
 export interface LifecycleDeps {
+  /** DD-070-9: 共同編集モードでサーバーの初回の状態を受け取ったメッセージの処理の後に 1 回呼ぶ（描画の前・同じ処理の中）。 */
+  onInitialState?(): void;
   readonly options: GridMountOptions;
   readonly isStandalone: boolean;
   readonly serverOrigin: string;
@@ -119,6 +121,7 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
   let resolvedDocumentId = options.documentId;
   let hasEverConnected = false; // 一度でも接続確立したか（初回接続失敗のみ connect error として通知・P1-2）
   let intervalId = 0;
+  let initialStateNotified = false; // DD-070-9: onInitialState を呼んだか（1 回だけ）
   // boot（microtask）完了前に setData/setRows が呼ばれたときの保留分（Codex[P1]: mount 直後の同期呼び出しを
   // 捨てない）。DD-052-4（Codex P2）: setData 用・setRows 用に別々のキューへ分けると、2 つの API を跨いだ
   // 呼び出し順（例: setRows→setData の順で呼んだのに boot 側で setData を先に適用してしまう）が壊れるため、
@@ -299,6 +302,11 @@ export function createLifecycle(deps: LifecycleDeps): MountLifecycle {
       // DD-049: 1 サーバーメッセージの処理（適用・rollback/replay・描画の dirty 立て）が終わった時点で利用者向けイベントを配る
       // （listener から命令 API を呼んでも整合した状態を読む）。presence は一覧が変わりうるメッセージのときだけ再計算する。
       onServerMessageSettled: (message) => {
+        // DD-070-9: 初回の状態を受け取った処理の中で知らせる（次の描画・次のメッセージより前。並びの「呼んだ時点の行」を初回の文書にする）。
+        if (!initialStateNotified && collabSession?.hasInitialState === true) {
+          initialStateNotified = true;
+          deps.onInitialState?.();
+        }
         events.flushRemoteChanges();
         if (
           message.type === 'welcome' ||

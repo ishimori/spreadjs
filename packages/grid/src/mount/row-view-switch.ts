@@ -5,7 +5,7 @@
 // 「呼んだ時点にあった行」は呼んだ時に決める（Codex P2: 変換の終わりまで待つ間にできた行を隠さない）。backend の結線前に
 // 受けた指定は、単独モードなら setData と同じ boot 前の queue に呼ばれた順で積み（Codex P2: 保留した setData より先に
 // 反映すると、注入した行が全部「後からできた行」になる）、それ以外は覚えておいて結線の時に反映する。共同編集モードでサーバーの
-// 初回の状態を受け取る前の指定は、受け取った後に組み立てて反映する（DD-070-9）。
+// 初回の状態を受け取る前の指定は、受け取ったメッセージの処理の中で組み立てて反映する（DD-070-9）。
 
 import { createRowId } from '@nanairo-sheet/types';
 import type { RowId } from '@nanairo-sheet/types';
@@ -28,11 +28,6 @@ export interface RowViewSwitchDeps {
    * false（積まない）。
    */
   deferUntilStandaloneBoot(run: () => void): boolean;
-  /**
-   * DD-070-9: 共同編集モードでサーバーの初回の状態をまだ受け取っていなければ、受け取った後に run を呼ぶよう予約する（予約したら
-   * true）。受け取った後・単独モードは false。初回の状態の前に組み立てると、全部の行が「後からできた行」になり並びが効かない。
-   */
-  deferUntilInitialState(run: () => void): boolean;
 }
 
 export interface RowViewSwitch {
@@ -42,8 +37,18 @@ export interface RowViewSwitch {
   attach(backend: GridBackend): void;
   /** editor の状態が変わったら呼ぶ（変換の終わりを待っている指定を、変換が終わっていれば反映する・macrotask で判定）。 */
   scheduleCheck(): void;
-  /** 今見せている行（見せる順・保留中の構造変更を含む）。boot 前・destroy 後は []。 */
+  /** 今見せている行（見せる順・保留中の構造変更を含む）。boot 前・destroy 後・共同編集モードの初回の状態の前は []。 */
   visibleRowIds(): readonly string[];
+  /**
+   * DD-070-9: 共同編集モードでサーバーの初回の状態を受け取ったメッセージの処理の後に呼ぶ（lifecycle）。それまでに受けた最後の
+   * 指定を初回の文書で組み立てて反映する（次の描画の前・次のメッセージより前）。
+   */
+  onInitialState(): void;
+}
+
+/** 共同編集モードでサーバーの初回の状態をまだ受け取っていないか（単独モードは常に false）。 */
+function awaitingInitialState(backend: GridBackend): boolean {
+  return backend.session.hasInitialState === false;
 }
 
 /**
@@ -75,6 +80,11 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
   let beforeAttach: { readonly order: readonly RowId[] | null } | undefined;
   /** 変換の終わりを待っている、組み立て済みの指定。undefined なら待っていない。 */
   let waiting: { readonly spec: RowViewSpec | null } | undefined;
+  /**
+   * DD-070-9: 初回の状態を待っている指定（最後の 1 つ）。初回の状態の前に組み立てると「呼んだ時点にあった行」が空になり、全部の行が
+   * 「後からできた行」として文書の並びで見えてしまう。後から呼んだ指定で置き換える（Codex P2: 古い予約で新しい指定を戻さない）。
+   */
+  let awaitingInitial: { readonly order: readonly RowId[] | null } | undefined;
   let checkScheduled = false;
 
   function isComposingNow(editor: IntegrationEditor | undefined): boolean {
@@ -140,10 +150,13 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
       if (order === undefined) {
         return;
       }
-      if (deps.backend() !== undefined) {
-        if (!deps.deferUntilInitialState(() => applyNow(order))) {
-          applyNow(order);
+      const backend = deps.backend();
+      if (backend !== undefined) {
+        if (awaitingInitialState(backend)) {
+          awaitingInitial = { order };
+          return;
         }
+        applyNow(order);
         return;
       }
       if (deps.deferUntilStandaloneBoot(() => applyNow(order))) {
@@ -155,7 +168,9 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
       if (beforeAttach !== undefined) {
         const { order } = beforeAttach;
         beforeAttach = undefined;
-        if (!deps.deferUntilInitialState(() => applyNow(order))) {
+        if (awaitingInitialState(backend)) {
+          awaitingInitial = { order };
+        } else {
           apply(backend, build(backend, order));
         }
       }
@@ -178,12 +193,20 @@ export function createRowViewSwitch(deps: RowViewSwitchDeps): RowViewSwitch {
       }, 0);
     },
     visibleRowIds() {
-      const view = deps.backend()?.view;
-      if (deps.isDestroyed() || view === undefined) {
-        return [];
+      const backend = deps.backend();
+      if (deps.isDestroyed() || backend === undefined || awaitingInitialState(backend)) {
+        return []; // DD-070-9（Codex P2）: 初回の状態の前は楽観の挿入があっても []（getRows と同じ）
       }
       // Codex P2: 初回の描画の前でも、保留中の構造変更・見せる並びを反映した並びを返す（flush を待たない）。
-      return view.pendingRowOrder().map(String);
+      return backend.view.pendingRowOrder().map(String);
+    },
+    onInitialState() {
+      if (awaitingInitial === undefined) {
+        return;
+      }
+      const { order } = awaitingInitial;
+      awaitingInitial = undefined;
+      applyNow(order);
     },
   };
 }

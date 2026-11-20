@@ -156,6 +156,12 @@ export interface WelcomeMessage {
    * client は黙って merge せず編集停止する。判定は server 側（frontier は権威・応答の順序入れ替えに非依存）。省略/false は正常。
    */
   diverged?: boolean;
+  /**
+   * DD-070-9: server がこの welcome の後に bootstrap（document@frontier）を送るとき true。revision 0 でも初期文書が空でなければ
+   * bootstrap を送るため、client は currentRevision だけでは判定できない（welcome と bootstrap の間に「初回の状態を受け取った」と
+   * 誤って扱う）。省略は従来の判定（currentRevision から導く・旧 server との互換）。
+   */
+  bootstrapFollows?: boolean;
 }
 
 export interface OperationsMessage {

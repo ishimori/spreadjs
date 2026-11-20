@@ -40,27 +40,62 @@ const activeRow = (page: Page) => page.evaluate(() => (window as unknown as { __
 const readRows = (page: Page, rowIds: string[], columnIds: string[]) =>
   page.evaluate((o) => (window as unknown as { __gridInstance: Grid }).__gridInstance.getRows(o), { rowIds, columnIds });
 
-/** 先頭へ count 行を挿し、両方のクライアントに届いた新しい行 ID（文書の並び）を返す。 */
-async function insertFreshTop(writer: Page, other: Page, count: number): Promise<string[]> {
-  const before = await ih.rowIdAt(writer, 0);
-  await insertAfter(writer, null, count);
-  await expect.poll(() => ih.rowIdAt(writer, 0)).not.toBe(before);
-  const ids: string[] = [];
-  for (let i = 0; i < count; i += 1) ids.push((await ih.rowIdAt(writer, i))!);
-  await expect.poll(() => ih.rowIndexOf(other, ids[count - 1]!)).not.toBe(-1);
+/** このクライアントが挿した行（row-structure-change の insert が知らせた行 ID）を、知らせた順に返す。 */
+async function insertedIds(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    ((window as unknown as { __gridEvents?: Array<{ type: string; change?: { kind: string; rowIds: string[] } }> }).__gridEvents ?? [])
+      .filter((e) => e.type === 'row-structure-change' && e.change?.kind === 'insert')
+      .flatMap((e) => e.change!.rowIds),
+  );
+}
+
+/** afterRowId の後へ count 行を挿し、挿した行 ID（文書の並び）を返す。ACK まで待つ。 */
+async function insertAndGet(writer: Page, afterRowId: string | null, count: number): Promise<string[]> {
+  const before = (await insertedIds(writer)).length;
+  await insertAfter(writer, afterRowId, count);
+  await expect.poll(async () => (await insertedIds(writer)).length).toBe(before + count);
   await expect.poll(async () => (await ih.snapshot(writer)).pendingCount).toBe(0);
+  return (await insertedIds(writer)).slice(before);
+}
+
+/** 先頭へ count 行を挿し、相手にも届いた新しい行 ID（文書の並び）を返す。 */
+async function insertFreshTop(writer: Page, other: Page, count: number): Promise<string[]> {
+  const ids = await insertAndGet(writer, null, count);
+  await expect.poll(() => ih.rowIndexOf(other, ids[count - 1]!)).not.toBe(-1);
   return ids;
 }
 
-async function overlayOpaque(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const overlay = document.querySelectorAll('.nsheet-stage canvas')[1] as HTMLCanvasElement;
-    const data = overlay.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height).data;
-    let count = 0;
-    for (let i = 3; i < data.length; i += 4) if ((data[i] ?? 0) > 0) count += 1;
-    return count;
-  });
+/** 描画に使っている行の Axis の並び（visibleRowIds は描画を待たずに文書から組み立てるので、描かれた並びはこちらで見る）。 */
+async function drawnRows(page: Page): Promise<string[]> {
+  const count = (await ih.snapshot(page)).rowCount;
+  const out: string[] = [];
+  for (let i = 0; i < count; i += 1) out.push((await ih.rowIdAt(page, i))!);
+  return out;
 }
+
+/** overlay（選択・在席の枠）の不透明な画素の数。except（CSS 座標の矩形・A 自身の選択）の中は数えない。 */
+async function overlayOpaqueOutside(page: Page, except: { x: number; y: number; width: number; height: number }): Promise<number> {
+  return page.evaluate((r) => {
+    const overlay = document.querySelectorAll('.nsheet-stage canvas')[1] as HTMLCanvasElement;
+    const dpr = overlay.width / overlay.clientWidth;
+    const data = overlay.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height).data;
+    const margin = 8;
+    let count = 0;
+    for (let y = 0; y < overlay.height; y += 1) {
+      for (let x = 0; x < overlay.width; x += 1) {
+        if ((data[(y * overlay.width + x) * 4 + 3] ?? 0) === 0) continue;
+        const cx = x / dpr;
+        const cy = y / dpr;
+        if (cx >= r.x - margin && cx <= r.x + r.width + margin && cy >= r.y - margin && cy <= r.y + r.height + margin) continue;
+        count += 1;
+      }
+    }
+    return count;
+  }, except);
+}
+
+const nextFrames = (page: Page) =>
+  page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
 interface Pair {
   a: { context: BrowserContext; page: Page };
@@ -97,11 +132,13 @@ test('AC1: A の並べ替えは B の並び・Undo を変えない（view-local�
   try {
     const [f0, f1, , f3] = fresh as [string, string, string, string];
     const col = (await ih.colIdAt(a.page, 0))!;
-    await view(a.page, [f3, f1, f0]);
-    await expect.poll(() => visible(a.page)).toEqual([f3, f1, f0]);
-    expect(await ih.rowIdAt(b.page, 0)).toBe(f0); // B は文書の並びのまま
-    expect((await visible(b.page)).length).toBe((await ih.snapshot(b.page)).rowCount);
+    // Codex P3: B の Undo の深さと並びは A が並べ替える前に採る。
     const bUndo = await ih.undoDepth(b.page);
+    const bRowsBefore = await visible(b.page);
+    await view(a.page, [f3, f1, f0]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f1, f0]);
+    expect(await visible(b.page)).toEqual(bRowsBefore); // B は文書の並びのまま
+    expect(await ih.undoDepth(b.page)).toBe(bUndo);
     // A が並べ替えたまま先頭（f3）を編集し、Undo で戻す。B の Undo の深さは変わらない。
     const value = `rv1-${Date.now()}`;
     await ih.selectCell(a.page, 0, 0);
@@ -123,17 +160,15 @@ test('AC2: A の並べ替え中に B が挿した行は一つ前の見えてい�
     const [f0, f1, , f3] = fresh as [string, string, string, string];
     const col = (await ih.colIdAt(a.page, 0))!;
     await view(a.page, [f3, f1, f0]);
-    await expect.poll(() => visible(a.page)).toEqual([f3, f1, f0]);
-    await insertAfter(b.page, f0, 1); // 文書の並び: f0, n, f1, f2, f3
-    await expect.poll(async () => (await visible(a.page)).length).toBe(4);
-    const n = (await visible(a.page))[3]!;
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f1, f0]);
+    const [n] = (await insertAndGet(b.page, f0, 1)) as [string]; // 文書の並び: f0, n, f1, f2, f3
     pair.cleanup.push(n);
-    expect(await visible(a.page)).toEqual([f3, f1, f0, n]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f1, f0, n]);
     // A が f1 を選んでいるときに B が f1 を消す → A の選択は前の並びで下の f0 へ。
     await setActive(a.page, f1, col);
     await expect.poll(() => activeRow(a.page)).toBe(f1);
     await remove(b.page, [f1]);
-    await expect.poll(() => visible(a.page)).toEqual([f3, f0, n]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f0, n]);
     await expect.poll(() => activeRow(a.page)).toBe(f0);
   } finally {
     await closePair(pair);
@@ -147,7 +182,7 @@ test('AC3: A の絞り込み中に B が隠れている行・見えている行�
     const [f0, , f2, f3] = fresh as [string, string, string, string];
     const col = (await ih.colIdAt(a.page, 0))!;
     await view(a.page, [f3, f0]);
-    await expect.poll(() => visible(a.page)).toEqual([f3, f0]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f0]);
     const hiddenValue = `rv3h-${Date.now()}`;
     const shownValue = `rv3s-${Date.now()}`;
     // B の先頭へ挿した行は scroll の位置の補正で画面の上に外れているので、クリックでなく行 ID で選ぶ。
@@ -170,20 +205,29 @@ test('AC5: A の並べ替え中に切断・再接続 → 並びは残り、切�
   try {
     const [f0, f1, , f3] = fresh as [string, string, string, string];
     await view(a.page, [f3, f1, f0]);
-    await expect.poll(() => visible(a.page)).toEqual([f3, f1, f0]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f3, f1, f0]);
     await ih.simulateDrop(a.page);
     await expect.poll(() => ih.connectionState(a.page)).not.toBe('online');
-    await insertAfter(b.page, f3, 1); // 文書の並び: f0, f1, f2, f3, n
-    await expect.poll(async () => (await ih.snapshot(b.page)).pendingCount).toBe(0);
-    const n = (await ih.rowIdAt(b.page, (await ih.rowIndexOf(b.page, f3)) + 1))!;
+    const [n] = (await insertAndGet(b.page, f3, 1)) as [string]; // 文書の並び: f0, f1, f2, f3, n（差分の tail で届く）
     pair.cleanup.push(n);
     await ih.simulateReconnect(a.page);
     await expect.poll(() => ih.connectionState(a.page), { timeout: 30_000 }).toBe('online');
-    await expect.poll(() => visible(a.page), { timeout: 30_000 }).toEqual([f3, n, f1, f0]);
+    await expect.poll(() => drawnRows(a.page), { timeout: 30_000 }).toEqual([f3, n, f1, f0]);
   } finally {
     await closePair(pair);
   }
 });
+
+/** 同じ行の後へ 1 行ずつ count 回挿す（1 回ごとに別の操作）。 */
+async function page_insertMany(page: Page, afterRowId: string, count: number): Promise<void> {
+  await page.evaluate(
+    (o) => {
+      const g = (window as unknown as { __gridInstance: Grid }).__gridInstance;
+      for (let i = 0; i < o.count; i += 1) g.insertRows({ afterRowId: o.afterRowId, count: 1 });
+    },
+    { afterRowId, count },
+  );
+}
 
 test('AC6: B が A で隠れている行を選んでいるとき、A に B の枠が描かれない', async ({ browser }) => {
   const pair = await openPair(browser, 'ac6');
@@ -194,14 +238,20 @@ test('AC6: B が A で隠れている行を選んでいるとき、A に B の�
     await view(a.page, [f3, f0]);
     await expect.poll(() => visible(a.page)).toEqual([f3, f0]);
     await ih.selectCell(a.page, 1, 3); // A 自身の選択は B の枠と重ならないセルに置く
+    const own = (await ih.cellRectAt(a.page, 1, 3))!;
+    await a.page.mouse.move(5, 5); // ホバーの描画を残さない
+    const bAt = async (): Promise<string | undefined> =>
+      (await ih.snapshot(a.page)).presences.find((p) => p.displayName === 'rv-b-ac6')?.activeCell?.rowId;
     await setActive(b.page, f2, col); // A では隠れている行
-    await expect.poll(async () => (await ih.snapshot(a.page)).presences.length).toBeGreaterThan(0);
-    await a.page.waitForTimeout(300);
-    const hiddenCount = await overlayOpaque(a.page);
+    await expect.poll(bAt).toBe(f2); // A が B の在席を受け取った
+    await nextFrames(a.page);
+    expect(await overlayOpaqueOutside(a.page, own)).toBe(0); // A 自身の選択の外に何も描かれていない（枠も名前タグも）
     await setActive(b.page, f3, col); // A で見えている行 → 枠が描かれる（測り方の感度の確認）
-    await expect.poll(() => overlayOpaque(a.page)).toBeGreaterThan(hiddenCount);
+    await expect.poll(bAt).toBe(f3);
+    await expect.poll(() => overlayOpaqueOutside(a.page, own)).toBeGreaterThan(0);
     await setActive(b.page, f2, col); // 隠れている行へ戻る → 枠は消える
-    await expect.poll(() => overlayOpaque(a.page)).toBe(hiddenCount);
+    await expect.poll(bAt).toBe(f2);
+    await expect.poll(() => overlayOpaqueOutside(a.page, own)).toBe(0);
   } finally {
     await closePair(pair);
   }
@@ -217,11 +267,63 @@ test.describe('拒否の巻き戻し（認可フック E2E 用サーバー）', 
     return { context, page };
   }
 
-  async function rejectedCount(page: Page): Promise<number> {
+  /** サーバーの認可の拒否（permission-denied）の数（クライアントの実行前の拒否は数えない）。 */
+  async function deniedCount(page: Page): Promise<number> {
     return page.evaluate(
-      () => ((window as unknown as { __gridEvents?: Array<{ type: string }> }).__gridEvents ?? []).filter((e) => e.type === 'rejected').length,
+      () =>
+        ((window as unknown as { __gridEvents?: Array<{ type: string; conflict?: { code: string } }> }).__gridEvents ?? []).filter(
+          (e) => e.type === 'rejected' && e.conflict?.code === 'permission-denied',
+        ).length,
     );
   }
+
+  test('AC5（Codex P2）: 切れている間の差分が多く、再接続で文書を丸ごと受け取り直しても（snapshot の bootstrap）並びは残る', async ({ browser, request }) => {
+    // 共有の 50,000 行の文書では操作のたびに文書を丸ごと複製する（DD-070-1）ため 1,001 回の操作が遅い。小さい文書の認可サーバー
+    // （lock を解いて使う）で、閾値（1,000 件）を超える差分を作る。挿した行は最後に消す（行数は差し引きで変わらない）。
+    test.setTimeout(120_000);
+    await request.post(`${CONTROL_ORIGIN}/unlock`);
+    const a = await openAuthorize(browser, 'rv-a-ac5b');
+    const b = await openAuthorize(browser, 'rv-b-ac5b');
+    const cleanup: string[] = [];
+    try {
+      const fresh = await insertAndGet(b.page, null, 4);
+      cleanup.push(...fresh);
+      const [f0, f1, , f3] = fresh as [string, string, string, string];
+      await expect.poll(() => ih.rowIndexOf(a.page, f3)).not.toBe(-1);
+      await view(a.page, [f3, f1, f0]);
+      await expect.poll(() => drawnRows(a.page)).toEqual([f3, f1, f0]);
+      const bootstrapBefore = await ih.bootstrapRevision(a.page);
+      await ih.simulateDrop(a.page);
+      await expect.poll(() => ih.connectionState(a.page)).not.toBe('online');
+      // f3 の後へ 1 行ずつ 1,001 回挿す（1 回ごとに別の操作。文書の並びは f3 の後に新しい順）。一度に送ると B の未送信が積み上がって
+      // 接続が止まることがあるので、100 回ずつ ACK を待って送る。
+      const before = (await insertedIds(b.page)).length;
+      for (let sent = 0; sent < 1_001; sent += 100) {
+        await page_insertMany(b.page, f3, Math.min(100, 1_001 - sent));
+        await expect.poll(async () => (await ih.snapshot(b.page)).pendingCount, { timeout: 30_000 }).toBe(0);
+      }
+      expect((await insertedIds(b.page)).length).toBe(before + 1_001);
+      const added = (await insertedIds(b.page)).slice(before);
+      cleanup.push(...added);
+      const addedSet = new Set(added);
+      const addedInDocOrder = (await visible(b.page)).filter((id) => addedSet.has(id));
+      await ih.simulateReconnect(a.page);
+      await expect.poll(() => ih.connectionState(a.page), { timeout: 30_000 }).toBe('online');
+      await expect.poll(() => ih.bootstrapRevision(a.page), { timeout: 30_000 }).toBeGreaterThan(bootstrapBefore); // 丸ごと受け取り直した
+      await expect.poll(() => visible(a.page), { timeout: 30_000 }).toEqual([f3, ...addedInDocOrder, f1, f0]);
+      expect((await drawnRows(a.page)).length).toBe(addedInDocOrder.length + 3);
+    } finally {
+      try {
+        if (cleanup.length > 0) {
+          await remove(b.page, cleanup);
+          await expect.poll(async () => (await ih.snapshot(b.page)).pendingCount, { timeout: 30_000 }).toBe(0);
+        }
+      } finally {
+        await a.context.close();
+        await b.context.close();
+      }
+    }
+  });
 
   test('AC4: 並べ替え中の自分の挿入・削除が拒否される → 挿した行は抜け、消した行は元の並びの位置に戻る', async ({ browser, request }) => {
     await request.post(`${CONTROL_ORIGIN}/unlock`);
@@ -229,17 +331,23 @@ test.describe('拒否の巻き戻し（認可フック E2E 用サーバー）', 
     try {
       const [x0, x1, x2] = [(await ih.rowIdAt(a.page, 0))!, (await ih.rowIdAt(a.page, 1))!, (await ih.rowIdAt(a.page, 2))!];
       await view(a.page, [x2, x0]); // x1 は隠れている
-      await expect.poll(() => visible(a.page)).toEqual([x2, x0]);
+      await expect.poll(() => drawnRows(a.page)).toEqual([x2, x0]);
       expect((await request.post(`${CONTROL_ORIGIN}/lock`)).ok()).toBe(true);
-      let rejected = await rejectedCount(a.page);
-      await insertAfter(a.page, x0, 1);
-      // 楽観で出た行（x0 のすぐ後）は、localhost では拒否がすぐ届くので見えている間を捕まえない（位置は単体で確かめる）。
-      await expect.poll(() => rejectedCount(a.page), { timeout: 10_000 }).toBeGreaterThan(rejected);
-      await expect.poll(() => visible(a.page)).toEqual([x2, x0]); // 巻き戻しで抜ける
-      rejected = await rejectedCount(a.page);
+      let denied = await deniedCount(a.page);
+      // 挿す: 楽観の並び（x0 のすぐ後）は同じ処理の中で読む（localhost では拒否がすぐ届くので、後から画面を見ても捕まえられない）。
+      const optimistic = await a.page.evaluate((after) => {
+        const g = (window as unknown as { __gridInstance: Grid }).__gridInstance;
+        g.insertRows({ afterRowId: after, count: 1 });
+        return [...g.visibleRowIds()];
+      }, x0);
+      expect(optimistic.slice(0, 2)).toEqual([x2, x0]);
+      expect(optimistic).toHaveLength(3);
+      await expect.poll(() => deniedCount(a.page), { timeout: 10_000 }).toBeGreaterThan(denied);
+      await expect.poll(() => drawnRows(a.page)).toEqual([x2, x0]); // 巻き戻しで抜ける（描かれた並び）
+      denied = await deniedCount(a.page);
       await remove(a.page, [x2]);
-      await expect.poll(() => rejectedCount(a.page), { timeout: 10_000 }).toBeGreaterThan(rejected);
-      await expect.poll(() => visible(a.page)).toEqual([x2, x0]); // 巻き戻しで元の位置に戻る（x1 は隠れたまま）
+      await expect.poll(() => deniedCount(a.page), { timeout: 10_000 }).toBeGreaterThan(denied);
+      await expect.poll(() => drawnRows(a.page)).toEqual([x2, x0]); // 巻き戻しで元の位置に戻る（x1 は隠れたまま）
       expect(x1).not.toBe(x0);
     } finally {
       await request.post(`${CONTROL_ORIGIN}/unlock`);
@@ -255,7 +363,7 @@ test('Codex P2: A が選択中の先頭の行を隠して同じ番号の別の�
     const [f0, f1] = fresh as [string, string, string, string];
     const col = (await ih.colIdAt(a.page, 0))!;
     await view(a.page, [f0, f1]);
-    await expect.poll(() => visible(a.page)).toEqual([f0, f1]);
+    await expect.poll(() => drawnRows(a.page)).toEqual([f0, f1]);
     await setActive(a.page, f0, col);
     const presenceRow = async (): Promise<string | undefined> => {
       const presences = (await ih.snapshot(b.page)).presences;
@@ -282,6 +390,7 @@ test('DD-070-9: mount の直後（サーバーの初回の状態を受け取る�
     await expect(page.locator('textarea.int-cell-editor')).toBeAttached({ timeout: 30_000 });
     await expect.poll(async () => (await ih.snapshot(page)).ready, { timeout: 30_000 }).toBe(true);
     await expect.poll(() => visible(page)).toEqual([f2, f0]);
+    await expect.poll(() => drawnRows(page)).toEqual([f2, f0]);
   } finally {
     await context.close();
     await closePair(pair);

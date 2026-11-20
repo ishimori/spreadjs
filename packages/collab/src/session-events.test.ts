@@ -162,6 +162,20 @@ describe('DD-070-5: 拒否の通知の時点と初回の状態', () => {
     expect(h.session.hasInitialState).toBe(true);
   });
 
+  it('DD-070-9（Codex P1）: revision 0 でも welcome が bootstrapFollows なら bootstrap を受け取るまで false', () => {
+    const h = createSession();
+    h.session.start();
+    h.transport.receive({
+      type: 'welcome',
+      sessionId: 'c1',
+      currentRevision: 0,
+      colorKey: 'k',
+      capabilities: { protocolVersion: 1 },
+      bootstrapFollows: true,
+    });
+    expect(h.session.hasInitialState).toBe(false);
+  });
+
   it('hasInitialState: 既存の文書へ初めて入るときは bootstrap を受け取るまで false', () => {
     const h = createSession();
     h.session.start();

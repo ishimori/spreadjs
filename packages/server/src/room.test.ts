@@ -320,3 +320,19 @@ describe('DD-056 H11: 認可の判定口（Room deps.authorize）', () => {
     expect(sequencer.currentRevision).toBe(1);
   });
 });
+
+describe('DD-070-9 welcome.bootstrapFollows', () => {
+  it('revision 0 でも初期文書が空でなければ bootstrapFollows を立てて bootstrap を送る。空の文書なら立てない', () => {
+    const clock = createManualClock();
+    const state = freshSequencerState(COLUMNS);
+    state.document = applyOperation(state.document, insertRows(null, ['r0']), { revision: 0 }).document;
+    const room = new Room(new Sequencer(state, clock), { clock, idGenerator: createCounterIdGenerator(), ttlMillis: 15_000 });
+    const seeded = room.handleJoin(join('c1')).outbound;
+    expect(firstOfType(seeded, 'welcome').bootstrapFollows).toBe(true);
+    expect(messagesOfType(seeded, 'bootstrap')).toHaveLength(1);
+
+    const empty = createTestRoom().room.handleJoin(join('c2')).outbound;
+    expect(firstOfType(empty, 'welcome').bootstrapFollows).toBeUndefined();
+    expect(messagesOfType(empty, 'bootstrap')).toHaveLength(0);
+  });
+});

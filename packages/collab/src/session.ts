@@ -407,12 +407,12 @@ export class ClientSession implements TransportListener {
       this.handleBootstrap(buffered);
       return;
     }
-    // bootstrap 判定（要確認②・server と対称）: fresh（committed=0）or 差分>閾値 は server が bootstrap を送るので待つ。
+    // bootstrap 判定（要確認②・server と対称）: fresh（committed=0）or 差分>閾値 or welcome.bootstrapFollows（DD-070-9: rev 0 の非空の初期文書）は待つ。
     // ここで catch-up を発行すると server が全 operationLog を返す＝全 replay 経路に戻るため、bootstrap 到着まで抑止（P1-6/P1-7）。
     const missedCount = message.currentRevision - this.committed.revision;
     const willReceiveBootstrap =
-      message.currentRevision > 0 &&
-      (this.committed.revision <= 0 || missedCount > CATCHUP_SNAPSHOT_THRESHOLD);
+      message.bootstrapFollows === true ||
+      (message.currentRevision > 0 && (this.committed.revision <= 0 || missedCount > CATCHUP_SNAPSHOT_THRESHOLD));
     if (willReceiveBootstrap) {
       this.awaitingBootstrap = true;
       return;

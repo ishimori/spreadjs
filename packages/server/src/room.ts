@@ -122,6 +122,7 @@ export class Room {
     // revision 連続性 fail-fast（DD-015・C11）: client が権威 frontier より先を持つ＝server が巻き戻った（分岐した歴史）。
     // frontier は権威ゆえ join 処理時点で判定でき、応答（welcome/operations）の順序入れ替えに非依存（in-process reorder で誤検出しない）。
     const diverged = join.lastAppliedRevision > frontier;
+    const bootstrapFollows = this.shouldBootstrap(join.lastAppliedRevision, frontier);
     const welcome: ServerMessage = {
       type: 'welcome',
       sessionId: connectionId,
@@ -130,13 +131,15 @@ export class Room {
       capabilities: { protocolVersion: PROTOCOL_VERSION },
       ...(reconcile !== undefined ? { reconcile } : {}),
       ...(diverged ? { diverged: true } : {}),
+      // DD-070-9: revision 0 でも初期文書が空でなければ bootstrap を送る。client はそれを welcome から知る（初回の状態の誤判定を防ぐ）。
+      ...(bootstrapFollows ? { bootstrapFollows: true } : {}),
     };
     const outbound: Outbound[] = [{ target: { kind: 'connection', connectionId }, message: welcome }];
 
     // snapshot bootstrap: ①fresh join（lastAppliedRevision<=0・§8 既知制約回収 P1-6/P1-7）②再接続で差分>閾値T
     // （DD-015 要確認②: 大量差分の catch-up を避け document@frontier〔snapshot〕1 通で committed を確立）。
     // client は同一の (frontier, lastAppliedRevision) から同一判定を導き bootstrap を待つ（session.handleWelcome 対称）。
-    if (this.shouldBootstrap(join.lastAppliedRevision, frontier)) {
+    if (bootstrapFollows) {
       outbound.push({ target: { kind: 'connection', connectionId }, message: this.bootstrapMessage(frontier) });
     } else {
       // tail 経路（reconnect/catch-up・lastAppliedRevision>0）: frontier 以下の未受信 op だけを送る。
